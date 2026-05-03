@@ -1,0 +1,48 @@
+name: Bump and Publish to npm
+
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Skip if version bump commit
+        run: |
+          MSG="$(git log -1 --pretty=%s)"
+          if echo "$MSG" | grep -q '\[skip ci\]'; then
+            echo "SKIP=true" >> $GITHUB_ENV
+          else
+            echo "SKIP=false" >> $GITHUB_ENV
+          fi
+
+      - uses: actions/setup-node@v4
+        if: env.SKIP != 'true'
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Bump patch version
+        if: env.SKIP != 'true'
+        run: |
+          git config user.name "lanmower"
+          git config user.email "almagestfraternite@gmail.com"
+          npm version patch --no-git-tag-version
+          NEW_VERSION=$(node -p "require('./package.json').version")
+          git add package.json
+          git commit -m "chore: auto-bump version to $NEW_VERSION [skip ci]"
+          git push
+
+      - name: Publish to npm
+        if: env.SKIP != 'true'
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
