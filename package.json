@@ -1,0 +1,18 @@
+{
+  "name": "gmsniff",
+  "version": "1.0.0",
+  "description": "Observability GUI for gm — explores every gm-log subsystem in real time",
+  "type": "module",
+  "main": "./src/index.js",
+  "bin": {
+    "gmsniff": "./src/cli.js"
+  },
+  "files": ["src/", "gui/"],
+  "scripts": {
+    "start": "node src/cli.js",
+    "test": "node test.js"
+  },
+  "author": "lanmower",
+  "license": "MIT",
+  "engines": { "node": ">=18" }
+}
