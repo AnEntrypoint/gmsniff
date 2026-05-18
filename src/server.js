@@ -54,7 +54,7 @@ class Store {
       if (e.pid) pids.add(e.pid);
       if (e.ok === false || e.err) errors++;
     }
-    return { total: this.events.length, bySub, byEvent, byDay, pids: pids.size, errors, subsystems: SUBSYSTEMS };
+    return { total: this.events.length, bySub, byEvent, byDay, pids: pids.size, errors, subsystems: SUBSYSTEMS, observedSubsystems: this.observedSubsystems() };
   }
 
   subsystem(sub, { limit = 200, offset = 0, event: evFilter, day, q, pid } = {}) {
@@ -301,6 +301,135 @@ class Store {
     arr = arr.slice().reverse();
     return { total: arr.length, rows: arr.slice(offset, offset + limit) };
   }
+
+  observedSubsystems() {
+    const set = new Set();
+    for (const e of this.events) if (e._sub) set.add(e._sub);
+    return [...set].sort();
+  }
+
+  distinctValues(field, { sub, limit = 50 } = {}) {
+    const counts = new Map();
+    for (const e of this.events) {
+      if (sub && e._sub !== sub) continue;
+      const v = pickField(e, field);
+      if (v === undefined || v === null || v === '') continue;
+      const k = typeof v === 'object' ? JSON.stringify(v) : String(v);
+      counts.set(k, (counts.get(k) || 0) + 1);
+    }
+    return [...counts.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, limit)
+      .map(([value, count]) => ({ value, count }));
+  }
+
+  query(spec) {
+    spec = spec || {};
+    const filter = spec.filter || {};
+    const projection = Array.isArray(spec.projection) ? spec.projection : null;
+    const groupBy = Array.isArray(spec.groupBy) ? spec.groupBy : null;
+    const sort = Array.isArray(spec.sort) ? spec.sort : [['ts', 'desc']];
+    const limit = Math.min(parseInt(spec.limit, 10) || 200, 5000);
+
+    let arr = this.events.filter(e => matchesFilter(e, filter));
+
+    for (const [field, dir] of sort.slice().reverse()) {
+      const mul = dir === 'asc' ? 1 : -1;
+      arr.sort((a, b) => {
+        const av = pickField(a, field);
+        const bv = pickField(b, field);
+        if (av === bv) return 0;
+        if (av === undefined || av === null) return 1;
+        if (bv === undefined || bv === null) return -1;
+        return av < bv ? -1 * mul : 1 * mul;
+      });
+    }
+
+    const total = arr.length;
+    arr = arr.slice(0, limit);
+
+    if (groupBy && groupBy.length) {
+      const groups = new Map();
+      for (const e of arr) {
+        const key = groupBy.map(f => {
+          const v = pickField(e, f);
+          return v === undefined || v === null ? '∅' : (typeof v === 'object' ? JSON.stringify(v) : String(v));
+        }).join(' | ');
+        let g = groups.get(key);
+        if (!g) { g = { key, count: 0, sample: [] }; groups.set(key, g); }
+        g.count++;
+        if (g.sample.length < 3) g.sample.push(projection ? project(e, projection) : e);
+      }
+      return {
+        total,
+        groupBy,
+        groups: [...groups.values()].sort((a, b) => b.count - a.count),
+      };
+    }
+
+    const rows = projection ? arr.map(e => project(e, projection)) : arr;
+    return { total, returned: rows.length, rows };
+  }
+}
+
+function pickField(obj, path) {
+  if (!path) return undefined;
+  const parts = String(path).split('.');
+  let cur = obj;
+  for (const p of parts) {
+    if (cur === null || cur === undefined) return undefined;
+    cur = cur[p];
+  }
+  return cur;
+}
+
+function project(e, fields) {
+  const out = {};
+  for (const f of fields) {
+    const v = pickField(e, f);
+    if (v !== undefined) out[f] = v;
+  }
+  return out;
+}
+
+function matchesFilter(e, filter) {
+  if (!filter || typeof filter !== 'object') return true;
+  if (Array.isArray(filter.and)) return filter.and.every(f => matchesFilter(e, f));
+  if (Array.isArray(filter.or)) return filter.or.some(f => matchesFilter(e, f));
+  if (filter.not) return !matchesFilter(e, filter.not);
+  for (const [key, condition] of Object.entries(filter)) {
+    if (['and', 'or', 'not'].includes(key)) continue;
+    const v = pickField(e, key);
+    if (!matchesCondition(v, condition)) return false;
+  }
+  return true;
+}
+
+function matchesCondition(value, cond) {
+  if (cond === null || cond === undefined) return value === cond;
+  if (typeof cond === 'string' || typeof cond === 'number' || typeof cond === 'boolean') return value === cond;
+  if (Array.isArray(cond)) return cond.includes(value);
+  if (typeof cond === 'object') {
+    if (cond.eq !== undefined && value !== cond.eq) return false;
+    if (cond.ne !== undefined && value === cond.ne) return false;
+    if (cond.in && !cond.in.includes(value)) return false;
+    if (cond.nin && cond.nin.includes(value)) return false;
+    if (cond.gte !== undefined && !(value >= cond.gte)) return false;
+    if (cond.gt !== undefined && !(value > cond.gt)) return false;
+    if (cond.lte !== undefined && !(value <= cond.lte)) return false;
+    if (cond.lt !== undefined && !(value < cond.lt)) return false;
+    if (cond.regex) {
+      try {
+        const re = new RegExp(cond.regex, cond.flags || '');
+        if (!re.test(String(value === undefined ? '' : value))) return false;
+      } catch (_) { return false; }
+    }
+    if (cond.contains && !String(value === undefined ? '' : value).includes(cond.contains)) return false;
+    if (cond.exists === true && (value === undefined || value === null)) return false;
+    if (cond.exists === false && value !== undefined && value !== null) return false;
+    return true;
+  }
+  return false;
 }
 
 function send(res, code, body, type = 'application/json') {
@@ -352,6 +481,28 @@ export function createServer({ logDir = DEFAULT_LOG_DIR, port = 0, host = '127.0
       if (p === '/api/deviations') return send(res, 200, store.deviations(q));
       if (p === '/api/sessions') return send(res, 200, store.sessions(q));
       if (p === '/api/process-tree') return send(res, 200, store.processTree(q.sess));
+      if (p === '/api/observed-subsystems') return send(res, 200, { subsystems: store.observedSubsystems() });
+      if (p === '/api/distinct') return send(res, 200, { field: q.field, values: store.distinctValues(q.field, q) });
+      if (p === '/api/query') {
+        if (req.method === 'GET') {
+          let spec = {};
+          if (q.q) { try { spec = JSON.parse(q.q); } catch (e) { return send(res, 400, { error: 'q must be valid JSON', detail: e.message }); } }
+          return send(res, 200, store.query(spec));
+        }
+        if (req.method === 'POST') {
+          let body = '';
+          req.on('data', c => { body += c; if (body.length > 65536) { req.destroy(); } });
+          req.on('end', () => {
+            let spec;
+            try { spec = body ? JSON.parse(body) : {}; }
+            catch (e) { return send(res, 400, { error: 'body must be JSON', detail: e.message }); }
+            try { send(res, 200, store.query(spec)); }
+            catch (e) { send(res, 500, { error: String(e?.message || e) }); }
+          });
+          return;
+        }
+        return send(res, 405, { error: 'method not allowed' });
+      }
       if (p === '/api/stream') {
         res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive', 'Access-Control-Allow-Origin': '*' });
         res.write('event: hello\ndata: {}\n\n');

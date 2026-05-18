@@ -115,6 +115,7 @@ details summary::-webkit-details-marker{display:none}
   <a onclick="show('deviations')" data-panel="deviations">Deviations <span id="dev-badge" style="float:right;background:var(--red);color:#fff;padding:0 6px;border-radius:8px;font-size:10px"></span></a>
   <a onclick="show('sessions')" data-panel="sessions">Sessions</a>
   <a onclick="show('tree')" data-panel="tree">Process Tree</a>
+  <a onclick="show('query')" data-panel="query">Query</a>
   <div class="nav-section">Subsystems</div>
   <a onclick="showSub('hook')" data-panel="sub-hook">hook</a>
   <a onclick="showSub('exec')" data-panel="sub-exec">exec</a>
@@ -238,11 +239,44 @@ details summary::-webkit-details-marker{display:none}
   </div>
 </div>
 
+<!-- QUERY -->
+<div class="panel" id="panel-query">
+  <div class="card">
+    <h2>Query — compose your own analysis</h2>
+    <p style="color:var(--muted);font-size:11px;margin-bottom:8px">
+      JSON shape: <code>{filter:{sub:'plugkit',event:{regex:'^dispatch\\.'},dur_ms:{gt:1000}}, groupBy:['verb'], projection:['ts','verb','dur_ms','sess','cwd'], sort:[['ts','desc']], limit:100}</code>.
+      Filter operators: eq · ne · in · nin · gt · gte · lt · lte · regex · contains · exists · and/or/not at top level. Fields supported: any top-level key + dotted paths.
+    </p>
+    <div class="toolbar" style="margin-bottom:8px">
+      <button onclick="qRun()">Run</button>
+      <button onclick="qReset()">Reset</button>
+      <select id="q-template" onchange="qTemplate()">
+        <option value="">load template…</option>
+        <option value="slow-dispatches">slow dispatches (dur_ms &gt; 1000)</option>
+        <option value="all-deviations">all deviations grouped by kind</option>
+        <option value="phase-transitions">phase transitions by session</option>
+        <option value="dispatch-errors">dispatch errors</option>
+        <option value="instruction-served">instruction.served events with prd_pending &gt; 0</option>
+        <option value="recent-by-cwd">recent activity grouped by cwd</option>
+      </select>
+    </div>
+    <textarea id="q-spec" style="width:100%;height:160px;background:var(--bg3);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:8px;font-family:Consolas,monospace;font-size:11px" spellcheck="false">{"filter":{},"sort":[["ts","desc"]],"limit":50}</textarea>
+    <div id="q-chips" style="margin:8px 0;display:flex;flex-wrap:wrap;gap:4px"></div>
+    <div id="q-result"></div>
+  </div>
+</div>
+
 </main>
 </div>
 <script>
 const SUB_COLORS = {hook:'#bc8cff',exec:'#58a6ff',rs_learn:'#3fb950',rs_codeinsight:'#ffa657',rs_search:'#d29922',plugkit:'#ff7b72',plugkit_wrapper:'#39d353',bootstrap:'#79c0ff','acp-launcher':'#ff9ddb',learning:'#3fb950',git:'#ffa657'};
-const SUB_LIST = ['plugkit','exec','hook','rs_learn','rs_codeinsight','rs_search','bootstrap','plugkit_wrapper','acp-launcher','learning','git'];
+let SUB_LIST = ['plugkit','exec','hook','rs_learn','rs_codeinsight','rs_search','bootstrap','plugkit_wrapper','acp-launcher','learning','git'];
+function colorFor(sub) {
+  if (SUB_COLORS[sub]) return SUB_COLORS[sub];
+  let h = 0;
+  for (let i = 0; i < sub.length; i++) h = (h * 31 + sub.charCodeAt(i)) >>> 0;
+  return `hsl(${h % 360}, 60%, 65%)`;
+}
 
 let currentPanel = 'overview';
 let subCurrent = null;
@@ -267,6 +301,77 @@ function show(name) {
   else if (name === 'deviations') loadDeviations();
   else if (name === 'sessions') loadSessions();
   else if (name === 'tree') loadTreeSelector();
+  else if (name === 'query') loadQuery();
+}
+
+const QUERY_TEMPLATES = {
+  'slow-dispatches': { filter:{ event:'dispatch.end', dur_ms:{ gt:1000 } }, projection:['ts','verb','dur_ms','cwd','sess'], sort:[['dur_ms','desc']], limit:50 },
+  'all-deviations': { filter:{ event:{ regex:'^deviation\\.' } }, groupBy:['event'], sort:[['ts','desc']], limit:200 },
+  'phase-transitions': { filter:{ event:'phase.transitioned' }, projection:['ts','phase','next_skill','sess','cwd'], sort:[['ts','desc']], limit:100 },
+  'dispatch-errors': { filter:{ event:'dispatch.error' }, projection:['ts','verb','error','sess','cwd'], sort:[['ts','desc']], limit:100 },
+  'instruction-served': { filter:{ event:'instruction.served', prd_pending:{ gt:0 } }, projection:['ts','phase','prd_pending','mutables_pending','sess','cwd'], sort:[['ts','desc']], limit:50 },
+  'recent-by-cwd': { filter:{}, groupBy:['cwd'], sort:[['ts','desc']], limit:500 },
+};
+
+function qReset() {
+  document.getElementById('q-spec').value = JSON.stringify({ filter:{}, sort:[['ts','desc']], limit:50 }, null, 2);
+  document.getElementById('q-result').innerHTML = '';
+}
+
+function qTemplate() {
+  const t = document.getElementById('q-template').value;
+  if (!t || !QUERY_TEMPLATES[t]) return;
+  document.getElementById('q-spec').value = JSON.stringify(QUERY_TEMPLATES[t], null, 2);
+  qRun();
+}
+
+async function loadQuery() {
+  const el = document.getElementById('q-chips');
+  el.innerHTML = '<span style="color:var(--muted);font-size:11px;margin-right:6px">click to add to filter:</span>';
+  try {
+    const obs = await api('/api/observed-subsystems');
+    for (const s of (obs.subsystems||[])) {
+      el.innerHTML += `<span class="pill" style="cursor:pointer;background:${colorFor(s)}33;color:${colorFor(s)}" onclick="qAddFilter('sub',${JSON.stringify(s)})">sub:${esc(s)}</span>`;
+    }
+    const distinct = await api('/api/distinct?field=event&limit=20');
+    for (const v of (distinct.values||[])) {
+      el.innerHTML += `<span class="pill" style="cursor:pointer" title="${v.count} occurrences" onclick="qAddFilter('event',${JSON.stringify(v.value)})">event:${esc(v.value)}</span>`;
+    }
+  } catch (_) {}
+}
+
+function qAddFilter(field, value) {
+  try {
+    const spec = JSON.parse(document.getElementById('q-spec').value);
+    spec.filter = spec.filter || {};
+    spec.filter[field] = value;
+    document.getElementById('q-spec').value = JSON.stringify(spec, null, 2);
+    qRun();
+  } catch (e) { alert('current spec is not valid JSON: ' + e.message); }
+}
+
+async function qRun() {
+  let spec;
+  try { spec = JSON.parse(document.getElementById('q-spec').value); }
+  catch (e) { document.getElementById('q-result').innerHTML = `<p style="color:var(--red)">invalid JSON: ${esc(e.message)}</p>`; return; }
+  const r = await fetch('/api/query', { method:'POST', headers:{ 'content-type':'application/json' }, body: JSON.stringify(spec) }).then(x => x.json());
+  const el = document.getElementById('q-result');
+  if (r.error) { el.innerHTML = `<p style="color:var(--red)">${esc(r.error)}: ${esc(r.detail||'')}</p>`; return; }
+  if (r.groups) {
+    const total = r.groups.reduce((s, g) => s + g.count, 0);
+    el.innerHTML = `<p style="color:var(--muted);font-size:11px;margin-bottom:8px">grouped by ${esc(r.groupBy.join(', '))} · ${r.groups.length} groups · ${total} rows (total: ${r.total})</p>` +
+      '<table><tr><th>group</th><th>count</th><th>sample</th></tr>' +
+      r.groups.map(g => `<tr><td><strong>${esc(g.key)}</strong></td><td>${g.count}</td><td><pre class="json">${esc(JSON.stringify(g.sample[0]||{}, null, 2).slice(0,400))}</pre></td></tr>`).join('') +
+      '</table>';
+  } else {
+    const rows = r.rows || [];
+    if (!rows.length) { el.innerHTML = `<p style="color:var(--muted)">no matches (scanned ${r.total||0} events)</p>`; return; }
+    const cols = Object.keys(rows[0]);
+    el.innerHTML = `<p style="color:var(--muted);font-size:11px;margin-bottom:8px">${r.returned} of ${r.total} matching rows</p>` +
+      '<table><tr>' + cols.map(c => `<th>${esc(c)}</th>`).join('') + '</tr>' +
+      rows.map(row => '<tr>' + cols.map(c => `<td class="ts">${esc(typeof row[c]==='object' ? JSON.stringify(row[c]) : String(row[c]==null?'':row[c])).slice(0,200)}</td>`).join('') + '</tr>').join('') +
+      '</table>';
+  }
 }
 
 const PHASES = ['PLAN','EXECUTE','EMIT','VERIFY','COMPLETE'];
@@ -402,6 +507,10 @@ function showSub(sub) {
 
 async function loadOverview() {
   const snap = await api('/api/snapshot');
+  if (Array.isArray(snap.observedSubsystems) && snap.observedSubsystems.length) {
+    const merged = new Set([...SUB_LIST, ...snap.observedSubsystems]);
+    SUB_LIST = [...merged];
+  }
   const el = document.getElementById('stats-area');
   el.innerHTML = `
     ${stat(snap.total,'total events')}

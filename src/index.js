@@ -4,6 +4,22 @@ import os from 'os';
 import { EventEmitter } from 'events';
 
 export const SUBSYSTEMS = ['plugkit', 'exec', 'hook', 'rs_learn', 'rs_codeinsight', 'rs_search', 'bootstrap', 'plugkit_wrapper'];
+export function discoverSubsystems(logDir) {
+  const out = new Set();
+  if (!fs.existsSync(logDir)) return [...out];
+  try {
+    for (const d of fs.readdirSync(logDir, { withFileTypes: true })) {
+      if (!d.isDirectory()) continue;
+      const dayDir = path.join(logDir, d.name);
+      try {
+        for (const f of fs.readdirSync(dayDir)) {
+          if (f.endsWith('.jsonl')) out.add(path.basename(f, '.jsonl'));
+        }
+      } catch (_) {}
+    }
+  } catch (_) {}
+  return [...out].sort();
+}
 
 const DEFAULT_LOG_DIR = process.env.GM_LOG_DIR || path.join(os.homedir(), '.claude', 'gm-log');
 const DEBOUNCE_MS = 50;
