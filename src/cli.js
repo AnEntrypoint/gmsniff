@@ -11,7 +11,7 @@ const FLAGS = {
   string: ['since', 'until', 'before', 'after', 'sub', 'event', 'sess', 'day', 'cwd', 'pid', 'sort', 'rollup', 'format', 'efficiency', 'xref', 'tree'],
   multi: ['grep', 'igrep', 'sub', 'event', 'sess', 'pid'],
   number: ['limit', 'head', 'tail-n', 'ctx', 'truncate'],
-  bool: ['json', 'ndjson', 'tail', 'f', 'full', 'reverse', 'invert', 'count', 'stats', 'list-sessions', 'list-deviations', 'list-events', 'no-color', 'help', 'h'],
+  bool: ['json', 'ndjson', 'tail', 'f', 'full', 'reverse', 'invert', 'count', 'stats', 'list-sessions', 'list-deviations', 'list-events', 'updates', 'no-color', 'help', 'h'],
 };
 
 function parseArgs(argv) {
@@ -46,6 +46,7 @@ USAGE
   gmsniff --efficiency <sess>           turn count, dispatch ratio, time-to-COMPLETE
   gmsniff --xref <sess>                 join with ccsniff transcript on sid
   gmsniff --rollup <out.ndjson>         dump filtered events to file
+  gmsniff --updates                     live drift state + update.* event history
   gmsniff gui [--port N] [--open]       launch browser GUI
 
 TIME
@@ -374,6 +375,66 @@ async function xref(all, sess, opts) {
   process.stderr.write(`# ${gmEvs.length} gm-events + ${ccEvs.length} cc-events for session ${sess}\n`);
 }
 
+function findUpdateMarkers() {
+  const roots = [];
+  for (const env of ['DEV_ROOT', 'GM_DEV_ROOT']) {
+    if (process.env[env]) roots.push(process.env[env]);
+  }
+  roots.push(process.cwd());
+  if (process.platform === 'win32') roots.push('C:/dev'); else roots.push(path.join(os.homedir(), 'dev'));
+  const seen = new Set();
+  const markers = [];
+  for (const root of roots) {
+    try {
+      if (!fs.existsSync(root)) continue;
+      for (const d of fs.readdirSync(root, { withFileTypes: true })) {
+        if (!d.isDirectory()) continue;
+        const proj = path.join(root, d.name);
+        if (seen.has(proj)) continue;
+        seen.add(proj);
+        const marker = path.join(proj, '.gm', 'exec-spool', '.update-available.json');
+        try {
+          if (fs.existsSync(marker)) {
+            const content = JSON.parse(fs.readFileSync(marker, 'utf8'));
+            const status = path.join(proj, '.gm', 'exec-spool', '.status.json');
+            let runningVersion = null;
+            try { runningVersion = JSON.parse(fs.readFileSync(status, 'utf8')).version; } catch (_) {}
+            markers.push({ project: path.basename(proj), path: proj, ...content, running: runningVersion });
+          }
+        } catch (_) {}
+      }
+    } catch (_) {}
+  }
+  return markers;
+}
+
+function updates(all, opts) {
+  const markers = findUpdateMarkers();
+  if (opts.json) {
+    process.stdout.write(JSON.stringify({ live: markers, history: all.filter(e => typeof e.event === 'string' && e.event.startsWith('update.')) }, null, 2) + '\n');
+    return;
+  }
+  process.stdout.write('# live drift state:\n');
+  if (!markers.length) {
+    process.stdout.write('  (none — every project is current)\n');
+  } else {
+    for (const m of markers) {
+      const ageMin = m.checked_at_ms ? Math.round((Date.now() - m.checked_at_ms) / 60_000) : null;
+      const ageStr = ageMin === null ? '?' : `${ageMin}m ago`;
+      process.stdout.write(`  ${color('!', 31)} ${m.project.padEnd(18)} installed=${m.installed} latest=${color(m.latest, 33)} running=${m.running || '?'} checked=${ageStr}\n`);
+      process.stdout.write(`    ${m.update_url || ''}\n`);
+    }
+  }
+  const events = all.filter(e => typeof e.event === 'string' && e.event.startsWith('update.'));
+  process.stdout.write(`\n# update.* event history (${events.length}):\n`);
+  for (const e of events.slice(-20).reverse()) {
+    process.stdout.write(formatRow(e, { truncate: 300 }));
+  }
+  if (markers.length) {
+    process.stdout.write('\n' + color('# to update: bun x gm-plugkit@latest  (or npx -y gm-plugkit@latest)', 36) + '\n');
+  }
+}
+
 async function rollup(out, all, filter) {
   const filtered = all.filter(filter);
   const body = filtered.map(e => JSON.stringify(e)).join('\n') + (filtered.length ? '\n' : '');
@@ -427,6 +488,7 @@ if (argv[0] === 'gui') {
     if (opts['list-sessions']) { listSessions(all.filter(filter)); process.exit(0); }
     if (opts['list-deviations']) { listDeviations(all.filter(filter)); process.exit(0); }
     if (opts['list-events']) { listEvents(all.filter(filter), opts.sub); process.exit(0); }
+    if (opts.updates) { updates(all, opts); process.exit(0); }
     if (opts.tree) { tree(all, opts.tree); process.exit(0); }
     if (opts.efficiency) { efficiency(all, opts.efficiency); process.exit(0); }
     if (opts.xref) { await xref(all, opts.xref, opts); process.exit(0); }
