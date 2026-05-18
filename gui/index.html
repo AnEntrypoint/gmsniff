@@ -77,6 +77,24 @@ details summary{cursor:pointer;list-style:none;user-select:none}
 details summary::-webkit-details-marker{display:none}
 .expand-btn{font-size:10px;color:var(--accent);margin-left:6px;cursor:pointer}
 .pill{display:inline-block;padding:1px 7px;border-radius:10px;font-size:11px;background:var(--bg3);margin:1px}
+.phase-walk{display:inline-flex;gap:2px;vertical-align:middle}
+.phase-walk .ph{width:18px;height:10px;border-radius:2px;background:var(--bg3);position:relative}
+.phase-walk .ph.reached{background:var(--green)}
+.phase-walk .ph.gap{background:var(--red)}
+.phase-walk .ph .lbl{position:absolute;top:-15px;left:0;font-size:9px;color:var(--muted);white-space:nowrap}
+.dev-row{background:#3a1a1a;border-left:3px solid var(--red);padding:8px 12px;margin:4px 0;border-radius:3px;font-size:12px}
+.dev-row strong{color:var(--red)}
+.tree-node{padding:5px 10px;border-left:2px solid var(--border);margin:2px 0 2px 16px;font-size:12px}
+.tree-node.phase{border-color:var(--accent);background:var(--bg3);font-weight:600}
+.tree-node.deviation{border-color:var(--red);background:#3a1a1a;color:var(--red)}
+.tree-node.mutable-resolve{border-color:var(--green)}
+.tree-node.prd-add{border-color:var(--yellow)}
+.tree-node .ts{margin-right:8px}
+.session-row{display:flex;align-items:center;gap:8px;padding:6px 10px;border-bottom:1px solid var(--bg3);cursor:pointer}
+.session-row:hover{background:var(--bg3)}
+.session-row .sess-id{font-family:monospace;font-size:11px;color:var(--accent);width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.session-row .counts{font-size:10px;color:var(--muted);width:280px}
+.session-row .dev-cnt{color:var(--red);font-weight:600}
 </style>
 </head>
 <body>
@@ -93,6 +111,10 @@ details summary::-webkit-details-marker{display:none}
   <a onclick="show('live')" data-panel="live">Live Stream</a>
   <a onclick="show('events')" data-panel="events">All Events</a>
   <a onclick="show('search-panel')" data-panel="search-panel">Search</a>
+  <div class="nav-section">Process</div>
+  <a onclick="show('deviations')" data-panel="deviations">Deviations <span id="dev-badge" style="float:right;background:var(--red);color:#fff;padding:0 6px;border-radius:8px;font-size:10px"></span></a>
+  <a onclick="show('sessions')" data-panel="sessions">Sessions</a>
+  <a onclick="show('tree')" data-panel="tree">Process Tree</a>
   <div class="nav-section">Subsystems</div>
   <a onclick="showSub('hook')" data-panel="sub-hook">hook</a>
   <a onclick="showSub('exec')" data-panel="sub-exec">exec</a>
@@ -196,11 +218,31 @@ details summary::-webkit-details-marker{display:none}
   <div id="hooks-body"></div>
 </div>
 
+<!-- DEVIATIONS -->
+<div class="panel" id="panel-deviations">
+  <div id="deviations-body"></div>
+</div>
+
+<!-- SESSIONS -->
+<div class="panel" id="panel-sessions">
+  <div id="sessions-body"></div>
+</div>
+
+<!-- PROCESS TREE -->
+<div class="panel" id="panel-tree">
+  <div class="card">
+    <div class="toolbar">
+      <select id="tree-sess" onchange="loadTree()"><option value="">select session…</option></select>
+    </div>
+    <div id="tree-body"></div>
+  </div>
+</div>
+
 </main>
 </div>
 <script>
-const SUB_COLORS = {hook:'#bc8cff',exec:'#58a6ff',rs_learn:'#3fb950',rs_codeinsight:'#ffa657',rs_search:'#d29922',plugkit:'#ff7b72',plugkit_wrapper:'#39d353',bootstrap:'#79c0ff'};
-const SUB_LIST = ['plugkit','exec','hook','rs_learn','rs_codeinsight','rs_search','bootstrap','plugkit_wrapper'];
+const SUB_COLORS = {hook:'#bc8cff',exec:'#58a6ff',rs_learn:'#3fb950',rs_codeinsight:'#ffa657',rs_search:'#d29922',plugkit:'#ff7b72',plugkit_wrapper:'#39d353',bootstrap:'#79c0ff','acp-launcher':'#ff9ddb',learning:'#3fb950',git:'#ffa657'};
+const SUB_LIST = ['plugkit','exec','hook','rs_learn','rs_codeinsight','rs_search','bootstrap','plugkit_wrapper','acp-launcher','learning','git'];
 
 let currentPanel = 'overview';
 let subCurrent = null;
@@ -222,6 +264,124 @@ function show(name) {
   else if (name === 'recall-panel') loadRecall();
   else if (name === 'exec-panel') loadExec();
   else if (name === 'hooks-panel') loadHooks();
+  else if (name === 'deviations') loadDeviations();
+  else if (name === 'sessions') loadSessions();
+  else if (name === 'tree') loadTreeSelector();
+}
+
+const PHASES = ['PLAN','EXECUTE','EMIT','VERIFY','COMPLETE'];
+
+function renderPhaseWalk(reached, gapKinds) {
+  const gaps = new Set(gapKinds || []);
+  let html = '<span class="phase-walk">';
+  PHASES.forEach((p, i) => {
+    const cls = gaps.has(p) ? 'gap' : (reached[i] ? 'reached' : '');
+    html += `<span class="ph ${cls}" title="${p}${reached[i]?' (reached)':' (not reached)'}"><span class="lbl">${p[0]}</span></span>`;
+  });
+  return html + '</span>';
+}
+
+async function loadDeviations() {
+  const r = await api('/api/deviations?limit=200');
+  const el = document.getElementById('deviations-body');
+  const kindRows = Object.entries(r.byKind||{}).sort((a,b)=>b[1]-a[1]).map(([k,n])=>`<div class="bar-row"><span style="flex:1;font-size:12px;color:var(--red)">${esc(k)}</span><span style="color:#8b949e;font-size:11px">${n}</span></div>`).join('');
+  const sessRows = Object.entries(r.bySession||{}).sort((a,b)=>b[1]-a[1]).slice(0,15).map(([s,n])=>`<div class="bar-row"><span style="flex:1;font-size:11px;font-family:monospace">${esc(s).slice(0,60)}</span><span class="dev-cnt" style="font-size:11px">${n}</span></div>`).join('');
+  const recent = (r.recent||[]).map(e => {
+    const residuals = Array.isArray(e.residuals) ? e.residuals.join(' · ') : (e.reason || '');
+    return `<div class="dev-row"><span class="ts">${fmtTs(e.ts)}</span> <strong>${esc(e.event)}</strong> <span class="pill">sess:${esc((e.sess||'-').slice(0,20))}</span> <span class="pill">${esc(e.operation||'')}</span><div style="margin-top:4px;color:var(--muted);font-size:11px">${esc(residuals)}</div></div>`;
+  }).join('');
+  el.innerHTML = `
+    <div class="flex-row">
+      <div class="card" style="min-width:280px">
+        <h2>By Deviation Kind</h2>${kindRows || '<p style="color:var(--muted)">No deviations recorded yet.</p>'}
+      </div>
+      <div class="card" style="min-width:280px">
+        <h2>By Session</h2>${sessRows || '<p style="color:var(--muted)">—</p>'}
+      </div>
+    </div>
+    <div class="card"><h2>Recent Deviations (${r.total})</h2>${recent || '<p style="color:var(--muted)">No deviations recorded — agents are following the process.</p>'}</div>`;
+}
+
+async function loadSessions() {
+  const r = await api('/api/sessions?limit=200');
+  const el = document.getElementById('sessions-body');
+  const header = `<div class="card"><h2>Sessions (${r.total})</h2>
+    <table><tr><th>session</th><th>walk</th><th>events</th><th>verbs</th><th>PRD</th><th>muts</th><th>resid</th><th>devs</th><th>first</th><th>last</th></tr>`;
+  const rows = (r.rows||[]).map(s => {
+    const walkGaps = [];
+    for (let i = 0; i < PHASES.length - 1; i++) {
+      if (s.phases_reached[i+1] && !s.phases_reached[i]) walkGaps.push(PHASES[i]);
+    }
+    return `<tr style="cursor:pointer" onclick="openSession('${esc(s.sess)}')">
+      <td class="ts" style="font-family:monospace;max-width:170px;overflow:hidden;text-overflow:ellipsis">${esc(s.sess)}</td>
+      <td>${renderPhaseWalk(s.phases_reached, walkGaps)}</td>
+      <td>${s.events}</td>
+      <td class="ts">${s.dispatches}</td>
+      <td class="ts">${s.prd_adds}/${s.prd_resolves}</td>
+      <td class="ts">${s.mutable_adds}/${s.mutable_resolves}</td>
+      <td class="ts">${s.residual_fires}f/${s.residual_skips}s</td>
+      <td class="ts ${s.deviations?'dev-cnt':''}">${s.deviations||''}</td>
+      <td class="ts">${fmtTs(s.first_ts)}</td>
+      <td class="ts">${fmtTs(s.last_ts)}</td>
+    </tr>`;
+  }).join('');
+  el.innerHTML = header + rows + '</table></div>';
+}
+
+function openSession(sess) {
+  show('tree');
+  setTimeout(() => {
+    const sel = document.getElementById('tree-sess');
+    sel.value = sess;
+    loadTree();
+  }, 50);
+}
+
+async function loadTreeSelector() {
+  const r = await api('/api/sessions?limit=200');
+  const sel = document.getElementById('tree-sess');
+  const current = sel.value;
+  sel.innerHTML = '<option value="">select session…</option>';
+  for (const s of (r.rows||[])) {
+    const lbl = `${s.sess.slice(0,40)} — ${fmtTs(s.last_ts)} — ${s.events}ev${s.deviations?' ⚠'+s.deviations:''}`;
+    sel.innerHTML += `<option value="${esc(s.sess)}">${esc(lbl)}</option>`;
+  }
+  if (current) sel.value = current;
+}
+
+async function loadTree() {
+  const sess = document.getElementById('tree-sess').value;
+  if (!sess) { document.getElementById('tree-body').innerHTML = '<p style="color:var(--muted);padding:16px">Select a session.</p>'; return; }
+  const r = await api('/api/process-tree?sess=' + encodeURIComponent(sess));
+  const el = document.getElementById('tree-body');
+  const walkHtml = renderPhaseWalk(r.phase_reached, []);
+  let gapsHtml = '';
+  if (r.gaps && r.gaps.length) {
+    gapsHtml = '<div class="card" style="background:#3a1a1a;border-color:var(--red)"><h2 style="color:var(--red)">Gaps detected</h2>' +
+      r.gaps.map(g => `<div class="dev-row"><span class="ts">${fmtTs(g.ts)}</span> <strong>${esc(g.kind)}</strong>${g.from?` from <span class="pill">${esc(g.from)}</span> to <span class="pill">${esc(g.to)}</span>`:''}${g.deviation?` <span class="pill">${esc(g.deviation)}</span>`:''}${g.detail?` first non-instruction event: ${esc(g.detail.event)} verb=${esc(g.detail.verb||'')}`:''}</div>`).join('') + '</div>';
+  }
+  const nodeHtml = (r.nodes||[]).map(n => {
+    const cls = (n.kind === 'transition' || n.kind === 'instruction') ? 'phase' : (n.kind === 'deviation' ? 'deviation' : n.kind);
+    const extra = [];
+    if (n.phase) extra.push(`<span class="pill">${esc(n.phase)}</span>`);
+    if (n.id) extra.push(`<span class="pill">${esc(n.id)}</span>`);
+    if (n.key) extra.push(`<span class="pill">key:${esc(String(n.key).slice(0,30))}</span>`);
+    if (n.reason) extra.push(`<span style="color:var(--muted);font-size:11px">${esc(n.reason)}</span>`);
+    if (n.deviation) extra.push(`<strong>${esc(n.deviation)}</strong>`);
+    if (Array.isArray(n.residuals)) extra.push(`<span style="font-size:11px;color:var(--muted)">${esc(n.residuals.join(' · '))}</span>`);
+    if (n.kind === 'instruction') extra.push(`<span style="font-size:11px;color:var(--muted)">prd:${n.prd_pending||0} muts:${n.mutables_pending||0}</span>`);
+    return `<div class="tree-node ${cls}"><span class="ts">${fmtTs(n.ts)}</span><strong>${esc(n.kind)}</strong> ${extra.join(' ')}</div>`;
+  }).join('');
+  el.innerHTML = `<div class="card"><h2>${esc(sess)}</h2><div>walk: ${walkHtml}</div></div>${gapsHtml}<div class="card"><h2>Timeline (${(r.nodes||[]).length})</h2>${nodeHtml || '<p style="color:var(--muted)">No process events for this session.</p>'}</div>`;
+}
+
+async function refreshDeviationBadge() {
+  try {
+    const r = await api('/api/deviations?limit=1');
+    const b = document.getElementById('dev-badge');
+    if (r.total > 0) { b.textContent = r.total; b.style.display = 'inline'; }
+    else { b.textContent = ''; b.style.display = 'none'; }
+  } catch (_) {}
 }
 
 function showSub(sub) {
@@ -512,6 +672,9 @@ function connectSSE() {
       const ev = JSON.parse(e.data);
       appendLive(ev);
       if (currentPanel === 'overview') loadOverview();
+      if (typeof ev.event === 'string' && ev.event.startsWith('deviation.')) refreshDeviationBadge();
+      if (currentPanel === 'deviations' && typeof ev.event === 'string' && ev.event.startsWith('deviation.')) loadDeviations();
+      if (currentPanel === 'sessions') loadSessions();
     } catch {}
   });
   sse.onerror = () => { badge.textContent = 'reconnecting…'; badge.classList.remove('live'); setTimeout(connectSSE, 3000); sse.close(); };
@@ -524,9 +687,13 @@ window.evPage = evPage;
 window.subLoad = subLoad;
 window.subPage = subPage;
 window.doSearch = doSearch;
+window.loadTree = loadTree;
+window.openSession = openSession;
 
 populateSelects();
 loadOverview();
+refreshDeviationBadge();
+setInterval(refreshDeviationBadge, 10000);
 connectSSE();
 </script>
 </body>

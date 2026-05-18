@@ -129,6 +129,157 @@ class Store {
     return { total: evs.length, byEvent, recent };
   }
 
+  deviations({ limit = 200, sess } = {}) {
+    let arr = this.events.filter(e => typeof e.event === 'string' && e.event.startsWith('deviation.'));
+    if (sess) arr = arr.filter(e => e.sess === sess);
+    const byKind = {};
+    for (const e of arr) byKind[e.event] = (byKind[e.event] || 0) + 1;
+    const bySession = {};
+    for (const e of arr) {
+      const k = e.sess || '(no-session)';
+      bySession[k] = (bySession[k] || 0) + 1;
+    }
+    return {
+      total: arr.length,
+      byKind,
+      bySession,
+      recent: arr.slice(-limit).reverse(),
+    };
+  }
+
+  sessions({ limit = 100 } = {}) {
+    const map = new Map();
+    for (const e of this.events) {
+      const key = e.sess || '(no-session)';
+      let entry = map.get(key);
+      if (!entry) {
+        entry = {
+          sess: key,
+          first_ts: e.ts || '',
+          last_ts: e.ts || '',
+          events: 0,
+          phases: new Set(),
+          phase_walk: [],
+          prd_adds: 0,
+          prd_resolves: 0,
+          mutable_adds: 0,
+          mutable_resolves: 0,
+          deviations: 0,
+          residual_fires: 0,
+          residual_skips: 0,
+          dispatches: 0,
+          last_dispatch_verbs: [],
+          cwds: new Set(),
+          pids: new Set(),
+        };
+        map.set(key, entry);
+      }
+      entry.events++;
+      if (e.ts) { if (!entry.first_ts || e.ts < entry.first_ts) entry.first_ts = e.ts; if (e.ts > entry.last_ts) entry.last_ts = e.ts; }
+      if (e.cwd) entry.cwds.add(e.cwd);
+      if (e.pid) entry.pids.add(e.pid);
+      if (e._sub === 'plugkit') {
+        if (e.event === 'phase.transitioned' && e.phase) {
+          entry.phases.add(e.phase);
+          entry.phase_walk.push({ ts: e.ts, phase: e.phase });
+        }
+        if (e.event === 'instruction.served' && e.phase) entry.phases.add(e.phase);
+        if (e.event === 'prd.added') entry.prd_adds++;
+        if (e.event === 'prd.resolved') entry.prd_resolves++;
+        if (e.event === 'mutable.added') entry.mutable_adds++;
+        if (e.event === 'mutable.resolved') entry.mutable_resolves++;
+        if (e.event === 'residual.fired') entry.residual_fires++;
+        if (e.event === 'residual.skipped') entry.residual_skips++;
+        if (e.event === 'dispatch.end') {
+          entry.dispatches++;
+          if (e.verb) entry.last_dispatch_verbs.push(e.verb);
+          if (entry.last_dispatch_verbs.length > 20) entry.last_dispatch_verbs.shift();
+        }
+      }
+      if (typeof e.event === 'string' && e.event.startsWith('deviation.')) entry.deviations++;
+    }
+    const PHASES = ['PLAN','EXECUTE','EMIT','VERIFY','COMPLETE'];
+    const arr = [];
+    for (const v of map.values()) {
+      const reached = PHASES.map(p => v.phases.has(p));
+      arr.push({
+        sess: v.sess,
+        first_ts: v.first_ts,
+        last_ts: v.last_ts,
+        events: v.events,
+        dispatches: v.dispatches,
+        phases_reached: reached,
+        phase_walk: v.phase_walk,
+        prd_adds: v.prd_adds,
+        prd_resolves: v.prd_resolves,
+        mutable_adds: v.mutable_adds,
+        mutable_resolves: v.mutable_resolves,
+        residual_fires: v.residual_fires,
+        residual_skips: v.residual_skips,
+        deviations: v.deviations,
+        last_verbs: v.last_dispatch_verbs,
+        cwds: [...v.cwds],
+        pids: [...v.pids],
+      });
+    }
+    arr.sort((a,b) => (b.last_ts || '').localeCompare(a.last_ts || ''));
+    return { total: arr.length, rows: arr.slice(0, limit) };
+  }
+
+  processTree(sess) {
+    if (!sess) return { sess: null, nodes: [], gaps: [] };
+    const match = sess === '(no-session)' ? '' : sess;
+    const evs = this.events.filter(e => (e.sess || '') === match).slice().sort((a,b)=>(a.ts||'').localeCompare(b.ts||''));
+    const PHASES = ['PLAN','EXECUTE','EMIT','VERIFY','COMPLETE'];
+    const nodes = [];
+    const gaps = [];
+    let currentPhase = null;
+    let firstInstructionSeen = false;
+    let firstWrite = null;
+    for (const e of evs) {
+      if (e._sub === 'plugkit') {
+        if (e.event === 'instruction.served') {
+          if (!firstInstructionSeen) firstInstructionSeen = true;
+          if (e.phase && e.phase !== currentPhase) currentPhase = e.phase;
+          nodes.push({ ts: e.ts, kind: 'instruction', phase: e.phase, prd_pending: e.prd_pending, mutables_pending: e.mutables_pending });
+        } else if (e.event === 'phase.transitioned') {
+          if (e.phase && currentPhase) {
+            const fromIdx = PHASES.indexOf(currentPhase);
+            const toIdx = PHASES.indexOf(e.phase);
+            if (fromIdx !== -1 && toIdx !== -1 && toIdx > fromIdx + 1) {
+              gaps.push({ ts: e.ts, kind: 'phase-skipped', from: currentPhase, to: e.phase });
+            }
+          }
+          currentPhase = e.phase;
+          nodes.push({ ts: e.ts, kind: 'transition', phase: e.phase });
+        } else if (e.event === 'prd.added') {
+          nodes.push({ ts: e.ts, kind: 'prd-add', id: e.id, phase: currentPhase });
+        } else if (e.event === 'prd.resolved') {
+          nodes.push({ ts: e.ts, kind: 'prd-resolve', id: e.id, phase: currentPhase });
+        } else if (e.event === 'mutable.added') {
+          nodes.push({ ts: e.ts, kind: 'mutable-add', id: e.id, phase: currentPhase });
+        } else if (e.event === 'mutable.resolved') {
+          nodes.push({ ts: e.ts, kind: 'mutable-resolve', id: e.id, phase: currentPhase });
+        } else if (e.event === 'residual.fired' || e.event === 'residual.skipped') {
+          nodes.push({ ts: e.ts, kind: e.event, reason: e.reason, phase: currentPhase });
+        } else if (e.event === 'memorize.fired') {
+          nodes.push({ ts: e.ts, kind: 'memorize', key: e.key, phase: currentPhase });
+        }
+      }
+      if (typeof e.event === 'string' && e.event.startsWith('deviation.')) {
+        nodes.push({ ts: e.ts, kind: 'deviation', deviation: e.event, reason: e.reason, residuals: e.residuals, phase: currentPhase });
+        gaps.push({ ts: e.ts, kind: 'deviation', deviation: e.event });
+      }
+      if ((e.event === 'dispatch.start' || e.event === 'spawn') && !firstInstructionSeen && !firstWrite) {
+        firstWrite = { ts: e.ts, event: e.event, verb: e.verb };
+      }
+    }
+    if (firstWrite && !firstInstructionSeen) {
+      gaps.unshift({ ts: firstWrite.ts, kind: 'no-instruction-dispatched', detail: firstWrite });
+    }
+    return { sess, nodes, gaps, phase_reached: PHASES.map(p => evs.some(e => (e._sub === 'plugkit' && (e.event === 'phase.transitioned' || e.event === 'instruction.served') && e.phase === p))) };
+  }
+
   search(q, { sub, limit = 100 } = {}) {
     if (!q) return [];
     const lq = q.toLowerCase();
@@ -198,6 +349,9 @@ export function createServer({ logDir = DEFAULT_LOG_DIR, port = 0, host = '127.0
       if (p === '/api/exec') return send(res, 200, store.execStats());
       if (p === '/api/hooks') return send(res, 200, store.hookStats());
       if (p === '/api/search') return send(res, 200, { q: q.q || '', results: store.search(q.q, q) });
+      if (p === '/api/deviations') return send(res, 200, store.deviations(q));
+      if (p === '/api/sessions') return send(res, 200, store.sessions(q));
+      if (p === '/api/process-tree') return send(res, 200, store.processTree(q.sess));
       if (p === '/api/stream') {
         res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive', 'Access-Control-Allow-Origin': '*' });
         res.write('event: hello\ndata: {}\n\n');
