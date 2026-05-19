@@ -1,7 +1,9 @@
 import assert from 'assert';
 import { createServer } from './src/server.js';
+import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import http from 'http';
 
 const logDir = process.env.GM_LOG_DIR || path.join(os.homedir(), '.claude', 'gm-log');
 const { url, close } = await createServer({ logDir, port: 0 });
@@ -47,5 +49,57 @@ assert.strictEqual(gui.status, 200, 'GUI / → 200');
 const html = await gui.text();
 assert(html.includes('gmsniff'), 'GUI has title');
 
+// --- Live feedback (SSE) regression ---
+// Use a dedicated temp logDir so we control appends without depending on real activity.
+const liveDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gmsniff-live-'));
+const liveDay = new Date().toISOString().slice(0, 10);
+fs.mkdirSync(path.join(liveDir, liveDay), { recursive: true });
+const liveFile = path.join(liveDir, liveDay, 'plugkit.jsonl');
+fs.writeFileSync(liveFile, '');
+
+const live = await createServer({ logDir: liveDir, port: 0 });
+
+const received = [];
+let helloSeen = false;
+await new Promise((resolve, reject) => {
+  const req = http.get(live.url + '/api/stream', res => {
+    assert.strictEqual(res.statusCode, 200, 'SSE status');
+    assert.match(res.headers['content-type'] || '', /text\/event-stream/, 'SSE content-type');
+    let buf = '';
+    res.on('data', chunk => {
+      buf += chunk.toString('utf8');
+      let idx;
+      while ((idx = buf.indexOf('\n\n')) !== -1) {
+        const frame = buf.slice(0, idx); buf = buf.slice(idx + 2);
+        let event = 'message', data = '';
+        for (const l of frame.split('\n')) {
+          if (l.startsWith('event: ')) event = l.slice(7);
+          else if (l.startsWith('data: ')) data += l.slice(6);
+        }
+        if (event === 'hello') helloSeen = true;
+        else if (event === 'event') { try { received.push(JSON.parse(data)); } catch {} }
+      }
+    });
+    res.on('error', reject);
+  });
+  req.on('error', reject);
+  // wait for hello, then append, then wait for match
+  (async () => {
+    const helloDl = Date.now() + 3000;
+    while (Date.now() < helloDl && !helloSeen) await new Promise(r => setTimeout(r, 50));
+    assert(helloSeen, 'SSE hello not received');
+    const marker = 'LIVE_TEST_' + Date.now();
+    fs.appendFileSync(liveFile, JSON.stringify({ ts: new Date().toISOString(), event: 'live.test', pid: process.pid, marker }) + '\n');
+    const dl = Date.now() + 5000;
+    while (Date.now() < dl && !received.some(e => e.marker === marker)) await new Promise(r => setTimeout(r, 100));
+    assert(received.some(e => e.marker === marker), `SSE did not deliver appended jsonl line within 5s (got ${received.length} events)`);
+    req.destroy();
+    resolve();
+  })().catch(reject);
+});
+
+await live.close();
+fs.rmSync(liveDir, { recursive: true, force: true });
+
 await close();
-console.log(`gmsniff OK — ${snap.total} events across ${days.length} days`);
+console.log(`gmsniff OK — ${snap.total} events across ${days.length} days · live-feedback verified`);
