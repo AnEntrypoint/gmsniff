@@ -101,10 +101,16 @@ export class GmLogWatcher extends EventEmitter {
   _line(raw, sub, day, fp) {
     let obj;
     try { obj = JSON.parse(raw); } catch { return; }
-    const ev = { ...obj, _sub: sub, _day: day, _fp: fp };
+    const ev = { ...obj, ts: normalizeTs(obj.ts), _sub: sub, _day: day, _fp: fp };
     this.emit('event', ev);
     this.emit(`sub:${sub}`, ev);
   }
+}
+
+function normalizeTs(ts) {
+  if (typeof ts === 'string') return ts;
+  if (typeof ts === 'number' && Number.isFinite(ts)) return new Date(ts).toISOString();
+  return '';
 }
 
 export function replayAll(logDir = DEFAULT_LOG_DIR) {
@@ -122,7 +128,7 @@ export function replayAll(logDir = DEFAULT_LOG_DIR) {
           const lines = fs.readFileSync(path.join(dayDir, f), 'utf8').split('\n');
           for (const l of lines) {
             if (!l.trim()) continue;
-            try { events.push({ ...JSON.parse(l), _sub: sub, _day: day }); } catch {}
+            try { const o = JSON.parse(l); events.push({ ...o, ts: normalizeTs(o.ts), _sub: sub, _day: day }); } catch {}
           }
         } catch {}
       }
