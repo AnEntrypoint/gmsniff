@@ -8,8 +8,8 @@ const DEFAULT_LOG_DIR = process.env.GM_LOG_DIR || path.join(os.homedir(), '.clau
 const PHASES = ['PLAN', 'EXECUTE', 'EMIT', 'VERIFY', 'COMPLETE'];
 
 const FLAGS = {
-  string: ['since', 'until', 'before', 'after', 'sub', 'event', 'sess', 'day', 'cwd', 'pid', 'sort', 'rollup', 'format', 'efficiency', 'xref', 'tree'],
-  multi: ['grep', 'igrep', 'sub', 'event', 'sess', 'pid'],
+  string: ['since', 'until', 'before', 'after', 'sub', 'event', 'sess', 'day', 'cwd', 'pid', 'sort', 'rollup', 'format', 'efficiency', 'xref', 'tree', 'exclude-sess', 'exclude-cwd'],
+  multi: ['grep', 'igrep', 'sub', 'event', 'sess', 'pid', 'exclude-sess', 'exclude-cwd'],
   number: ['limit', 'head', 'tail-n', 'ctx', 'truncate'],
   bool: ['json', 'ndjson', 'tail', 'f', 'full', 'reverse', 'invert', 'count', 'stats', 'list-sessions', 'list-deviations', 'list-events', 'updates', 'watchers', 'conformance', 'all', 'all-dispatch', 'no-color', 'help', 'h'],
 };
@@ -63,6 +63,8 @@ FILTERS (repeat = OR within a flag, AND across flags)
   --sub <name>           subsystem (plugkit, hook, exec, rs_learn, …)
   --event <name>         event type (dispatch.end, deviation.gate-deny, …)
   --sess <id>            session id; repeat = OR
+  --exclude-sess <id>    exclude session id prefix; repeat = exclude any
+  --exclude-cwd <re>     exclude working-dir regex; repeat = exclude any
   --pid <n>              process id; repeat = OR
   --day <YYYY-MM-DD>     restrict to one day
   --cwd <re>             working-dir regex
@@ -114,6 +116,8 @@ function buildFilter(opts) {
   const subs = opts._multi.sub.length ? new Set(opts._multi.sub) : null;
   const events = opts._multi.event.length ? new Set(opts._multi.event) : null;
   const sesss = opts._multi.sess.length ? opts._multi.sess : null;
+  const excludeSesss = opts._multi['exclude-sess'] && opts._multi['exclude-sess'].length ? opts._multi['exclude-sess'] : null;
+  const excludeCwdRes = opts._multi['exclude-cwd'] && opts._multi['exclude-cwd'].length ? opts._multi['exclude-cwd'].map(r => new RegExp(r, 'i')) : null;
   const pids = opts._multi.pid.length ? new Set(opts._multi.pid.map(String)) : null;
   const greps = opts._multi.grep.map(r => new RegExp(r, 'i'));
   const igreps = opts._multi.igrep.map(r => new RegExp(r, 'i'));
@@ -125,6 +129,8 @@ function buildFilter(opts) {
     if (subs && !subs.has(e._sub)) return opts.invert;
     if (events && !events.has(e.event)) return opts.invert;
     if (sesss && !sesss.some(s => e.sess && e.sess.startsWith(s))) return opts.invert;
+    if (excludeSesss && excludeSesss.some(s => e.sess && e.sess.startsWith(s))) return opts.invert;
+    if (excludeCwdRes && e.cwd && excludeCwdRes.some(r => r.test(e.cwd))) return opts.invert;
     if (pids && !pids.has(String(e.pid))) return opts.invert;
     if (day && e._day !== day) return opts.invert;
     if (cwdRe && (!e.cwd || !cwdRe.test(e.cwd))) return opts.invert;
