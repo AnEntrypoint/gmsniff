@@ -11,7 +11,7 @@ const FLAGS = {
   string: ['since', 'until', 'before', 'after', 'sub', 'event', 'sess', 'day', 'cwd', 'pid', 'sort', 'rollup', 'format', 'efficiency', 'xref', 'tree'],
   multi: ['grep', 'igrep', 'sub', 'event', 'sess', 'pid'],
   number: ['limit', 'head', 'tail-n', 'ctx', 'truncate'],
-  bool: ['json', 'ndjson', 'tail', 'f', 'full', 'reverse', 'invert', 'count', 'stats', 'list-sessions', 'list-deviations', 'list-events', 'updates', 'watchers', 'all-dispatch', 'no-color', 'help', 'h'],
+  bool: ['json', 'ndjson', 'tail', 'f', 'full', 'reverse', 'invert', 'count', 'stats', 'list-sessions', 'list-deviations', 'list-events', 'updates', 'watchers', 'all', 'all-dispatch', 'no-color', 'help', 'h'],
 };
 
 function parseArgs(argv) {
@@ -302,20 +302,22 @@ function watchers(all, opts = {}) {
       addCwd(e.cwd);
     }
   }
-  const sinceMs = opts.since ? parseRel(opts.since) : null;
-  const cutoff = sinceMs ? Date.now() - sinceMs : 0;
+  const includeDead = !!opts.all;
   const rows = [];
   for (const cwd of cwds) {
     const status = readWatcherStatus(cwd);
     if (!status) continue;
-    if (cutoff && status.age_ms !== null && Date.now() - status.age_ms < cutoff) continue;
+    if (!status.version) continue;
+    if (!includeDead && !status.alive) continue;
     rows.push({ cwd, ...status });
   }
   rows.sort((a, b) => {
     if (a.alive !== b.alive) return a.alive ? -1 : 1;
     return (a.age_ms || 0) - (b.age_ms || 0);
   });
-  process.stdout.write(`# ${rows.length} watchers known across ${cwds.size} cwds\n`);
+  const aliveCount = rows.filter(r => r.alive).length;
+  const deadShown = rows.length - aliveCount;
+  process.stdout.write(`# ${rows.length} watchers ${includeDead ? '(alive + dead)' : '(alive only — pass --all for dead)'}\n`);
   process.stdout.write(`STATE   VERSION    PID    AGE       PROJECT\n`);
   for (const r of rows) {
     const state = r.alive ? color('ALIVE ', 32) : color('dead  ', 31);
@@ -323,8 +325,7 @@ function watchers(all, opts = {}) {
     const proj = path.basename(r.cwd);
     process.stdout.write(`${state}  v${(r.version || '?').padEnd(8)} ${String(r.pid).padStart(6)} ${age.padEnd(9)} ${proj}  (${r.cwd})\n`);
   }
-  const aliveCount = rows.filter(r => r.alive).length;
-  process.stderr.write(`# ${aliveCount} alive · ${rows.length - aliveCount} dead\n`);
+  process.stderr.write(`# ${aliveCount} alive${includeDead ? ` · ${deadShown} dead shown` : ''}\n`);
 }
 
 function fmtAge(ms) {
