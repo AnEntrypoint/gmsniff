@@ -200,7 +200,7 @@ function readWatcherStatus(cwd) {
     let alive = false;
     try { process.kill(j.pid, 0); alive = true; } catch (_) {}
     const age = j.ts ? Date.now() - j.ts : null;
-    return { pid: j.pid, version: j.version, alive, age_ms: age };
+    return { pid: j.pid, version: j.version, wrapper_sha: j.wrapper_sha || null, idle_limit_ms: j.idle_limit_ms || null, alive, age_ms: age };
   } catch (_) { return null; }
 }
 
@@ -363,7 +363,9 @@ function watchers(all, opts = {}) {
   const deadShown = rows.length - aliveCount;
   const drifted = rows.filter(r => r.update && r.update.latest && r.update.latest !== r.version).length;
   process.stdout.write(`# ${rows.length} watchers ${includeDead ? '(alive + dead)' : '(alive only — pass --all for dead)'}${drifted ? ` · ${drifted} drifted` : ''}\n`);
-  process.stdout.write(`STATE   VERSION    PID    AGE       PROJECT                 UPDATE\n`);
+  const wrapperShas = new Set(rows.filter(r => r.wrapper_sha).map(r => r.wrapper_sha));
+  const wrapperDivergent = wrapperShas.size > 1;
+  process.stdout.write(`STATE   VERSION    WRAPPER  PID    AGE       PROJECT                 UPDATE\n`);
   for (const r of rows) {
     const state = r.alive ? color('ALIVE ', 32) : color('dead  ', 31);
     const age = r.age_ms !== null ? fmtAge(r.age_ms) : '?';
@@ -372,7 +374,8 @@ function watchers(all, opts = {}) {
     if (r.update && r.update.latest && r.update.latest !== r.version) {
       update = color(`→ v${r.update.latest}`, 33);
     }
-    process.stdout.write(`${state}  v${(r.version || '?').padEnd(8)} ${String(r.pid).padStart(6)} ${age.padEnd(9)} ${proj.padEnd(20)}  ${update}\n`);
+    const wsha = r.wrapper_sha ? (wrapperDivergent ? color(r.wrapper_sha, 33) : r.wrapper_sha) : '       ';
+    process.stdout.write(`${state}  v${(r.version || '?').padEnd(8)} ${wsha} ${String(r.pid).padStart(6)} ${age.padEnd(9)} ${proj.padEnd(20)}  ${update}\n`);
   }
   process.stderr.write(`# ${aliveCount} alive${includeDead ? ` · ${deadShown} dead shown` : ''}${drifted ? ` · ${drifted} need bootstrap+respawn` : ''}\n`);
 }
