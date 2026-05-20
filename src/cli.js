@@ -190,10 +190,22 @@ function sortRows(rows, key, reverse) {
   return rows;
 }
 
+function readWatcherStatus(cwd) {
+  try {
+    const j = JSON.parse(fs.readFileSync(path.join(cwd, '.gm', 'exec-spool', '.status.json'), 'utf-8'));
+    if (!j || !j.pid) return null;
+    let alive = false;
+    try { process.kill(j.pid, 0); alive = true; } catch (_) {}
+    const age = j.ts ? Date.now() - j.ts : null;
+    return { pid: j.pid, version: j.version, alive, age_ms: age };
+  } catch (_) { return null; }
+}
+
 function listSessions(all) {
   const m = new Map();
   for (const e of all) {
-    const k = e.sess || '(no-session)';
+    let k = e.sess;
+    if (!k) k = e.cwd ? `(cwd:${path.basename(e.cwd)})` : '(no-session)';
     let s = m.get(k);
     if (!s) {
       s = { sess: k, first: e.ts, last: e.ts, events: 0, phases: new Set(), dispatches: 0, deviations: 0, mut_res: 0, prd_add: 0, prd_res: 0, cwds: new Set() };
@@ -217,10 +229,19 @@ function listSessions(all) {
     const walk = PHASES.map(p => s.phases.has(p) ? color('█', 32) : color('░', 90)).join('');
     const dev = s.deviations ? color(String(s.deviations).padStart(3), 31) : '   ';
     const sessShort = s.sess.slice(0, 24).padEnd(24);
-    const proj = [...s.cwds].map(c => path.basename(c)).join(',').slice(0, 18).padEnd(18);
-    process.stdout.write(`${(s.last || '').slice(0, 19)}  ${walk}  ev:${String(s.events).padStart(5)}  disp:${String(s.dispatches).padStart(4)}  prd:${s.prd_add}/${s.prd_res}  mut:${s.mut_res}  dev:${dev}  ${proj}  ${sessShort}\n`);
+    const cwdsArr = [...s.cwds];
+    const proj = cwdsArr.map(c => path.basename(c)).join(',').slice(0, 18).padEnd(18);
+    let watcher = '             ';
+    if (cwdsArr.length === 1) {
+      const st = readWatcherStatus(cwdsArr[0]);
+      if (st) {
+        const tag = st.alive ? color(`v${st.version} ALIVE`, 32) : color(`v${st.version} dead `, 31);
+        watcher = ` ${tag}`;
+      }
+    }
+    process.stdout.write(`${(s.last || '').slice(0, 19)}  ${walk}  ev:${String(s.events).padStart(5)}  disp:${String(s.dispatches).padStart(4)}  prd:${s.prd_add}/${s.prd_res}  mut:${s.mut_res}  dev:${dev}  ${proj}  ${sessShort} ${watcher}\n`);
   }
-  process.stderr.write(`# ${rows.length} sessions · phase walk: P E E V C\n`);
+  process.stderr.write(`# ${rows.length} sessions · phase walk: P E E V C · watcher: ALIVE/dead per project cwd\n`);
 }
 
 function listDeviations(all) {
