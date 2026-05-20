@@ -11,7 +11,7 @@ const FLAGS = {
   string: ['since', 'until', 'before', 'after', 'sub', 'event', 'sess', 'day', 'cwd', 'pid', 'sort', 'rollup', 'format', 'efficiency', 'xref', 'tree'],
   multi: ['grep', 'igrep', 'sub', 'event', 'sess', 'pid'],
   number: ['limit', 'head', 'tail-n', 'ctx', 'truncate'],
-  bool: ['json', 'ndjson', 'tail', 'f', 'full', 'reverse', 'invert', 'count', 'stats', 'list-sessions', 'list-deviations', 'list-events', 'updates', 'watchers', 'all', 'all-dispatch', 'no-color', 'help', 'h'],
+  bool: ['json', 'ndjson', 'tail', 'f', 'full', 'reverse', 'invert', 'count', 'stats', 'list-sessions', 'list-deviations', 'list-events', 'updates', 'watchers', 'conformance', 'all', 'all-dispatch', 'no-color', 'help', 'h'],
 };
 
 function parseArgs(argv) {
@@ -48,6 +48,7 @@ USAGE
   gmsniff --rollup <out.ndjson>         dump filtered events to file
   gmsniff --updates                     live drift state + update.* event history
   gmsniff --watchers                    one-line liveness + version per project cwd
+  gmsniff --conformance                 paper §14 metrics: ε (unresolved mutables) + PRD-pending per project
   gmsniff --tree <sess> [--all-dispatch] drops dispatch.start unless --all-dispatch
   gmsniff gui [--port N] [--open]       launch browser GUI
 
@@ -201,6 +202,48 @@ function readWatcherStatus(cwd) {
     const age = j.ts ? Date.now() - j.ts : null;
     return { pid: j.pid, version: j.version, alive, age_ms: age };
   } catch (_) { return null; }
+}
+
+function readPrdMutablesState(cwd) {
+  const out = { prd_pending: 0, prd_total: 0, mut_unknown: 0, mut_total: 0 };
+  try {
+    const prdText = fs.readFileSync(path.join(cwd, '.gm', 'prd.yml'), 'utf-8');
+    const items = prdText.split(/^- id:/m).slice(1);
+    out.prd_total = items.length;
+    out.prd_pending = items.filter(i => !/status:\s*(done|complete|completed)/.test(i)).length;
+  } catch (_) {}
+  try {
+    const mutText = fs.readFileSync(path.join(cwd, '.gm', 'mutables.yml'), 'utf-8');
+    const items = mutText.split(/^- id:/m).slice(1);
+    out.mut_total = items.length;
+    out.mut_unknown = items.filter(i => /status:\s*unknown/.test(i)).length;
+  } catch (_) {}
+  return out;
+}
+
+function paperConformance(cwds) {
+  const rows = [];
+  const canon = (p) => p && path.resolve(p).replace(/\\/g, '/').toLowerCase();
+  const seen = new Set();
+  for (const cwd of cwds) {
+    const k = canon(cwd);
+    if (!k || seen.has(k)) continue;
+    seen.add(k);
+    const st = readWatcherStatus(cwd);
+    if (!st || !st.version) continue;
+    const ps = readPrdMutablesState(cwd);
+    rows.push({ cwd, ...st, ...ps });
+  }
+  rows.sort((a, b) => (b.alive ? 1 : 0) - (a.alive ? 1 : 0) || a.prd_pending - b.prd_pending);
+  process.stdout.write(`STATE   VERSION    ε(mut) PRD-pend  PROJECT\n`);
+  for (const r of rows) {
+    const state = r.alive ? color('ALIVE ', 32) : color('dead  ', 31);
+    const eps = r.mut_unknown > 0 ? color(String(r.mut_unknown).padStart(6), 33) : '     0';
+    const prd = r.prd_pending > 0 ? color(String(r.prd_pending).padStart(8), 33) : '       0';
+    const proj = path.basename(r.cwd);
+    process.stdout.write(`${state}  v${(r.version || '?').padEnd(8)} ${eps} ${prd}  ${proj}\n`);
+  }
+  process.stderr.write(`# ${rows.length} projects · ε=unresolved mutables, PRD-pend=open items (paper §14)\n`);
 }
 
 function listSessions(all) {
@@ -604,6 +647,18 @@ if (argv[0] === 'gui') {
     if (opts.updates) { updates(all, opts); process.exit(0); }
     if (opts.tree) { tree(all, opts.tree, { allDispatch: opts['all-dispatch'] }); process.exit(0); }
     if (opts.watchers) { watchers(all, opts); process.exit(0); }
+    if (opts.conformance) {
+      const cwds = new Set();
+      for (const e of all) {
+        if (e._sub === 'plugkit' && e.event === 'watcher.boot' && e.spool_dir) {
+          cwds.add(path.dirname(path.dirname(e.spool_dir)));
+        } else if (e.cwd) {
+          cwds.add(e.cwd);
+        }
+      }
+      paperConformance([...cwds]);
+      process.exit(0);
+    }
     if (opts.efficiency) { efficiency(all, opts.efficiency); process.exit(0); }
     if (opts.xref) { await xref(all, opts.xref, opts); process.exit(0); }
     if (opts.rollup) { await rollup(opts.rollup, all, filter); process.exit(0); }
