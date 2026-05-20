@@ -11,7 +11,7 @@ const FLAGS = {
   string: ['since', 'until', 'before', 'after', 'sub', 'event', 'sess', 'day', 'cwd', 'pid', 'sort', 'rollup', 'format', 'efficiency', 'xref', 'tree'],
   multi: ['grep', 'igrep', 'sub', 'event', 'sess', 'pid'],
   number: ['limit', 'head', 'tail-n', 'ctx', 'truncate'],
-  bool: ['json', 'ndjson', 'tail', 'f', 'full', 'reverse', 'invert', 'count', 'stats', 'list-sessions', 'list-deviations', 'list-events', 'updates', 'no-color', 'help', 'h'],
+  bool: ['json', 'ndjson', 'tail', 'f', 'full', 'reverse', 'invert', 'count', 'stats', 'list-sessions', 'list-deviations', 'list-events', 'updates', 'watchers', 'all-dispatch', 'no-color', 'help', 'h'],
 };
 
 function parseArgs(argv) {
@@ -47,6 +47,8 @@ USAGE
   gmsniff --xref <sess>                 join with ccsniff transcript on sid
   gmsniff --rollup <out.ndjson>         dump filtered events to file
   gmsniff --updates                     live drift state + update.* event history
+  gmsniff --watchers                    one-line liveness + version per project cwd
+  gmsniff --tree <sess> [--all-dispatch] drops dispatch.start unless --all-dispatch
   gmsniff gui [--port N] [--open]       launch browser GUI
 
 TIME
@@ -288,15 +290,69 @@ function stats(rows) {
   dump('by day', byDay);
 }
 
-function tree(all, sess) {
+function watchers(all, opts = {}) {
+  const cwds = new Set();
+  const canon = (p) => p && path.resolve(p).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+  const norm = new Map();
+  const addCwd = (p) => { if (!p) return; const k = canon(p); if (!k) return; if (!norm.has(k)) { norm.set(k, p); cwds.add(p); } };
+  for (const e of all) {
+    if (e._sub === 'plugkit' && e.event === 'watcher.boot' && e.spool_dir) {
+      addCwd(path.dirname(path.dirname(e.spool_dir)));
+    } else if (e.cwd) {
+      addCwd(e.cwd);
+    }
+  }
+  const sinceMs = opts.since ? parseRel(opts.since) : null;
+  const cutoff = sinceMs ? Date.now() - sinceMs : 0;
+  const rows = [];
+  for (const cwd of cwds) {
+    const status = readWatcherStatus(cwd);
+    if (!status) continue;
+    if (cutoff && status.age_ms !== null && Date.now() - status.age_ms < cutoff) continue;
+    rows.push({ cwd, ...status });
+  }
+  rows.sort((a, b) => {
+    if (a.alive !== b.alive) return a.alive ? -1 : 1;
+    return (a.age_ms || 0) - (b.age_ms || 0);
+  });
+  process.stdout.write(`# ${rows.length} watchers known across ${cwds.size} cwds\n`);
+  process.stdout.write(`STATE   VERSION    PID    AGE       PROJECT\n`);
+  for (const r of rows) {
+    const state = r.alive ? color('ALIVE ', 32) : color('dead  ', 31);
+    const age = r.age_ms !== null ? fmtAge(r.age_ms) : '?';
+    const proj = path.basename(r.cwd);
+    process.stdout.write(`${state}  v${(r.version || '?').padEnd(8)} ${String(r.pid).padStart(6)} ${age.padEnd(9)} ${proj}  (${r.cwd})\n`);
+  }
+  const aliveCount = rows.filter(r => r.alive).length;
+  process.stderr.write(`# ${aliveCount} alive · ${rows.length - aliveCount} dead\n`);
+}
+
+function fmtAge(ms) {
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m${s % 60}s`;
+  return `${Math.floor(s / 3600)}h${Math.floor((s % 3600) / 60)}m`;
+}
+
+function parseRel(s) {
+  const m = String(s).match(/^(\d+)([smhdw])$/);
+  if (!m) return null;
+  const n = parseInt(m[1], 10);
+  const unit = m[2];
+  return n * { s: 1000, m: 60000, h: 3600000, d: 86400000, w: 604800000 }[unit];
+}
+
+function tree(all, sess, opts = {}) {
   if (!sess) { process.stderr.write('--tree requires a session id\n'); process.exit(2); }
   const wantEmpty = sess === '(no-session)' || sess === '' || sess === '-';
   const evs = all.filter(e => wantEmpty ? !e.sess : (e.sess === sess || (e.sess || '').startsWith(sess))).sort((a, b) => (a.ts || '').localeCompare(b.ts || ''));
   let currentPhase = '?';
   let firstInstructionSeen = false;
   const gaps = [];
+  const showAllDispatch = !!opts.allDispatch;
   for (const e of evs) {
     if (e._sub !== 'plugkit' && !(typeof e.event === 'string' && e.event.startsWith('deviation.'))) continue;
+    if (!showAllDispatch && e.event === 'dispatch.start') continue;
     if (e.event === 'instruction.served') firstInstructionSeen = true;
     if (e.event === 'phase.transitioned' && e.phase) currentPhase = e.phase;
     if (e.event === 'instruction.served' && e.phase) currentPhase = e.phase;
@@ -311,6 +367,7 @@ function tree(all, sess) {
     if (e.reason) extra += ` reason=${e.reason}`;
     if (Array.isArray(e.residuals)) extra += ` residuals=[${e.residuals.length}]`;
     if (e.verb) extra += ` verb=${e.verb}`;
+    if (e.event === 'dispatch.end' && typeof e.ms === 'number') extra += ` ms=${e.ms}`;
     if (e.key) extra += ` key=${String(e.key).slice(0, 32)}`;
     process.stdout.write(`${indent}${t}  ${color(e.event, evC)}${extra}\n`);
   }
@@ -510,7 +567,8 @@ if (argv[0] === 'gui') {
     if (opts['list-deviations']) { listDeviations(all.filter(filter)); process.exit(0); }
     if (opts['list-events']) { listEvents(all.filter(filter), opts.sub); process.exit(0); }
     if (opts.updates) { updates(all, opts); process.exit(0); }
-    if (opts.tree) { tree(all, opts.tree); process.exit(0); }
+    if (opts.tree) { tree(all, opts.tree, { allDispatch: opts['all-dispatch'] }); process.exit(0); }
+    if (opts.watchers) { watchers(all, opts); process.exit(0); }
     if (opts.efficiency) { efficiency(all, opts.efficiency); process.exit(0); }
     if (opts.xref) { await xref(all, opts.xref, opts); process.exit(0); }
     if (opts.rollup) { await rollup(opts.rollup, all, filter); process.exit(0); }
