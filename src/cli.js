@@ -309,7 +309,8 @@ function watchers(all, opts = {}) {
     if (!status) continue;
     if (!status.version) continue;
     if (!includeDead && !status.alive) continue;
-    rows.push({ cwd, ...status });
+    const updateInfo = readUpdateAvailable(cwd);
+    rows.push({ cwd, update: updateInfo, ...status });
   }
   rows.sort((a, b) => {
     if (a.alive !== b.alive) return a.alive ? -1 : 1;
@@ -317,15 +318,29 @@ function watchers(all, opts = {}) {
   });
   const aliveCount = rows.filter(r => r.alive).length;
   const deadShown = rows.length - aliveCount;
-  process.stdout.write(`# ${rows.length} watchers ${includeDead ? '(alive + dead)' : '(alive only — pass --all for dead)'}\n`);
-  process.stdout.write(`STATE   VERSION    PID    AGE       PROJECT\n`);
+  const drifted = rows.filter(r => r.update && r.update.latest && r.update.latest !== r.version).length;
+  process.stdout.write(`# ${rows.length} watchers ${includeDead ? '(alive + dead)' : '(alive only — pass --all for dead)'}${drifted ? ` · ${drifted} drifted` : ''}\n`);
+  process.stdout.write(`STATE   VERSION    PID    AGE       PROJECT                 UPDATE\n`);
   for (const r of rows) {
     const state = r.alive ? color('ALIVE ', 32) : color('dead  ', 31);
     const age = r.age_ms !== null ? fmtAge(r.age_ms) : '?';
     const proj = path.basename(r.cwd);
-    process.stdout.write(`${state}  v${(r.version || '?').padEnd(8)} ${String(r.pid).padStart(6)} ${age.padEnd(9)} ${proj}  (${r.cwd})\n`);
+    let update = '';
+    if (r.update && r.update.latest && r.update.latest !== r.version) {
+      update = color(`→ v${r.update.latest}`, 33);
+    }
+    process.stdout.write(`${state}  v${(r.version || '?').padEnd(8)} ${String(r.pid).padStart(6)} ${age.padEnd(9)} ${proj.padEnd(20)}  ${update}\n`);
   }
-  process.stderr.write(`# ${aliveCount} alive${includeDead ? ` · ${deadShown} dead shown` : ''}\n`);
+  process.stderr.write(`# ${aliveCount} alive${includeDead ? ` · ${deadShown} dead shown` : ''}${drifted ? ` · ${drifted} need bootstrap+respawn` : ''}\n`);
+}
+
+function readUpdateAvailable(cwd) {
+  try {
+    const p = path.join(cwd, '.gm', 'exec-spool', '.update-available.json');
+    if (!fs.existsSync(p)) return null;
+    const j = JSON.parse(fs.readFileSync(p, 'utf-8'));
+    return j && j.latest ? j : null;
+  } catch (_) { return null; }
 }
 
 function fmtAge(ms) {
@@ -343,8 +358,27 @@ function parseRel(s) {
   return n * { s: 1000, m: 60000, h: 3600000, d: 86400000, w: 604800000 }[unit];
 }
 
+function resolveCurrentSession(all) {
+  const here = process.cwd();
+  const canon = (p) => p && path.resolve(p).replace(/\\/g, '/').toLowerCase();
+  const target = canon(here);
+  let best = null;
+  for (const e of all) {
+    if (!e.sess) continue;
+    if (canon(e.cwd) !== target) continue;
+    if (!best || (e.ts || '') > (best.ts || '')) best = { ts: e.ts, sess: e.sess };
+  }
+  return best ? best.sess : null;
+}
+
 function tree(all, sess, opts = {}) {
-  if (!sess) { process.stderr.write('--tree requires a session id\n'); process.exit(2); }
+  if (sess === 'current' || sess === '.' || sess === '@') {
+    const resolved = resolveCurrentSession(all);
+    if (!resolved) { process.stderr.write(`--tree current: no events found for cwd ${process.cwd()}\n`); process.exit(2); }
+    process.stderr.write(`# --tree current → ${resolved}\n`);
+    sess = resolved;
+  }
+  if (!sess) { process.stderr.write('--tree requires a session id (or "current" to auto-resolve from cwd)\n'); process.exit(2); }
   const wantEmpty = sess === '(no-session)' || sess === '' || sess === '-';
   const evs = all.filter(e => wantEmpty ? !e.sess : (e.sess === sess || (e.sess || '').startsWith(sess))).sort((a, b) => (a.ts || '').localeCompare(b.ts || ''));
   let currentPhase = '?';
