@@ -8,10 +8,10 @@ const DEFAULT_LOG_DIR = process.env.GM_LOG_DIR || path.join(os.homedir(), '.clau
 const PHASES = ['PLAN', 'EXECUTE', 'EMIT', 'VERIFY', 'COMPLETE'];
 
 const FLAGS = {
-  string: ['since', 'until', 'before', 'after', 'sub', 'event', 'sess', 'day', 'cwd', 'pid', 'sort', 'rollup', 'format', 'efficiency', 'xref', 'tree', 'exclude-sess', 'exclude-cwd'],
+  string: ['since', 'until', 'before', 'after', 'sub', 'event', 'sess', 'day', 'cwd', 'pid', 'sort', 'rollup', 'format', 'efficiency', 'xref', 'tree', 'exclude-sess', 'exclude-cwd', 'bucket', 'days'],
   multi: ['grep', 'igrep', 'sub', 'event', 'sess', 'pid', 'exclude-sess', 'exclude-cwd'],
-  number: ['limit', 'head', 'tail-n', 'ctx', 'truncate'],
-  bool: ['json', 'ndjson', 'tail', 'f', 'full', 'reverse', 'invert', 'count', 'stats', 'list-sessions', 'list-deviations', 'list-events', 'updates', 'watchers', 'conformance', 'all', 'all-dispatch', 'no-color', 'help', 'h'],
+  number: ['limit', 'head', 'tail-n', 'ctx', 'truncate', 'top'],
+  bool: ['json', 'ndjson', 'tail', 'f', 'full', 'reverse', 'invert', 'count', 'stats', 'list-sessions', 'list-deviations', 'list-events', 'updates', 'watchers', 'conformance', 'all', 'all-dispatch', 'no-color', 'help', 'h', 'embed-failures', 'recall-misses', 'recall-scores', 'classifier-rejects', 'memory-leverage', 'recall-modes', 'table-drops', 'discipline-sigil-ignored'],
 };
 
 function parseArgs(argv) {
@@ -49,6 +49,14 @@ USAGE
   gmsniff --updates                     live drift state + update.* event history
   gmsniff --watchers                    one-line liveness + version per project cwd
   gmsniff --conformance                 paper §14 metrics: ε (unresolved mutables) + PRD-pending per project
+  gmsniff --embed-failures [--stats]    rs-learn embed_text step failures (structured + watcher.log fallback)
+  gmsniff --recall-misses [--top N]     recall events with hit=false grouped by query
+  gmsniff --recall-scores [--bucket B]  histogram of top-hit recall scores (B default 0.1)
+  gmsniff --classifier-rejects [--top N] memorize_reject grouped by reason
+  gmsniff --memory-leverage [--sess id] [--days N] memorize_fired vs subsequent recall reuse per session
+  gmsniff --recall-modes [--stats]      distribution of recall.mode (vector_top_k|fallback_like|kv_query)
+  gmsniff --table-drops                 catastrophic table_dropped events with dim deltas
+  gmsniff --discipline-sigil-ignored    discipline_sigil_ignored events (doc-vs-code drift)
   gmsniff --tree <sess> [--all-dispatch] drops dispatch.start unless --all-dispatch
   gmsniff gui [--port N] [--open]       launch browser GUI
 
@@ -600,6 +608,192 @@ function updates(all, opts) {
   }
 }
 
+function readWatcherLogEmbedFails(cwd) {
+  try {
+    const txt = fs.readFileSync(path.join(cwd, '.gm', 'exec-spool', '.watcher.log'), 'utf-8');
+    const re = /embed::embed_text step '([^']+)' failed/g;
+    const out = [];
+    let m;
+    while ((m = re.exec(txt)) !== null) out.push({ step: m[1], _src: 'watcher.log', cwd });
+    return out;
+  } catch (_) { return []; }
+}
+
+function embedFailures(all, opts) {
+  const structured = all.filter(e => e.event === 'embed_fail' || (e._sub === 'rs_learn' && e.event === 'embed_fail'));
+  let fallback = [];
+  if (!structured.length) {
+    const cwds = new Set();
+    for (const e of all) if (e.cwd) cwds.add(e.cwd);
+    for (const c of cwds) fallback.push(...readWatcherLogEmbedFails(c));
+  }
+  const evs = [...structured, ...fallback];
+  if (opts.stats) {
+    const byStep = new Map(), byDay = new Map(), byProj = new Map();
+    for (const e of evs) {
+      const step = e.step || '?';
+      byStep.set(step, (byStep.get(step) || 0) + 1);
+      if (e._day) byDay.set(e._day, (byDay.get(e._day) || 0) + 1);
+      const proj = e.cwd ? path.basename(e.cwd) : '?';
+      byProj.set(proj, (byProj.get(proj) || 0) + 1);
+    }
+    process.stdout.write(`# embed failures: ${evs.length} (${structured.length} structured, ${fallback.length} watcher.log)\n`);
+    const dump = (label, m) => { process.stdout.write(`\n# ${label}\n`); [...m.entries()].sort((a,b)=>b[1]-a[1]).slice(0,20).forEach(([k,v]) => process.stdout.write(`  ${String(v).padStart(6)}  ${k}\n`)); };
+    dump('by step', byStep); dump('by day', byDay); dump('by project', byProj);
+    return;
+  }
+  const byStep = new Map();
+  for (const e of evs) {
+    const step = e.step || '?';
+    let s = byStep.get(step);
+    if (!s) { s = { step, count: 0, last_ts: '' }; byStep.set(step, s); }
+    s.count++;
+    if (e.ts && e.ts > s.last_ts) s.last_ts = e.ts;
+  }
+  process.stdout.write(`# embed failures: ${evs.length} (${structured.length} structured, ${fallback.length} watcher.log fallback)\n`);
+  process.stdout.write(`COUNT   LAST                 STEP\n`);
+  for (const s of [...byStep.values()].sort((a,b)=>b.count-a.count).slice(0,20)) {
+    process.stdout.write(`${String(s.count).padStart(5)}   ${(s.last_ts||'').slice(0,19).padEnd(19)}  ${s.step}\n`);
+  }
+}
+
+function recallMisses(all, opts) {
+  const evs = all.filter(e => e._sub === 'rs_learn' && e.event === 'recall' && e.hit === false);
+  const byQuery = new Map();
+  for (const e of evs) {
+    const q = e.query || '?';
+    let s = byQuery.get(q);
+    if (!s) { s = { query: q, count: 0, last_ts: '' }; byQuery.set(q, s); }
+    s.count++;
+    if (e.ts && e.ts > s.last_ts) s.last_ts = e.ts;
+  }
+  const top = opts.top || 20;
+  process.stdout.write(`# recall misses: ${evs.length} events · ${byQuery.size} distinct queries\n`);
+  process.stdout.write(`COUNT   LAST                 QUERY\n`);
+  for (const s of [...byQuery.values()].sort((a,b)=>b.count-a.count).slice(0, top)) {
+    process.stdout.write(`${String(s.count).padStart(5)}   ${(s.last_ts||'').slice(0,19).padEnd(19)}  ${s.query}\n`);
+  }
+}
+
+function recallScores(all, opts) {
+  const evs = all.filter(e => e._sub === 'rs_learn' && e.event === 'recall');
+  const bucket = parseFloat(opts.bucket) || 0.1;
+  const buckets = new Map();
+  let noScore = 0;
+  for (const e of evs) {
+    let score = e.top_score;
+    if (score === undefined && Array.isArray(e.hits) && e.hits[0] && typeof e.hits[0].score === 'number') score = e.hits[0].score;
+    if (typeof score !== 'number') { noScore++; continue; }
+    const b = Math.floor(score / bucket) * bucket;
+    const key = b.toFixed(2);
+    buckets.set(key, (buckets.get(key) || 0) + 1);
+  }
+  process.stdout.write(`# recall score histogram: ${evs.length} events, bucket=${bucket}, no-score=${noScore}\n`);
+  const keys = [...buckets.keys()].sort((a,b)=>parseFloat(a)-parseFloat(b));
+  const max = Math.max(1, ...buckets.values());
+  for (const k of keys) {
+    const n = buckets.get(k);
+    const bar = '█'.repeat(Math.ceil(40 * n / max));
+    process.stdout.write(`  ${k.padStart(5)}  ${String(n).padStart(6)}  ${bar}\n`);
+  }
+}
+
+function classifierRejects(all, opts) {
+  const evs = all.filter(e => e.event === 'memorize_reject');
+  const byReason = new Map();
+  for (const e of evs) {
+    const r = e.reason || '?';
+    byReason.set(r, (byReason.get(r) || 0) + 1);
+  }
+  const top = opts.top || 20;
+  process.stdout.write(`# memorize rejects: ${evs.length}\n`);
+  process.stdout.write(`\n# by reason\n`);
+  for (const [k, v] of [...byReason.entries()].sort((a,b)=>b[1]-a[1]).slice(0, top)) {
+    process.stdout.write(`  ${String(v).padStart(6)}  ${k}\n`);
+  }
+  process.stdout.write(`\n# recent 10\n`);
+  for (const e of evs.slice(-10).reverse()) {
+    const tp = e.text_prefix || e.text || '';
+    process.stdout.write(`  ${(e.ts||'').slice(0,19)}  reason=${e.reason||'?'}  ${String(tp).slice(0,80)}\n`);
+  }
+}
+
+function memoryLeverage(all, opts) {
+  const days = parseInt(opts.days, 10) || 7;
+  const cutoff = Date.now() - days * 86400000;
+  const filt = (e) => { const t = e.ts ? Date.parse(e.ts) : 0; return t >= cutoff && (!opts.sess || (e.sess && e.sess.startsWith(opts.sess))); };
+  const evs = all.filter(filt);
+  const bySess = new Map();
+  for (const e of evs) {
+    const k = e.sess || '(no-session)';
+    let s = bySess.get(k);
+    if (!s) { s = { sess: k, memorized: 0, memorized_keys: new Set(), recalled_back: 0 }; bySess.set(k, s); }
+    if (e.event === 'memorize_fired' || e.event === 'memorize.fired') {
+      s.memorized++;
+      if (e.key) s.memorized_keys.add(String(e.key));
+    }
+  }
+  for (const e of evs) {
+    if (e._sub !== 'rs_learn' || e.event !== 'recall') continue;
+    const k = e.sess || '(no-session)';
+    const s = bySess.get(k);
+    if (!s) continue;
+    const hitKeys = [];
+    if (Array.isArray(e.hits)) for (const h of e.hits) if (h && h.key) hitKeys.push(String(h.key));
+    if (e.key) hitKeys.push(String(e.key));
+    for (const hk of hitKeys) if (s.memorized_keys.has(hk)) { s.recalled_back++; break; }
+  }
+  process.stdout.write(`# memory leverage (last ${days}d${opts.sess ? `, sess=${opts.sess}` : ''})\n`);
+  process.stdout.write(`SESS                      MEMORIZED  RECALLED_BACK  LEVERAGE%\n`);
+  for (const s of [...bySess.values()].sort((a,b)=>b.memorized-a.memorized)) {
+    if (!s.memorized && !s.recalled_back) continue;
+    const lev = s.memorized ? ((s.recalled_back / s.memorized) * 100).toFixed(1) : '0.0';
+    process.stdout.write(`${s.sess.slice(0,24).padEnd(24)}  ${String(s.memorized).padStart(9)}  ${String(s.recalled_back).padStart(13)}  ${lev.padStart(8)}\n`);
+  }
+}
+
+function recallModes(all, opts) {
+  const evs = all.filter(e => e._sub === 'rs_learn' && e.event === 'recall');
+  const byMode = new Map();
+  for (const e of evs) {
+    const m = e.mode || '(none)';
+    byMode.set(m, (byMode.get(m) || 0) + 1);
+  }
+  process.stdout.write(`# recall modes: ${evs.length} events\n`);
+  const total = evs.length || 1;
+  for (const [k, v] of [...byMode.entries()].sort((a,b)=>b[1]-a[1])) {
+    const pct = ((v / total) * 100).toFixed(1);
+    const flag = k === 'fallback_like' && v > 0 ? color('  ← ANN regression?', 31) : '';
+    process.stdout.write(`  ${String(v).padStart(6)}  ${pct.padStart(5)}%  ${k}${flag}\n`);
+  }
+  if (opts.stats) {
+    const byDay = new Map();
+    for (const e of evs) {
+      const k = `${e._day || '?'}|${e.mode || '(none)'}`;
+      byDay.set(k, (byDay.get(k) || 0) + 1);
+    }
+    process.stdout.write(`\n# by day|mode\n`);
+    for (const [k, v] of [...byDay.entries()].sort()) process.stdout.write(`  ${String(v).padStart(6)}  ${k}\n`);
+  }
+}
+
+function tableDrops(all) {
+  const evs = all.filter(e => e.event === 'table_dropped');
+  process.stdout.write(`# table drops: ${evs.length}${evs.length ? color(`  ← catastrophic data loss`, 31) : ''}\n`);
+  process.stdout.write(`TS                   TABLE                 OLD_DIM  NEW_DIM\n`);
+  for (const e of evs) {
+    process.stdout.write(`${(e.ts||'').slice(0,19)}  ${(e.table||'?').padEnd(20)}  ${String(e.old_dim||'?').padStart(7)}  ${String(e.new_dim||'?').padStart(7)}\n`);
+  }
+}
+
+function disciplineSigilIgnored(all) {
+  const evs = all.filter(e => e.event === 'discipline_sigil_ignored');
+  process.stdout.write(`# discipline_sigil_ignored: ${evs.length} (doc-vs-code drift)\n`);
+  for (const e of evs.slice(-50).reverse()) {
+    process.stdout.write(formatRow(e, { truncate: 300 }));
+  }
+}
+
 async function rollup(out, all, filter) {
   const filtered = all.filter(filter);
   const body = filtered.map(e => JSON.stringify(e)).join('\n') + (filtered.length ? '\n' : '');
@@ -668,6 +862,14 @@ if (argv[0] === 'gui') {
       paperConformance([...cwds]);
       process.exit(0);
     }
+    if (opts['embed-failures']) { embedFailures(all.filter(filter), opts); process.exit(0); }
+    if (opts['recall-misses']) { recallMisses(all.filter(filter), opts); process.exit(0); }
+    if (opts['recall-scores']) { recallScores(all.filter(filter), opts); process.exit(0); }
+    if (opts['classifier-rejects']) { classifierRejects(all.filter(filter), opts); process.exit(0); }
+    if (opts['memory-leverage']) { memoryLeverage(all.filter(filter), opts); process.exit(0); }
+    if (opts['recall-modes']) { recallModes(all.filter(filter), opts); process.exit(0); }
+    if (opts['table-drops']) { tableDrops(all.filter(filter)); process.exit(0); }
+    if (opts['discipline-sigil-ignored']) { disciplineSigilIgnored(all.filter(filter)); process.exit(0); }
     if (opts.efficiency) { efficiency(all, opts.efficiency); process.exit(0); }
     if (opts.xref) { await xref(all, opts.xref, opts); process.exit(0); }
     if (opts.rollup) { await rollup(opts.rollup, all, filter); process.exit(0); }
