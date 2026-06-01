@@ -174,7 +174,9 @@ function formatRow(e, opts) {
   const sub = (e._sub || '?').padEnd(16).slice(0, 16);
   const ev = (e.event || '?').padEnd(28).slice(0, 28);
   const subC = SUB_COLORS[e._sub] || 0;
-  const sessShort = e.sess ? e.sess.slice(0, 8) : '--------';
+  const realSess = e.sess && e.sess !== '(no-session)' ? e.sess : '';
+  const cwdTag = !realSess && e.cwd ? '~' + e.cwd.replace(/[\\/]+$/, '').split(/[\\/]/).pop().slice(0, 7) : '';
+  const sessShort = (realSess ? realSess.slice(0, 8) : (cwdTag || '--------')).padEnd(8).slice(0, 8);
   const payload = { ...e };
   delete payload._sub; delete payload._day; delete payload._fp;
   delete payload.ts; delete payload.event; delete payload.sub; delete payload.pid; delete payload.sess; delete payload.cwd;
