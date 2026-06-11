@@ -11,7 +11,7 @@ const FLAGS = {
   string: ['since', 'until', 'before', 'after', 'sub', 'event', 'sess', 'day', 'cwd', 'pid', 'sort', 'rollup', 'format', 'efficiency', 'xref', 'tree', 'exclude-sess', 'exclude-cwd', 'bucket', 'days'],
   multi: ['grep', 'igrep', 'sub', 'event', 'sess', 'pid', 'exclude-sess', 'exclude-cwd'],
   number: ['limit', 'head', 'tail-n', 'ctx', 'truncate', 'top'],
-  bool: ['json', 'ndjson', 'tail', 'f', 'full', 'reverse', 'invert', 'count', 'stats', 'list-sessions', 'list-deviations', 'list-events', 'updates', 'watchers', 'conformance', 'all', 'all-dispatch', 'no-color', 'help', 'h', 'embed-failures', 'recall-misses', 'recall-scores', 'classifier-rejects', 'memory-leverage', 'recall-modes', 'table-drops', 'discipline-sigil-ignored'],
+  bool: ['json', 'ndjson', 'tail', 'f', 'full', 'reverse', 'invert', 'count', 'stats', 'list-sessions', 'list-deviations', 'own-only', 'foreign-only', 'list-events', 'updates', 'watchers', 'conformance', 'all', 'all-dispatch', 'no-color', 'help', 'h', 'embed-failures', 'recall-misses', 'recall-scores', 'classifier-rejects', 'memory-leverage', 'recall-modes', 'table-drops', 'discipline-sigil-ignored'],
 };
 
 function parseArgs(argv) {
@@ -39,7 +39,10 @@ USAGE
   gmsniff [filters] [output]            dump matching events (requires ≥1 flag)
   gmsniff -f [filters]                  live tail
   gmsniff --list-sessions [filters]     per-session summary with phase walk
-  gmsniff --list-deviations             recent deviation events grouped by kind
+  gmsniff --list-deviations             recent deviations grouped by kind, with own/foreign split,
+                                        severity, recovery verb, and per-hour rate
+  gmsniff --list-deviations --own-only  only own-session deviations (real defects, not foreign gate-positives)
+  gmsniff --list-deviations --foreign-only  only foreign-session deviations (predictability-regardless-of-LLM)
   gmsniff --list-events [--sub <s>]     event-type histogram
   gmsniff --stats [filters]             breakdown by sub / event / sess / day
   gmsniff --tree <sess>                 chronological process tree for one session
@@ -305,18 +308,65 @@ function listSessions(all) {
   process.stderr.write(`# ${rows.length} sessions · phase walk: P E E V C · watcher: ALIVE/dead per project cwd\n`);
 }
 
-function listDeviations(all) {
-  const filt = all.filter(e => typeof e.event === 'string' && e.event.startsWith('deviation.'));
+// Per-deviation-kind metadata: severity governs attention, recover names the verb the chain
+// expects next (every gate denial names its recovery verb — surface it so a reader does not have
+// to remember the mapping).
+const DEVIATION_META = {
+  'deviation.mid-chain-stall': { sev: 'warn', recover: 'instruction' },
+  'deviation.long-gap-no-instruction': { sev: 'warn', recover: 'instruction' },
+  'deviation.long-gap-retry-without-instruction': { sev: 'warn', recover: 'instruction' },
+  'deviation.residual-premature': { sev: 'warn', recover: 'prd-resolve|prd-add' },
+  'deviation.gate-deny': { sev: 'info', recover: '(named in reason)' },
+  'deviation.prd-resolve-unknown-id': { sev: 'warn', recover: 'prd-add (correct id)' },
+  'deviation.client-edit-no-witness': { sev: 'critical', recover: 'browser' },
+  'deviation.browser-witness-missing': { sev: 'critical', recover: 'browser' },
+  'deviation.browser-witness-hash-mismatch': { sev: 'critical', recover: 'browser' },
+  'deviation.complete-without-push': { sev: 'critical', recover: 'git_push' },
+  'deviation.push-dirty': { sev: 'critical', recover: 'git_status + commit' },
+  'deviation.complete-chain-poll': { sev: 'info', recover: 'stop (chain terminal)' },
+  'deviation.bash-git-bypass': { sev: 'warn', recover: 'git verbs' },
+};
+const SEV_COLOR = { critical: 31, warn: 33, info: 36 };
+// A foreign session is tagged cwd-<hash> by the hook layer; an own session carries a real
+// session id (claude-*, or the configured GMSNIFF_OWN_SESSION prefix). Foreign deviations are
+// gate-positives (predictability-regardless-of-LLM); own deviations are real defects to correct.
+function devOrigin(e) {
+  const sess = String(e.sess || e.cwd || '');
+  const own = process.env.GMSNIFF_OWN_SESSION;
+  if (own && sess.startsWith(own)) return 'own';
+  if (/^cwd-/.test(sess)) return 'foreign';
+  if (/^claude/i.test(sess)) return 'own';
+  return 'foreign';
+}
+function devMeta(ev) { return DEVIATION_META[ev] || { sev: 'warn', recover: '?' }; }
+
+function listDeviations(all, opts = {}) {
+  let filt = all.filter(e => typeof e.event === 'string' && e.event.startsWith('deviation.'));
+  if (opts['own-only']) filt = filt.filter(e => devOrigin(e) === 'own');
+  if (opts['foreign-only']) filt = filt.filter(e => devOrigin(e) === 'foreign');
   const byKind = new Map();
-  for (const e of filt) byKind.set(e.event, (byKind.get(e.event) || 0) + 1);
-  process.stdout.write(`# total deviations: ${filt.length}\n`);
+  let own = 0, foreign = 0;
+  const bySev = new Map();
+  for (const e of filt) {
+    byKind.set(e.event, (byKind.get(e.event) || 0) + 1);
+    const o = devOrigin(e); if (o === 'own') own++; else foreign++;
+    const sev = devMeta(e.event).sev; bySev.set(sev, (bySev.get(sev) || 0) + 1);
+  }
+  const span = filt.length > 1 ? (Date.parse(filt[filt.length - 1].ts || 0) - Date.parse(filt[0].ts || 0)) : 0;
+  const perHr = span > 0 ? (filt.length / (span / 3600000)).toFixed(1) : String(filt.length);
+  process.stdout.write(`# total deviations: ${filt.length}  (own:${color(String(own), own ? 31 : 32)} foreign:${foreign})  rate: ${perHr}/hr\n`);
+  process.stdout.write(`# by severity: ${['critical', 'warn', 'info'].map(s => `${color(s, SEV_COLOR[s])}:${bySev.get(s) || 0}`).join('  ')}\n`);
   for (const [k, n] of [...byKind.entries()].sort((a, b) => b[1] - a[1])) {
-    process.stdout.write(`  ${String(n).padStart(5)}  ${color(k, 31)}\n`);
+    const m = devMeta(k);
+    process.stdout.write(`  ${String(n).padStart(5)}  ${color(k, SEV_COLOR[m.sev] || 31)}  ${color(`[${m.sev}]`, SEV_COLOR[m.sev])}  recover:${m.recover}\n`);
   }
   process.stdout.write('\n# recent (last 20):\n');
   for (const e of filt.slice(-20).reverse()) {
-    process.stdout.write(formatRow(e, { truncate: 300 }));
+    const o = devOrigin(e);
+    const tag = o === 'own' ? color('OWN', 31) : color('foreign', 90);
+    process.stdout.write(`${tag} ${formatRow(e, { truncate: 300 })}`);
   }
+  if (own > 0) process.stderr.write(`# ${own} OWN-session deviation(s) — these are real defects to correct, not foreign gate-positives\n`);
 }
 
 function listEvents(all, sub) {
@@ -847,7 +897,7 @@ if (argv[0] === 'gui') {
     const all = replayAll(DEFAULT_LOG_DIR);
 
     if (opts['list-sessions']) { listSessions(all.filter(filter)); process.exit(0); }
-    if (opts['list-deviations']) { listDeviations(all.filter(filter)); process.exit(0); }
+    if (opts['list-deviations']) { listDeviations(all.filter(filter), opts); process.exit(0); }
     if (opts['list-events']) { listEvents(all.filter(filter), opts.sub); process.exit(0); }
     if (opts.updates) { updates(all, opts); process.exit(0); }
     if (opts.tree) { tree(all, opts.tree, { allDispatch: opts['all-dispatch'] }); process.exit(0); }
