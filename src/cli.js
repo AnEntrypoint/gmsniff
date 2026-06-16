@@ -734,8 +734,27 @@ function embedFailures(all, opts) {
   }
 }
 
+function recallActivityFallback(all) {
+  let autoRecall = 0, recallDispatch = 0, recallDur = 0, transitionsWithRecall = 0, recallCountSum = 0;
+  for (const e of all) {
+    if (e.event === 'auto_recall.turn-entry') autoRecall++;
+    else if (e.event === 'dispatch.end' && e.verb === 'recall') { recallDispatch++; if (typeof e.dur_ms === 'number') recallDur += e.dur_ms; }
+    else if (e.event === 'phase.transitioned' && typeof e.recall_count === 'number') { transitionsWithRecall++; recallCountSum += e.recall_count; }
+  }
+  const avgDur = recallDispatch ? Math.round(recallDur / recallDispatch) : 0;
+  return { autoRecall, recallDispatch, avgDur, transitionsWithRecall, recallCountSum };
+}
+
+function printRecallEmissionGap(all) {
+  const a = recallActivityFallback(all);
+  process.stdout.write(`# 0 rs_learn:recall scoring events emitted by this plugkit build -- per-recall score/hit/mode is not logged, so this surface cannot compute it (a bare 0 here is NOT "no misses/all-healthy").\n`);
+  process.stdout.write(`# recall IS active in-window via emitted events: auto_recall.turn-entry=${a.autoRecall}, dispatch{verb=recall}=${a.recallDispatch} (avg ${a.avgDur}ms), phase.transitioned-with-recall=${a.transitionsWithRecall} (recall_count sum ${a.recallCountSum}).\n`);
+  process.stdout.write(`# to expose scores/hits/modes, rs-learn must emit a structured rs_learn:recall event with {query, hit, top_score, mode}.\n`);
+}
+
 function recallMisses(all, opts) {
   const evs = all.filter(e => e._sub === 'rs_learn' && e.event === 'recall' && e.hit === false);
+  if (evs.length === 0) { printRecallEmissionGap(all); return; }
   const byQuery = new Map();
   for (const e of evs) {
     const q = e.query || '?';
@@ -754,6 +773,7 @@ function recallMisses(all, opts) {
 
 function recallScores(all, opts) {
   const evs = all.filter(e => e._sub === 'rs_learn' && e.event === 'recall');
+  if (evs.length === 0) { printRecallEmissionGap(all); return; }
   const bucket = parseFloat(opts.bucket) || 0.1;
   const buckets = new Map();
   let noScore = 0;
@@ -831,6 +851,7 @@ function memoryLeverage(all, opts) {
 
 function recallModes(all, opts) {
   const evs = all.filter(e => e._sub === 'rs_learn' && e.event === 'recall');
+  if (evs.length === 0) { printRecallEmissionGap(all); return; }
   const byMode = new Map();
   for (const e of evs) {
     const m = e.mode || '(none)';
@@ -840,7 +861,7 @@ function recallModes(all, opts) {
   const total = evs.length || 1;
   for (const [k, v] of [...byMode.entries()].sort((a,b)=>b[1]-a[1])) {
     const pct = ((v / total) * 100).toFixed(1);
-    const flag = k === 'fallback_like' && v > 0 ? color('  ← ANN regression?', 31) : '';
+    const flag = k === 'fallback_like' && v > 0 ? color('  <- ANN regression?', 31) : '';
     process.stdout.write(`  ${String(v).padStart(6)}  ${pct.padStart(5)}%  ${k}${flag}\n`);
   }
   if (opts.stats) {
