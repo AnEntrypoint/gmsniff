@@ -660,13 +660,34 @@ function updates(all, opts) {
   }
 }
 
-function readWatcherLogEmbedFails(cwd) {
+function readWatcherLogEmbedFails(cwd, sinceMs, untilMs) {
   try {
     const txt = fs.readFileSync(path.join(cwd, '.gm', 'exec-spool', '.watcher.log'), 'utf-8');
-    const re = /embed::embed_text step '([^']+)' failed/g;
+    const failRe = /embed::embed_text step '([^']+)' failed/;
+    const tsRe = /"ts":(\d{13})/;
+    const raw = [];
+    const pending = [];
+    let lastTs = 0;
+    for (const line of txt.split('\n')) {
+      const tm = line.match(tsRe);
+      if (tm) {
+        lastTs = parseInt(tm[1], 10);
+        for (const p of pending) p.ts = lastTs;
+        pending.length = 0;
+      }
+      const fm = line.match(failRe);
+      if (!fm) continue;
+      const entry = { step: fm[1], _src: 'watcher.log', cwd, ts: lastTs || 0 };
+      raw.push(entry);
+      if (!lastTs) pending.push(entry);
+    }
     const out = [];
-    let m;
-    while ((m = re.exec(txt)) !== null) out.push({ step: m[1], _src: 'watcher.log', cwd });
+    for (const e of raw) {
+      if (sinceMs && (!e.ts || e.ts < sinceMs)) continue;
+      if (untilMs && e.ts && e.ts > untilMs) continue;
+      e._day = e.ts ? new Date(e.ts).toISOString().slice(0, 10) : undefined;
+      out.push(e);
+    }
     return out;
   } catch (_) { return []; }
 }
@@ -675,9 +696,11 @@ function embedFailures(all, opts) {
   const structured = all.filter(e => e.event === 'embed_fail' || (e._sub === 'rs_learn' && e.event === 'embed_fail'));
   let fallback = [];
   if (!structured.length) {
+    const sinceMs = parseTime(opts.since || opts.after);
+    const untilMs = parseTime(opts.until || opts.before);
     const cwds = new Set();
     for (const e of all) if (e.cwd) cwds.add(e.cwd);
-    for (const c of cwds) fallback.push(...readWatcherLogEmbedFails(c));
+    for (const c of cwds) fallback.push(...readWatcherLogEmbedFails(c, sinceMs, untilMs));
   }
   const evs = [...structured, ...fallback];
   if (opts.stats) {
@@ -698,14 +721,16 @@ function embedFailures(all, opts) {
   for (const e of evs) {
     const step = e.step || '?';
     let s = byStep.get(step);
-    if (!s) { s = { step, count: 0, last_ts: '' }; byStep.set(step, s); }
+    if (!s) { s = { step, count: 0, last_ts: 0 }; byStep.set(step, s); }
     s.count++;
-    if (e.ts && e.ts > s.last_ts) s.last_ts = e.ts;
+    const tsNum = typeof e.ts === 'number' ? e.ts : (e.ts ? Date.parse(e.ts) : 0);
+    if (tsNum && tsNum > s.last_ts) s.last_ts = tsNum;
   }
   process.stdout.write(`# embed failures: ${evs.length} (${structured.length} structured, ${fallback.length} watcher.log fallback)\n`);
   process.stdout.write(`COUNT   LAST                 STEP\n`);
   for (const s of [...byStep.values()].sort((a,b)=>b.count-a.count).slice(0,20)) {
-    process.stdout.write(`${String(s.count).padStart(5)}   ${(s.last_ts||'').slice(0,19).padEnd(19)}  ${s.step}\n`);
+    const lastStr = s.last_ts ? new Date(s.last_ts).toISOString() : '';
+    process.stdout.write(`${String(s.count).padStart(5)}   ${lastStr.slice(0,19).padEnd(19)}  ${s.step}\n`);
   }
 }
 
