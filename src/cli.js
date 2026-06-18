@@ -753,7 +753,7 @@ function printRecallEmissionGap(all) {
 }
 
 function recallMisses(all, opts) {
-  const evs = all.filter(e => e._sub === 'rs_learn' && e.event === 'recall' && e.hit === false);
+  const evs = all.filter(e => e.event === 'recall' && e.hit === false);
   if (evs.length === 0) { printRecallEmissionGap(all); return; }
   const byQuery = new Map();
   for (const e of evs) {
@@ -772,7 +772,7 @@ function recallMisses(all, opts) {
 }
 
 function recallScores(all, opts) {
-  const evs = all.filter(e => e._sub === 'rs_learn' && e.event === 'recall');
+  const evs = all.filter(e => e.event === 'recall');
   if (evs.length === 0) { printRecallEmissionGap(all); return; }
   const bucket = parseFloat(opts.bucket) || 0.1;
   const buckets = new Map();
@@ -850,7 +850,7 @@ function memoryLeverage(all, opts) {
 }
 
 function recallModes(all, opts) {
-  const evs = all.filter(e => e._sub === 'rs_learn' && e.event === 'recall');
+  const evs = all.filter(e => e.event === 'recall');
   if (evs.length === 0) { printRecallEmissionGap(all); return; }
   const byMode = new Map();
   for (const e of evs) {
