@@ -1,11 +1,12 @@
 import assert from 'assert';
 import { createServer } from './src/server.js';
+import { DEFAULT_LOG_DIR } from './src/index.js';
 import fs from 'fs';
-import os from 'os';
 import path from 'path';
+import os from 'os';
 import http from 'http';
 
-const logDir = process.env.GM_LOG_DIR || path.join(os.homedir(), '.claude', 'gm-log');
+const logDir = DEFAULT_LOG_DIR;
 const { url, close } = await createServer({ logDir, port: 0 });
 
 async function get(p) {

@@ -21,7 +21,7 @@ export function discoverSubsystems(logDir) {
   return [...out].sort();
 }
 
-const DEFAULT_LOG_DIR = process.env.GM_LOG_DIR || path.join(os.homedir(), '.claude', 'gm-log');
+export const DEFAULT_LOG_DIR = process.env.GM_LOG_DIR || path.join(os.homedir(), '.gm', 'gm-log');
 const DEBOUNCE_MS = 50;
 
 function todayDir() {

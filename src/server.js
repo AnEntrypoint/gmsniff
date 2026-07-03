@@ -1,14 +1,12 @@
 import http from 'http';
 import fs from 'fs';
 import path from 'path';
-import os from 'os';
 import { fileURLToPath } from 'url';
-import { GmLogWatcher, replayAll, SUBSYSTEMS } from './index.js';
+import { GmLogWatcher, replayAll, SUBSYSTEMS, DEFAULT_LOG_DIR } from './index.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const GUI_DIR = path.join(__dirname, '..', 'gui');
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json' };
-const DEFAULT_LOG_DIR = process.env.GM_LOG_DIR || path.join(os.homedir(), '.claude', 'gm-log');
 
 class Store {
   constructor(logDir) {

@@ -2,13 +2,12 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { GmLogWatcher, replayAll } from './index.js';
+import { GmLogWatcher, replayAll, DEFAULT_LOG_DIR } from './index.js';
 
-const DEFAULT_LOG_DIR = process.env.GM_LOG_DIR || path.join(os.homedir(), '.claude', 'gm-log');
 const PHASES = ['PLAN', 'EXECUTE', 'EMIT', 'VERIFY', 'COMPLETE'];
 
 const FLAGS = {
-  string: ['since', 'until', 'before', 'after', 'sub', 'event', 'sess', 'day', 'cwd', 'pid', 'sort', 'rollup', 'format', 'efficiency', 'xref', 'tree', 'exclude-sess', 'exclude-cwd', 'bucket', 'days'],
+  string: ['since', 'until', 'before', 'after', 'sub', 'event', 'sess', 'day', 'cwd', 'pid', 'sort', 'rollup', 'format', 'efficiency', 'tree', 'exclude-sess', 'exclude-cwd', 'bucket', 'days'],
   multi: ['grep', 'igrep', 'sub', 'event', 'sess', 'pid', 'exclude-sess', 'exclude-cwd'],
   number: ['limit', 'head', 'tail-n', 'ctx', 'truncate', 'top'],
   bool: ['json', 'ndjson', 'tail', 'f', 'full', 'reverse', 'invert', 'count', 'stats', 'list-sessions', 'list-deviations', 'own-only', 'foreign-only', 'list-events', 'updates', 'watchers', 'conformance', 'all', 'all-dispatch', 'no-color', 'help', 'h', 'embed-failures', 'recall-misses', 'recall-scores', 'classifier-rejects', 'memory-leverage', 'recall-modes', 'table-drops', 'discipline-sigil-ignored'],
@@ -47,7 +46,6 @@ USAGE
   gmsniff --stats [filters]             breakdown by sub / event / sess / day
   gmsniff --tree <sess>                 chronological process tree for one session
   gmsniff --efficiency <sess>           turn count, dispatch ratio, time-to-COMPLETE
-  gmsniff --xref <sess>                 join with ccsniff transcript on sid
   gmsniff --rollup <out.ndjson>         dump filtered events to file
   gmsniff --updates                     live drift state + update.* event history
   gmsniff --watchers                    one-line liveness + version per project cwd
@@ -101,7 +99,6 @@ EXAMPLES
   gmsniff --list-sessions --since 24h
   gmsniff --tree <sess-id>
   gmsniff --efficiency <sess-id>
-  gmsniff --xref <sess-id> --grep "rs-plugkit"
   gmsniff -f --sub plugkit --event phase.transitioned
   gmsniff --rollup /tmp/dev-events.ndjson --since 7d --sub plugkit
   gmsniff gui --open
@@ -262,7 +259,7 @@ function paperConformance(cwds) {
     const proj = path.basename(r.cwd);
     process.stdout.write(`${state}  v${(r.version || '?').padEnd(8)} ${eps} ${prd}  ${proj}\n`);
   }
-  process.stderr.write(`# ${rows.length} projects · ε=unresolved mutables, PRD-pend=open items (paper §14)\n`);
+  process.stderr.write(`# ${rows.length} projects - unresolved-mutables=eps, PRD-pend=open items\n`);
 }
 
 function listSessions(all) {
@@ -290,7 +287,7 @@ function listSessions(all) {
   }
   const rows = [...m.values()].sort((a, b) => (b.last || '').localeCompare(a.last || ''));
   for (const s of rows) {
-    const walk = PHASES.map(p => s.phases.has(p) ? color('█', 32) : color('░', 90)).join('');
+    const walk = PHASES.map(p => s.phases.has(p) ? color('#', 32) : color('.', 90)).join('');
     const dev = s.deviations ? color(String(s.deviations).padStart(3), 31) : '   ';
     const sessShort = s.sess.slice(0, 24).padEnd(24);
     const cwdsArr = [...s.cwds];
@@ -305,7 +302,7 @@ function listSessions(all) {
     }
     process.stdout.write(`${(s.last || '').slice(0, 19)}  ${walk}  ev:${String(s.events).padStart(5)}  disp:${String(s.dispatches).padStart(4)}  prd:${s.prd_add}/${s.prd_res}  mut:${s.mut_res}  dev:${dev}  ${proj}  ${sessShort} ${watcher}\n`);
   }
-  process.stderr.write(`# ${rows.length} sessions · phase walk: P E E V C · watcher: ALIVE/dead per project cwd\n`);
+  process.stderr.write(`# ${rows.length} sessions - phase walk: P E E V C - watcher: ALIVE/dead per project cwd\n`);
 }
 
 // Per-deviation-kind metadata: severity governs attention, recover names the verb the chain
@@ -328,14 +325,13 @@ const DEVIATION_META = {
 };
 const SEV_COLOR = { critical: 31, warn: 33, info: 36 };
 // A foreign session is tagged cwd-<hash> by the hook layer; an own session carries a real
-// session id (claude-*, or the configured GMSNIFF_OWN_SESSION prefix). Foreign deviations are
-// gate-positives (predictability-regardless-of-LLM); own deviations are real defects to correct.
+// session id matching the configured GMSNIFF_OWN_SESSION prefix. Foreign deviations are
+// gate-positives (predictability-regardless-of-agent); own deviations are real defects to correct.
 function devOrigin(e) {
   const sess = String(e.sess || e.cwd || '');
   const own = process.env.GMSNIFF_OWN_SESSION;
   if (own && sess.startsWith(own)) return 'own';
   if (/^cwd-/.test(sess)) return 'foreign';
-  if (/^claude/i.test(sess)) return 'own';
   return 'foreign';
 }
 function devMeta(ev) { return DEVIATION_META[ev] || { sev: 'warn', recover: '?' }; }
@@ -428,7 +424,7 @@ function watchers(all, opts = {}) {
   const aliveCount = rows.filter(r => r.alive).length;
   const deadShown = rows.length - aliveCount;
   const drifted = rows.filter(r => r.update && r.update.latest && r.update.latest !== r.version).length;
-  process.stdout.write(`# ${rows.length} watchers ${includeDead ? '(alive + dead)' : '(alive only — pass --all for dead)'}${drifted ? ` · ${drifted} drifted` : ''}\n`);
+  process.stdout.write(`# ${rows.length} watchers ${includeDead ? '(alive + dead)' : '(alive only -- pass --all for dead)'}${drifted ? ` - ${drifted} drifted` : ''}\n`);
   const wrapperShas = new Set(rows.filter(r => r.wrapper_sha).map(r => r.wrapper_sha));
   const wrapperDivergent = wrapperShas.size > 1;
   process.stdout.write(`STATE   VERSION    WRAPPER  PID    AGE       PROJECT                 UPDATE\n`);
@@ -438,12 +434,12 @@ function watchers(all, opts = {}) {
     const proj = path.basename(r.cwd);
     let update = '';
     if (r.update && r.update.latest && r.update.latest !== r.version) {
-      update = color(`→ v${r.update.latest}`, 33);
+      update = color(`-> v${r.update.latest}`, 33);
     }
     const wsha = r.wrapper_sha ? (wrapperDivergent ? color(r.wrapper_sha, 33) : r.wrapper_sha) : '       ';
     process.stdout.write(`${state}  v${(r.version || '?').padEnd(8)} ${wsha} ${String(r.pid).padStart(6)} ${age.padEnd(9)} ${proj.padEnd(20)}  ${update}\n`);
   }
-  process.stderr.write(`# ${aliveCount} alive${includeDead ? ` · ${deadShown} dead shown` : ''}${drifted ? ` · ${drifted} need bootstrap+respawn` : ''}\n`);
+  process.stderr.write(`# ${aliveCount} alive${includeDead ? ` - ${deadShown} dead shown` : ''}${drifted ? ` - ${drifted} need bootstrap+respawn` : ''}\n`);
 }
 
 function readUpdateAvailable(cwd) {
@@ -487,7 +483,7 @@ function tree(all, sess, opts = {}) {
   if (sess === 'current' || sess === '.' || sess === '@') {
     const resolved = resolveCurrentSession(all);
     if (!resolved) { process.stderr.write(`--tree current: no events found for cwd ${process.cwd()}\n`); process.exit(2); }
-    process.stderr.write(`# --tree current → ${resolved}\n`);
+    process.stderr.write(`# --tree current -> ${resolved}\n`);
     sess = resolved;
   }
   if (!sess) { process.stderr.write('--tree requires a session id (or "current" to auto-resolve from cwd)\n'); process.exit(2); }
@@ -524,7 +520,7 @@ function tree(all, sess, opts = {}) {
     process.stdout.write('\n' + color('# gaps:', 31) + '\n');
     for (const g of gaps) process.stdout.write(`  ${color('!', 31)} ${g}\n`);
   }
-  process.stderr.write(`# ${evs.length} events for session ${sess} · final phase: ${currentPhase}\n`);
+  process.stderr.write(`# ${evs.length} events for session ${sess} - final phase: ${currentPhase}\n`);
 }
 
 function efficiency(all, sess) {
@@ -557,12 +553,12 @@ function efficiency(all, sess) {
   const durMs = Date.parse(last) - Date.parse(first);
   process.stdout.write(`session:           ${sess}\n`);
   process.stdout.write(`events:            ${evs.length}\n`);
-  process.stdout.write(`duration:          ${Math.round(durMs / 1000)}s  (${first} → ${last})\n`);
+  process.stdout.write(`duration:          ${Math.round(durMs / 1000)}s  (${first} -> ${last})\n`);
   process.stdout.write(`dispatches:        ${dispatches}\n`);
   process.stdout.write(`instructions:      ${instructions}\n`);
   process.stdout.write(`transitions:       ${transitions}\n`);
   process.stdout.write(`mutables resolved: ${mutRes}\n`);
-  process.stdout.write(`deviations:        ${devs}${devs ? color('  ← burn check', 31) : ''}\n`);
+  process.stdout.write(`deviations:        ${devs}\n`);
   process.stdout.write(`phases reached:    ${[...phasesSeen].join(', ') || '(none)'}\n`);
   process.stdout.write(`completed:         ${completeAt || color('no', 31)}\n`);
   process.stdout.write(`disp/trans ratio:  ${transitions ? (dispatches / transitions).toFixed(1) : 'n/a'}\n`);
@@ -570,34 +566,6 @@ function efficiency(all, sess) {
   for (const [v, n] of [...verbs.entries()].sort((a, b) => b[1] - a[1]).slice(0, 15)) {
     process.stdout.write(`  ${String(n).padStart(4)}  ${v}\n`);
   }
-}
-
-async function xref(all, sess, opts) {
-  if (!sess) { process.stderr.write('--xref requires a session id\n'); process.exit(2); }
-  const gmEvs = all.filter(e => e.sess === sess).map(e => ({ _src: 'gm', ts: e.ts ? Date.parse(e.ts) : 0, label: e.event || '?', detail: e, _sub: e._sub }));
-  let ccEvs = [];
-  try {
-    const cc = await import('ccsniff');
-    const r = new cc.JsonlReplayer();
-    const collected = [];
-    r.on('streaming_progress', ev => { if (ev.conversation && ev.conversation.id && ev.conversation.id.startsWith(sess)) collected.push(ev); });
-    r.replay({});
-    ccEvs = collected.map(ev => ({ _src: 'cc', ts: ev.timestamp || 0, label: `${ev.role || '?'}/${ev.block?.type || '?'}${ev.block?.name ? ':' + ev.block.name : ''}`, detail: ev }));
-  } catch (e) {
-    process.stderr.write(`# ccsniff not available (${e.message}) — gm events only\n`);
-  }
-  const merged = [...gmEvs, ...ccEvs].sort((a, b) => a.ts - b.ts);
-  const greps = (opts._multi.grep || []).map(r => new RegExp(r, 'i'));
-  for (const e of merged) {
-    if (greps.length) {
-      const s = JSON.stringify(e.detail);
-      if (!greps.every(r => r.test(s))) continue;
-    }
-    const ts = e._src === 'gm' ? new Date(e.ts).toISOString().slice(11, 19) : new Date(e.ts).toISOString().slice(11, 19);
-    const srcTag = e._src === 'gm' ? color('[gm]', 31) : color('[cc]', 34);
-    process.stdout.write(`${ts}  ${srcTag}  ${e.label}\n`);
-  }
-  process.stderr.write(`# ${gmEvs.length} gm-events + ${ccEvs.length} cc-events for session ${sess}\n`);
 }
 
 function findUpdateMarkers() {
@@ -734,27 +702,9 @@ function embedFailures(all, opts) {
   }
 }
 
-function recallActivityFallback(all) {
-  let autoRecall = 0, recallDispatch = 0, recallDur = 0, transitionsWithRecall = 0, recallCountSum = 0;
-  for (const e of all) {
-    if (e.event === 'auto_recall.turn-entry') autoRecall++;
-    else if (e.event === 'dispatch.end' && e.verb === 'recall') { recallDispatch++; if (typeof e.dur_ms === 'number') recallDur += e.dur_ms; }
-    else if (e.event === 'phase.transitioned' && typeof e.recall_count === 'number') { transitionsWithRecall++; recallCountSum += e.recall_count; }
-  }
-  const avgDur = recallDispatch ? Math.round(recallDur / recallDispatch) : 0;
-  return { autoRecall, recallDispatch, avgDur, transitionsWithRecall, recallCountSum };
-}
-
-function printRecallEmissionGap(all) {
-  const a = recallActivityFallback(all);
-  process.stdout.write(`# 0 rs_learn:recall scoring events emitted by this plugkit build -- per-recall score/hit/mode is not logged, so this surface cannot compute it (a bare 0 here is NOT "no misses/all-healthy").\n`);
-  process.stdout.write(`# recall IS active in-window via emitted events: auto_recall.turn-entry=${a.autoRecall}, dispatch{verb=recall}=${a.recallDispatch} (avg ${a.avgDur}ms), phase.transitioned-with-recall=${a.transitionsWithRecall} (recall_count sum ${a.recallCountSum}).\n`);
-  process.stdout.write(`# to expose scores/hits/modes, rs-learn must emit a structured rs_learn:recall event with {query, hit, top_score, mode}.\n`);
-}
-
 function recallMisses(all, opts) {
   const evs = all.filter(e => e.event === 'recall' && e.hit === false);
-  if (evs.length === 0) { printRecallEmissionGap(all); return; }
+  if (evs.length === 0) { process.stdout.write('# recall misses: 0 events matching event=recall && hit=false\n'); return; }
   const byQuery = new Map();
   for (const e of evs) {
     const q = e.query || '?';
@@ -764,7 +714,7 @@ function recallMisses(all, opts) {
     if (e.ts && e.ts > s.last_ts) s.last_ts = e.ts;
   }
   const top = opts.top || 20;
-  process.stdout.write(`# recall misses: ${evs.length} events · ${byQuery.size} distinct queries\n`);
+  process.stdout.write(`# recall misses: ${evs.length} events - ${byQuery.size} distinct queries\n`);
   process.stdout.write(`COUNT   LAST                 QUERY\n`);
   for (const s of [...byQuery.values()].sort((a,b)=>b.count-a.count).slice(0, top)) {
     process.stdout.write(`${String(s.count).padStart(5)}   ${(s.last_ts||'').slice(0,19).padEnd(19)}  ${s.query}\n`);
@@ -773,7 +723,7 @@ function recallMisses(all, opts) {
 
 function recallScores(all, opts) {
   const evs = all.filter(e => e.event === 'recall');
-  if (evs.length === 0) { printRecallEmissionGap(all); return; }
+  if (evs.length === 0) { process.stdout.write('# recall scores: 0 events matching event=recall\n'); return; }
   const bucket = parseFloat(opts.bucket) || 0.1;
   const buckets = new Map();
   let noScore = 0;
@@ -790,7 +740,7 @@ function recallScores(all, opts) {
   const max = Math.max(1, ...buckets.values());
   for (const k of keys) {
     const n = buckets.get(k);
-    const bar = '█'.repeat(Math.ceil(40 * n / max));
+    const bar = '#'.repeat(Math.ceil(40 * n / max));
     process.stdout.write(`  ${k.padStart(5)}  ${String(n).padStart(6)}  ${bar}\n`);
   }
 }
@@ -851,7 +801,7 @@ function memoryLeverage(all, opts) {
 
 function recallModes(all, opts) {
   const evs = all.filter(e => e.event === 'recall');
-  if (evs.length === 0) { printRecallEmissionGap(all); return; }
+  if (evs.length === 0) { process.stdout.write('# recall modes: 0 events matching event=recall\n'); return; }
   const byMode = new Map();
   for (const e of evs) {
     const m = e.mode || '(none)';
@@ -861,8 +811,7 @@ function recallModes(all, opts) {
   const total = evs.length || 1;
   for (const [k, v] of [...byMode.entries()].sort((a,b)=>b[1]-a[1])) {
     const pct = ((v / total) * 100).toFixed(1);
-    const flag = k === 'fallback_like' && v > 0 ? color('  <- ANN regression?', 31) : '';
-    process.stdout.write(`  ${String(v).padStart(6)}  ${pct.padStart(5)}%  ${k}${flag}\n`);
+    process.stdout.write(`  ${String(v).padStart(6)}  ${pct.padStart(5)}%  ${k}\n`);
   }
   if (opts.stats) {
     const byDay = new Map();
@@ -877,7 +826,7 @@ function recallModes(all, opts) {
 
 function tableDrops(all) {
   const evs = all.filter(e => e.event === 'table_dropped');
-  process.stdout.write(`# table drops: ${evs.length}${evs.length ? color(`  ← catastrophic data loss`, 31) : ''}\n`);
+  process.stdout.write(`# table drops: ${evs.length}\n`);
   process.stdout.write(`TS                   TABLE                 OLD_DIM  NEW_DIM\n`);
   for (const e of evs) {
     process.stdout.write(`${(e.ts||'').slice(0,19)}  ${(e.table||'?').padEnd(20)}  ${String(e.old_dim||'?').padStart(7)}  ${String(e.new_dim||'?').padStart(7)}\n`);
@@ -896,7 +845,7 @@ async function rollup(out, all, filter) {
   const filtered = all.filter(filter);
   const body = filtered.map(e => JSON.stringify(e)).join('\n') + (filtered.length ? '\n' : '');
   fs.writeFileSync(out, body);
-  process.stderr.write(`# rolled up ${filtered.length} events → ${out}\n`);
+  process.stderr.write(`# rolled up ${filtered.length} events -> ${out}\n`);
 }
 
 async function liveTail(filter, opts) {
@@ -916,7 +865,7 @@ async function launchGui(args) {
     else if (args[i] === '--open') open = true;
   }
   const { url } = await createServer({ logDir: DEFAULT_LOG_DIR, port });
-  process.stdout.write(`gmsniff gui · ${url}\n`);
+  process.stdout.write(`gmsniff gui - ${url}\n`);
   if (open) {
     try {
       const { execSync } = await import('child_process');
@@ -969,7 +918,6 @@ if (argv[0] === 'gui') {
     if (opts['table-drops']) { tableDrops(all.filter(filter)); process.exit(0); }
     if (opts['discipline-sigil-ignored']) { disciplineSigilIgnored(all.filter(filter)); process.exit(0); }
     if (opts.efficiency) { efficiency(all, opts.efficiency); process.exit(0); }
-    if (opts.xref) { await xref(all, opts.xref, opts); process.exit(0); }
     if (opts.rollup) { await rollup(opts.rollup, all, filter); process.exit(0); }
 
     const matched = all.filter(filter);
@@ -983,6 +931,6 @@ if (argv[0] === 'gui') {
     if (opts.stats) { stats(rows); process.exit(0); }
     if (opts.count) { process.stdout.write(`${rows.length}\n`); process.exit(0); }
     for (const e of rows) process.stdout.write(formatRow(e, opts));
-    process.stderr.write(`# ${all.length} total · ${rows.length} matched\n`);
+    process.stderr.write(`# ${all.length} total - ${rows.length} matched\n`);
   }
 }
