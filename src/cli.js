@@ -7,7 +7,7 @@ import { GmLogWatcher, replayAll, DEFAULT_LOG_DIR } from './index.js';
 const PHASES = ['PLAN', 'EXECUTE', 'EMIT', 'VERIFY', 'COMPLETE'];
 
 const FLAGS = {
-  string: ['since', 'until', 'before', 'after', 'sub', 'event', 'sess', 'day', 'cwd', 'pid', 'sort', 'rollup', 'format', 'efficiency', 'tree', 'exclude-sess', 'exclude-cwd', 'bucket', 'days'],
+  string: ['spool', 'since', 'until', 'before', 'after', 'sub', 'event', 'sess', 'day', 'cwd', 'pid', 'sort', 'rollup', 'format', 'efficiency', 'tree', 'exclude-sess', 'exclude-cwd', 'bucket', 'days'],
   multi: ['grep', 'igrep', 'sub', 'event', 'sess', 'pid', 'exclude-sess', 'exclude-cwd'],
   number: ['limit', 'head', 'tail-n', 'ctx', 'truncate', 'top'],
   bool: ['json', 'ndjson', 'tail', 'f', 'full', 'reverse', 'invert', 'count', 'stats', 'list-sessions', 'list-deviations', 'own-only', 'foreign-only', 'list-events', 'updates', 'watchers', 'conformance', 'projects', 'all', 'all-dispatch', 'no-color', 'help', 'h', 'embed-failures', 'recall-misses', 'recall-scores', 'classifier-rejects', 'memory-leverage', 'recall-modes', 'table-drops', 'discipline-sigil-ignored'],
@@ -64,6 +64,13 @@ USAGE
   gmsniff --discipline-sigil-ignored    discipline_sigil_ignored events (doc-vs-code drift)
   gmsniff --tree <sess> [--all-dispatch] drops dispatch.start unless --all-dispatch
   gmsniff gui [--port N] [--open]       launch browser GUI
+
+SOURCES
+  default                ~/.gm/gm-log (or GM_LOG_DIR) day/subsystem jsonl files
+  fallback               when gm-log is empty/absent, evt: lines from each discovered
+                         <project>/.gm/exec-spool/.watcher.log (roots: GM_SPOOL_DIRS,
+                         DEV_ROOT, GM_DEV_ROOT, cwd, C:/dev or ~/dev)
+  --spool <path>         force one project dir (or .watcher.log path) as the source
 
 TIME
   --since <t>            ISO date, epoch ms, or relative Ns/Nm/Nh/Nd/Nw
@@ -1020,7 +1027,7 @@ if (argv[0] === 'gui') {
   if (opts.tail) {
     await liveTail(filter, opts);
   } else {
-    const all = replayAll(DEFAULT_LOG_DIR);
+    const all = replayAll(DEFAULT_LOG_DIR, { spool: opts.spool });
 
     if (opts['list-sessions']) { listSessions(all.filter(filter)); process.exit(0); }
     if (opts['list-deviations']) { listDeviations(all.filter(filter), opts); process.exit(0); }

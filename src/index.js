@@ -114,9 +114,69 @@ function normalizeTs(ts) {
   return '';
 }
 
-export function replayAll(logDir = DEFAULT_LOG_DIR) {
+const EVT_RE = /evt:\s*(\{.*\})\s*$/;
+
+export function replayWatcherLog(fp, cwd) {
   const events = [];
-  if (!fs.existsSync(logDir)) return events;
+  let text;
+  try { text = fs.readFileSync(fp, 'utf8'); } catch { return events; }
+  for (const line of text.split('\n')) {
+    const m = line.match(EVT_RE);
+    if (!m) continue;
+    let o;
+    try { o = JSON.parse(m[1]); } catch { continue; }
+    const sub = o.sub || 'plugkit';
+    const ts = normalizeTs(o.ts);
+    const ev = { ...o, ts, cwd: o.cwd || cwd, _sub: sub, _day: ts.slice(0, 10), _fp: fp, _src: 'watcher.log' };
+    if (!ev.event) ev.event = o.phase || o.action || o.kind || o.type || '?';
+    events.push(ev);
+  }
+  return events;
+}
+
+export function discoverSpoolLogs(explicit) {
+  const found = new Map();
+  const addProject = (proj) => {
+    if (!proj) return;
+    const key = path.resolve(proj).replace(/\\/g, '/').toLowerCase();
+    if (found.has(key)) return;
+    const fp = path.join(proj, '.gm', 'exec-spool', '.watcher.log');
+    if (fs.existsSync(fp)) found.set(key, { cwd: path.resolve(proj), fp });
+  };
+  if (explicit) {
+    const p = path.resolve(explicit);
+    if (p.endsWith('.log')) {
+      const proj = path.dirname(path.dirname(path.dirname(p)));
+      if (fs.existsSync(p)) found.set(p.toLowerCase(), { cwd: proj, fp: p });
+    } else addProject(p);
+    return [...found.values()];
+  }
+  const roots = [];
+  if (process.env.GM_SPOOL_DIRS) roots.push(...process.env.GM_SPOOL_DIRS.split(path.delimiter).filter(Boolean));
+  for (const env of ['DEV_ROOT', 'GM_DEV_ROOT']) if (process.env[env]) roots.push(process.env[env]);
+  roots.push(process.cwd());
+  roots.push(process.platform === 'win32' ? 'C:/dev' : path.join(os.homedir(), 'dev'));
+  for (const root of roots) {
+    addProject(root);
+    try {
+      for (const d of fs.readdirSync(root, { withFileTypes: true })) {
+        if (d.isDirectory()) addProject(path.join(root, d.name));
+      }
+    } catch {}
+  }
+  return [...found.values()];
+}
+
+export function replaySpoolFallback(explicit) {
+  const events = [];
+  for (const { cwd, fp } of discoverSpoolLogs(explicit)) events.push(...replayWatcherLog(fp, cwd));
+  return events.sort((a, b) => (a.ts || '') < (b.ts || '') ? -1 : 1);
+}
+
+export function replayAll(logDir = DEFAULT_LOG_DIR, opts = {}) {
+  const events = [];
+  if (opts.spool) return replaySpoolFallback(opts.spool);
+  if (!fs.existsSync(logDir)) return replaySpoolFallback();
   try {
     for (const d of fs.readdirSync(logDir, { withFileTypes: true })) {
       if (!d.isDirectory()) continue;
@@ -140,5 +200,6 @@ export function replayAll(logDir = DEFAULT_LOG_DIR) {
       }
     }
   } catch {}
+  if (!events.length) return replaySpoolFallback();
   return events.sort((a, b) => (a.ts || '') < (b.ts || '') ? -1 : 1);
 }
