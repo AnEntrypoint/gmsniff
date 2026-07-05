@@ -124,7 +124,12 @@ function stripGlyphs(s) {
 }
 
 function parseCodeInsight(text) {
-  const lines = text.split('\n');
+  // CRLF-safe: strip a trailing \r per line up front so every downstream
+  // "^...$" regex (section headers, header line) matches on Windows-authored
+  // .codeinsight files exactly like it does on LF-only ones -- JS regex `$`
+  // (no /m or /s flag) does not match before a bare trailing \r, so without
+  // this every section on a CRLF file silently dropped to zero entries.
+  const lines = text.split('\n').map(l => l.endsWith('\r') ? l.slice(0, -1) : l);
   const headerRe = /^#\s*(\d+)f\s+([\d.]+)k?L\s+(\d+)fn\s+(\d+)cls\s+cx([\d.]+)/;
   let summary = { files: null, lines: null, functions: null, classes: null, avgComplexity: null };
   let headerLineIdx = -1;
