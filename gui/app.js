@@ -304,7 +304,7 @@ async function boot() {
   refreshDeviationBadge();
   setInterval(refreshDeviationBadge, 10000);
   connectSSE();
-  window.gmsniff = { state, ui, go, renderBody, renderShell };
+  window.gmsniff = { state, ui, go, renderBody, renderShell, openPalette, closePalette, buildCommandRegistry };
 }
 
 boot();

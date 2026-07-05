@@ -206,7 +206,10 @@ async function runSearch(setBody) {
   const params = new URLSearchParams({ q: searchState.q });
   if (searchState.sub) params.set('sub', searchState.sub);
   const data = await api('/api/search?' + params);
+  if (data.error) { toast(`Search failed: ${data.error}`, true); searchState.results = []; setBody(); return; }
   searchState.results = data.results || [];
+  if (!searchState.results.length) toast(`No results for "${searchState.q}"`);
+  else toast(`${searchState.results.length} result${searchState.results.length === 1 ? '' : 's'}`);
   setBody();
 }
 
@@ -775,8 +778,15 @@ export async function runCodesearch(setBody) {
   codesearchState.loading = true; codesearchState.error = null; setBody();
   const r = await apiPost('/api/codesearch', { query: codesearchState.q }, { scoped: true });
   codesearchState.loading = false;
-  if (r.status !== 200) { codesearchState.error = r.error || `HTTP ${r.status}`; setBody(); return; }
+  if (r.status !== 200) {
+    codesearchState.error = r.error || `HTTP ${r.status}`;
+    toast(`Codesearch failed: ${codesearchState.error}`, true);
+    setBody();
+    return;
+  }
   codesearchState.hits = r.hits || [];
+  if (!codesearchState.hits.length) toast(`No hits for "${codesearchState.q}"`);
+  else toast(`${codesearchState.hits.length} hit${codesearchState.hits.length === 1 ? '' : 's'}`);
   setBody();
 }
 
