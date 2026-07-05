@@ -7,6 +7,232 @@ import {
   readPrd, readMutables, rewriteRow, atomicWriteFile, discoverProjects, isKnownVerb, isAllowedProjectCwd,
 } from './registry.js';
 
+const MAX_QUERY_LEN = 4096;
+const CODESEARCH_POLL_MS = 10000;
+const CODESEARCH_POLL_INTERVAL_MS = 200;
+const VERB_FILE_SHAPE = /^[a-zA-Z0-9-]+$/;
+const RESPONSE_FILE_SHAPE = /^[a-zA-Z0-9._-]+\.json$/;
+
+function randomSuffix() {
+  return Math.random().toString(36).slice(2, 8);
+}
+
+// -- rs-tools aggregation: adapted from cli.js's embedFailures/recallMisses/recallScores/
+// classifierRejects/memoryLeverage/recallModes, operating on Store's in-memory this.events
+// (equivalent to cli.js's replayAll `all` array) filtered to a scoped cwd.
+function rsToolsRecallMisses(evs, top = 20) {
+  const misses = evs.filter(e => e.event === 'recall' && e.hit === false);
+  const byQuery = new Map();
+  for (const e of misses) {
+    const q = e.query || '?';
+    let s = byQuery.get(q);
+    if (!s) { s = { query: q, count: 0, last_ts: '' }; byQuery.set(q, s); }
+    s.count++;
+    if (e.ts && e.ts > s.last_ts) s.last_ts = e.ts;
+  }
+  return { total: misses.length, byQuery: [...byQuery.values()].sort((a, b) => b.count - a.count).slice(0, top) };
+}
+
+function rsToolsRecallScores(evs, bucket = 0.1) {
+  const recalls = evs.filter(e => e.event === 'recall');
+  const buckets = new Map();
+  let noScore = 0;
+  for (const e of recalls) {
+    let score = e.top_score;
+    if (score === undefined && Array.isArray(e.hits) && e.hits[0] && typeof e.hits[0].score === 'number') score = e.hits[0].score;
+    if (typeof score !== 'number') { noScore++; continue; }
+    const b = Math.floor(score / bucket) * bucket;
+    buckets.set(b.toFixed(2), (buckets.get(b.toFixed(2)) || 0) + 1);
+  }
+  const histogram = [...buckets.entries()].sort((a, b) => parseFloat(a[0]) - parseFloat(b[0])).map(([bucket, count]) => ({ bucket, count }));
+  return { total: recalls.length, noScore, histogram };
+}
+
+function rsToolsRecallModes(evs) {
+  const recalls = evs.filter(e => e.event === 'recall');
+  const byMode = new Map();
+  for (const e of recalls) {
+    const m = e.mode || '(none)';
+    byMode.set(m, (byMode.get(m) || 0) + 1);
+  }
+  const total = recalls.length || 1;
+  return { total: recalls.length, modes: [...byMode.entries()].sort((a, b) => b[1] - a[1]).map(([mode, count]) => ({ mode, count, pct: +(count / total * 100).toFixed(1) })) };
+}
+
+function rsToolsClassifierRejects(evs, top = 20) {
+  const rejects = evs.filter(e => e.event === 'memorize_reject');
+  const byReason = new Map();
+  for (const e of rejects) byReason.set(e.reason || '?', (byReason.get(e.reason || '?') || 0) + 1);
+  const recent = rejects.slice(-10).reverse().map(e => ({ ts: e.ts, reason: e.reason || '?', text_prefix: String(e.text_prefix || e.text || '').slice(0, 80) }));
+  return { total: rejects.length, byReason: [...byReason.entries()].sort((a, b) => b[1] - a[1]).slice(0, top).map(([reason, count]) => ({ reason, count })), recent };
+}
+
+function rsToolsMemoryLeverage(evs, days = 7, sess) {
+  const cutoff = Date.now() - days * 86400000;
+  const filt = e => { const t = e.ts ? Date.parse(e.ts) : 0; return t >= cutoff && (!sess || (e.sess && e.sess.startsWith(sess))); };
+  const filtered = evs.filter(filt);
+  const bySess = new Map();
+  for (const e of filtered) {
+    const k = e.sess || '(no-session)';
+    let s = bySess.get(k);
+    if (!s) { s = { sess: k, memorized: 0, memorized_keys: new Set(), recalled_back: 0 }; bySess.set(k, s); }
+    if (e.event === 'memorize_fired' || e.event === 'memorize.fired') {
+      s.memorized++;
+      if (e.key) s.memorized_keys.add(String(e.key));
+    }
+  }
+  for (const e of filtered) {
+    if (e._sub !== 'rs_learn' || e.event !== 'recall') continue;
+    const k = e.sess || '(no-session)';
+    const s = bySess.get(k);
+    if (!s) continue;
+    const hitKeys = [];
+    if (Array.isArray(e.hits)) for (const h of e.hits) if (h && h.key) hitKeys.push(String(h.key));
+    if (e.key) hitKeys.push(String(e.key));
+    for (const hk of hitKeys) if (s.memorized_keys.has(hk)) { s.recalled_back++; break; }
+  }
+  const rows = [...bySess.values()].filter(s => s.memorized || s.recalled_back)
+    .sort((a, b) => b.memorized - a.memorized)
+    .map(s => ({ sess: s.sess, memorized: s.memorized, recalled_back: s.recalled_back, leveragePct: s.memorized ? +(s.recalled_back / s.memorized * 100).toFixed(1) : 0 }));
+  return { days, rows };
+}
+
+function rsToolsEmbedFailures(evs) {
+  const structured = evs.filter(e => e.event === 'embed_fail' || (e._sub === 'rs_learn' && e.event === 'embed_fail'));
+  const byStep = new Map();
+  for (const e of structured) {
+    const step = e.step || '?';
+    let s = byStep.get(step);
+    if (!s) { s = { step, count: 0, last_ts: 0 }; byStep.set(step, s); }
+    s.count++;
+    const tsNum = typeof e.ts === 'number' ? e.ts : (e.ts ? Date.parse(e.ts) : 0);
+    if (tsNum && tsNum > s.last_ts) s.last_ts = tsNum;
+  }
+  return { total: structured.length, byStep: [...byStep.values()].sort((a, b) => b.count - a.count).slice(0, 20) };
+}
+
+// -- .codeinsight parser: plain-text digest, header line "NNf NNL NNfn NNcls cxN.N" (may be
+// preceded by prose/markdown lines), followed by section headers ("## Title") and content
+// lines. Real sample format has no per-file "file:line:name(N)params" body rows in every
+// project -- parse defensively: capture the summary line plus each "## " section's raw text,
+// stripping any non-ASCII decorative glyphs from labels this endpoint itself produces.
+function stripGlyphs(s) {
+  return String(s == null ? '' : s).replace(/[^\x00-\x7F]/g, '').replace(/\s+/g, ' ').trim();
+}
+
+function parseCodeInsight(text) {
+  const lines = text.split('\n');
+  const headerRe = /^#\s*(\d+)f\s+([\d.]+)k?L\s+(\d+)fn\s+(\d+)cls\s+cx([\d.]+)/;
+  let summary = { files: null, lines: null, functions: null, classes: null, avgComplexity: null };
+  let headerLineIdx = -1;
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(headerRe);
+    if (m) {
+      summary = {
+        files: parseInt(m[1], 10),
+        lines: Math.round(parseFloat(m[2]) * (/[\d.]+k?L/.test(m[0]) && m[0].includes('kL') ? 1000 : 1)),
+        functions: parseInt(m[3], 10),
+        classes: parseInt(m[4], 10),
+        avgComplexity: parseFloat(m[5]),
+      };
+      headerLineIdx = i;
+      break;
+    }
+  }
+  const entries = [];
+  let currentSection = null;
+  let sectionLines = [];
+  const flush = () => {
+    if (currentSection) entries.push({ section: stripGlyphs(currentSection), content: sectionLines.join('\n').trim() });
+    sectionLines = [];
+  };
+  for (let i = headerLineIdx + 1; i < lines.length; i++) {
+    const line = lines[i];
+    const secM = line.match(/^##\s*(.+)$/);
+    if (secM) {
+      flush();
+      currentSection = secM[1];
+      continue;
+    }
+    if (currentSection) sectionLines.push(line);
+  }
+  flush();
+  return { summary, entries };
+}
+
+// -- memory-graph reader: real schema witnessed via Read on anentrypoint-design's disciplines --
+// .gm/disciplines/rs-learn_graph_edges/<id>.json holds {id,src,dst,relation,fact,embedding,...},
+// .gm/disciplines/rs-learn_graph_edges_by_src|by_dst/<namespace>.json holds a comma-separated
+// list of edge ids for that namespace, .gm/disciplines/<namespace>/<key>.json holds the plain
+// memorized text (a `default/mem-*.json` file is a bare text file, not JSON-parseable). Nodes
+// are derived from the plain-text memory files (key/text/namespace); edges are read from the
+// real graph_edges directory when present (never fabricated).
+function readMemoryGraph(cwd) {
+  const disciplinesDir = path.join(cwd, '.gm', 'disciplines');
+  const nodes = [];
+  const nodeKeys = new Set();
+  let namespaces = [];
+  try {
+    namespaces = fs.readdirSync(disciplinesDir, { withFileTypes: true })
+      .filter(d => d.isDirectory() && !d.name.startsWith('rs-learn_graph_edges') && !d.name.endsWith('-vec') && !d.name.endsWith('-manifest') && !d.name.endsWith('_router'))
+      .map(d => d.name);
+  } catch (_) { return { nodes: [], edges: [], note: 'no .gm/disciplines directory found for this project' }; }
+
+  for (const ns of namespaces) {
+    const nsDir = path.join(disciplinesDir, ns);
+    let files = [];
+    try { files = fs.readdirSync(nsDir); } catch (_) { continue; }
+    for (const f of files) {
+      if (!f.endsWith('.json')) continue;
+      const key = f.slice(0, -5);
+      let text = null;
+      try {
+        const raw = fs.readFileSync(path.join(nsDir, f), 'utf-8');
+        try {
+          const parsed = JSON.parse(raw);
+          text = typeof parsed === 'string' ? parsed : (parsed.fact || parsed.text || JSON.stringify(parsed).slice(0, 300));
+        } catch (_) {
+          text = raw; // plain-text memory file, not JSON (real observed shape)
+        }
+      } catch (_) { continue; }
+      if (nodeKeys.has(key)) continue;
+      nodeKeys.add(key);
+      let stat = null;
+      try { stat = fs.statSync(path.join(nsDir, f)); } catch (_) {}
+      nodes.push({ key, text: String(text).slice(0, 500), namespace: ns, mtime: stat ? stat.mtimeMs : null });
+    }
+  }
+
+  const edges = [];
+  const edgesDir = path.join(disciplinesDir, 'rs-learn_graph_edges');
+  let edgeFiles = [];
+  try { edgeFiles = fs.readdirSync(edgesDir); } catch (_) { edgeFiles = []; }
+  for (const f of edgeFiles) {
+    if (!f.endsWith('.json')) continue;
+    try {
+      const e = JSON.parse(fs.readFileSync(path.join(edgesDir, f), 'utf-8'));
+      edges.push({ id: e.id, src: e.src, dst: e.dst, relation: e.relation, weight: e.weight ?? null, created_at: e.created_at ?? null });
+    } catch (_) {}
+  }
+
+  if (!edgeFiles.length) {
+    return { nodes, edges: [], note: 'no rs-learn_graph_edges discipline directory found; nodes derived from per-namespace memory files, edges unavailable' };
+  }
+  return { nodes, edges };
+}
+
+function listDisciplines(cwd) {
+  const dir = path.join(cwd, '.gm', 'disciplines');
+  try {
+    return fs.readdirSync(dir).map(name => {
+      const full = path.join(dir, name);
+      let stat;
+      try { stat = fs.statSync(full); } catch (_) { return { name, size: null, mtime: null, isDirectory: null }; }
+      return { name, size: stat.isDirectory() ? null : stat.size, mtime: stat.mtimeMs, isDirectory: stat.isDirectory() };
+    });
+  } catch (_) { return []; }
+}
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const GUI_DIR = path.join(__dirname, '..', 'gui');
 const OWN_ROOT = path.resolve(__dirname, '..');
@@ -610,6 +836,106 @@ export function createServer({ logDir = DEFAULT_LOG_DIR, port = 0, host = '127.0
           } catch (e) {
             return send(res, 500, { error: String(e?.message || e) });
           }
+        });
+        return;
+      }
+      if (p === '/api/rs-tools') {
+        const scope = resolveScopedCwd(store, q.cwd);
+        if (!scope.ok) return send(res, 403, { error: scope.error });
+        const evs = store.events.filter(e => e.cwd === scope.cwd);
+        return send(res, 200, {
+          cwd: scope.cwd,
+          eventCount: evs.length,
+          embedFailures: rsToolsEmbedFailures(evs),
+          recallMisses: rsToolsRecallMisses(evs, q.top ? parseInt(q.top, 10) : 20),
+          recallScores: rsToolsRecallScores(evs, q.bucket ? parseFloat(q.bucket) : 0.1),
+          classifierRejects: rsToolsClassifierRejects(evs, q.top ? parseInt(q.top, 10) : 20),
+          memoryLeverage: rsToolsMemoryLeverage(evs, q.days ? parseInt(q.days, 10) : 7, q.sess),
+          recallModes: rsToolsRecallModes(evs),
+          disciplines: listDisciplines(scope.cwd),
+        });
+      }
+      if (p === '/api/codeinsight') {
+        const scope = resolveScopedCwd(store, q.cwd);
+        if (!scope.ok) return send(res, 403, { error: scope.error });
+        const file = path.join(scope.cwd, '.codeinsight');
+        let text;
+        try { text = fs.readFileSync(file, 'utf-8'); }
+        catch (e) { return send(res, 404, { error: '.codeinsight not found for this project', detail: e.message }); }
+        return send(res, 200, { cwd: scope.cwd, ...parseCodeInsight(text) });
+      }
+      if (p === '/api/memory-graph') {
+        const scope = resolveScopedCwd(store, q.cwd);
+        if (!scope.ok) return send(res, 403, { error: scope.error });
+        return send(res, 200, { cwd: scope.cwd, ...readMemoryGraph(scope.cwd) });
+      }
+      if (p === '/api/codesearch') {
+        if (req.method !== 'POST') return send(res, 405, { error: 'method not allowed' });
+        readBody(req, MAX_LIFECYCLE_BODY, (err, body) => {
+          if (err) return send(res, 413, { error: 'body too large' });
+          let payload;
+          try { payload = body ? JSON.parse(body) : {}; }
+          catch (e) { return send(res, 400, { error: 'body must be JSON', detail: e.message }); }
+          const { cwd: cwdParam, query } = payload;
+          if (typeof query !== 'string' || !query.length || query.length > MAX_QUERY_LEN) {
+            return send(res, 400, { error: 'query is required and must be a non-empty string under 4096 chars' });
+          }
+          const scope = resolveScopedCwd(store, cwdParam);
+          if (!scope.ok) return send(res, 403, { error: scope.error });
+          const verbDir = path.join(scope.cwd, '.gm', 'exec-spool', 'in', 'codesearch');
+          const outDir = path.join(scope.cwd, '.gm', 'exec-spool', 'out');
+          const ts = `${Date.now()}-${randomSuffix()}`;
+          let inFile, outFile;
+          try {
+            fs.mkdirSync(verbDir, { recursive: true });
+            inFile = path.join(verbDir, `${ts}.txt`);
+            outFile = path.join(outDir, `codesearch-${ts}.json`);
+            fs.writeFileSync(inFile, JSON.stringify({ query }), 'utf-8');
+          } catch (e) {
+            return send(res, 500, { error: String(e?.message || e) });
+          }
+          const deadline = Date.now() + CODESEARCH_POLL_MS;
+          const poll = () => {
+            fs.readFile(outFile, 'utf-8', (readErr, raw) => {
+              if (!readErr) {
+                let parsed;
+                try { parsed = JSON.parse(raw); }
+                catch (e) { return send(res, 502, { error: 'codesearch response was not valid JSON', detail: e.message }); }
+                const hits = parsed?.data?.hits || parsed?.hits || [];
+                return send(res, 200, { ok: true, cwd: scope.cwd, query, hits, raw: parsed });
+              }
+              if (Date.now() >= deadline) {
+                return send(res, 504, { error: 'codesearch dispatch timed out', cwd: scope.cwd, query, waited_ms: CODESEARCH_POLL_MS });
+              }
+              setTimeout(poll, CODESEARCH_POLL_INTERVAL_MS);
+            });
+          };
+          poll();
+        });
+        return;
+      }
+      if (p === '/api/lifecycle/response') {
+        const scope = resolveScopedCwd(store, q.cwd);
+        if (!scope.ok) return send(res, 403, { error: scope.error });
+        const verb = q.verb;
+        const file = q.file;
+        if (typeof verb !== 'string' || !VERB_FILE_SHAPE.test(verb)) {
+          return send(res, 400, { error: 'invalid verb parameter' });
+        }
+        if (typeof file !== 'string' || file.includes('..') || file.includes('/') || file.includes('\\') || !RESPONSE_FILE_SHAPE.test(file)) {
+          return send(res, 400, { error: 'invalid file parameter' });
+        }
+        const outDir = path.join(scope.cwd, '.gm', 'exec-spool', 'out');
+        const target = path.join(outDir, file);
+        if (path.dirname(target) !== path.resolve(outDir)) {
+          return send(res, 400, { error: 'invalid file parameter (path escape)' });
+        }
+        fs.readFile(target, 'utf-8', (err, raw) => {
+          if (err) return send(res, 404, { error: 'response file not found', file });
+          let parsed;
+          try { parsed = JSON.parse(raw); }
+          catch (e) { return send(res, 502, { error: 'response file was not valid JSON', detail: e.message }); }
+          return send(res, 200, { ok: true, cwd: scope.cwd, verb, file, response: parsed });
         });
         return;
       }
