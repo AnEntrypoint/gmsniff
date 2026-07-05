@@ -1,0 +1,35 @@
+/* gmsniff-specific chrome not covered by anentrypoint-design's shared CSS.
+   Theme-aware: every color rides colors_and_type.css tokens, no raw hex. */
+
+.gm-toolbar { display:flex; gap:8px; margin-bottom:10px; align-items:center; flex-wrap:wrap; }
+.gm-toolbar input, .gm-toolbar select, .gm-toolbar textarea {
+  background: var(--surface-2, var(--panel-bg)); border:1px solid var(--border);
+  color: var(--text); padding:5px 10px; border-radius:4px; font-size:12px; font-family:inherit;
+}
+.gm-toolbar input { flex:1; min-width:140px; }
+.gm-toolbar input:focus, .gm-toolbar select:focus, .gm-toolbar textarea:focus { outline:none; border-color: var(--accent, var(--panel-accent)); }
+
+.gm-table { width:100%; border-collapse:collapse; font-size:12px; }
+.gm-table th { text-align:left; padding:6px 10px; border-bottom:1px solid var(--border); color: var(--muted); font-weight:500; position:sticky; top:0; background: var(--panel-bg); }
+.gm-table td { padding:5px 10px; border-bottom:1px solid var(--border); vertical-align:top; word-break:break-all; max-width:320px; }
+.gm-table tr:hover td { background: var(--surface-2, var(--panel-bg)); }
+
+.gm-pager { display:flex; gap:6px; align-items:center; margin-top:8px; font-size:12px; color: var(--muted); }
+.gm-pager button { background: var(--surface-2, var(--panel-bg)); border:1px solid var(--border); color: var(--text); padding:3px 10px; border-radius:3px; font-size:12px; cursor:pointer; }
+.gm-pager button:disabled { opacity:.4; cursor:default; }
+
+.gm-json { font-size:10px; font-family: ui-monospace, Consolas, monospace; white-space:pre-wrap; word-break:break-all; background: var(--surface-2, var(--panel-bg)); padding:8px; border-radius:3px; max-height:300px; overflow-y:auto; }
+.gm-empty { color: var(--muted); padding:16px; text-align:center; }
+.gm-pill { display:inline-block; padding:1px 7px; border-radius:10px; font-size:11px; background: var(--surface-2, var(--panel-bg)); margin:1px; }
+.gm-flex-row { display:flex; gap:12px; align-items:flex-start; flex-wrap:wrap; }
+.gm-flex-row > .ds-panel, .gm-flex-row > div { flex:1; min-width:260px; }
+.gm-textarea { width:100%; height:160px; font-family: ui-monospace, Consolas, monospace; font-size:11px; }
+.gm-conflict { color: var(--danger, var(--flame, #c0392b)); font-size:12px; margin-top:6px; }
+.gm-toast { position:fixed; bottom:16px; right:16px; background: var(--surface-2, var(--panel-bg)); border:1px solid var(--border); padding:8px 14px; border-radius:6px; font-size:12px; z-index:999; }
+.gm-toast.err { border-color: var(--danger, #c0392b); color: var(--danger, #c0392b); }
+.gm-inline-input { background:transparent; border:1px solid transparent; color:inherit; font:inherit; width:100%; }
+.gm-inline-input:focus { outline:none; border-color: var(--accent, var(--panel-accent)); background: var(--surface-2, var(--panel-bg)); }
+.gm-bar-visual { display:flex; align-items:center; gap:8px; margin:2px 0; font-size:11px; }
+.gm-bar-visual .lbl { width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.gm-graph-node { border:1px solid var(--border); border-radius:4px; padding:6px 10px; margin:3px; display:inline-block; font-size:11px; cursor:pointer; background: var(--surface-2, var(--panel-bg)); }
+.gm-graph-node:hover { border-color: var(--accent, var(--panel-accent)); }

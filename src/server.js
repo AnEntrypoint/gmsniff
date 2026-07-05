@@ -914,6 +914,24 @@ export function createServer({ logDir = DEFAULT_LOG_DIR, port = 0, host = '127.0
         });
         return;
       }
+      if (p === '/api/browser-sessions') {
+        const scope = resolveScopedCwd(store, q.cwd);
+        if (!scope.ok) return send(res, 403, { error: scope.error });
+        const spoolDir = path.join(scope.cwd, '.gm', 'exec-spool');
+        const readJsonSafe = (file) => {
+          try { return JSON.parse(fs.readFileSync(path.join(spoolDir, file), 'utf-8')); }
+          catch (_) { return null; }
+        };
+        const sessionsRaw = readJsonSafe('browser-sessions.json');
+        const portsRaw = readJsonSafe('browser-ports.json');
+        return send(res, 200, {
+          cwd: scope.cwd,
+          sessions: sessionsRaw == null ? [] : sessionsRaw,
+          ports: portsRaw == null ? [] : portsRaw,
+          sessionsFileFound: sessionsRaw !== null,
+          portsFileFound: portsRaw !== null,
+        });
+      }
       if (p === '/api/lifecycle/response') {
         const scope = resolveScopedCwd(store, q.cwd);
         if (!scope.ok) return send(res, 403, { error: scope.error });

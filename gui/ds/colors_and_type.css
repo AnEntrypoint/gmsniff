@@ -1,0 +1,496 @@
+/* ============================================================
+   247420 design system — colors + type
+   "Acid Editorial": confident display type, ink-on-paper with one
+   electric lead, print texture over glow. Scope-prefixed at build time.
+   Source-of-truth tokens. Component sheet lives in app-shell.css.
+   ============================================================ */
+
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:ital,wght@0,400;0,500;0,600;0,700;1,400;1,700&display=swap');
+
+/* Metric-matched fallback for the display face. While Space Grotesk loads,
+   text falls back to Arial with size-adjust tuned to its cap-height so the
+   oversized hero does not reflow on swap. Referenced first in --ff-display via
+   the 'Space Grotesk' family; this only kicks in for the fallback glyphs. */
+@font-face {
+  font-family: 'Space Grotesk Fallback';
+  src: local('Arial');
+  size-adjust: 96%;
+  ascent-override: 95%;
+  descent-override: 24%;
+}
+
+:root {
+  /* Tree view indentation tokens */
+  --tree-indent: 12px;
+  --tree-base-indent: 6px;
+
+  /* Paper / Ink — warm newsprint paper against near-black ink. The warmer
+     paper + deeper ink widen the tonal range so the electric lead reads as
+     printed, not glowing. */
+  --paper:       #F4F1E9;
+  --paper-2:     #EAE6DA;
+  --paper-3:     #DCD7C7;
+  --ink:         #0E0E12;
+  --ink-2:       #1F1F26;
+  --ink-3:       #52525A; /* WCAG AAA on --paper (~7.1:1) */
+  --ink-3-dark:  #464650; /* dark theme bg-3 (tier-3 surface) */
+  --paper-3-dark: #B4B4BC; /* dark theme fg-3 (tier-3 text)   */
+
+  /* Lore palette. --acid is the electric lead — a printed-ink lime that sits
+     forward of the heritage green; green/purple/mascot demote to print-ink
+     category roles. */
+  --acid:        #B6FF1B;
+  --acid-deep:   #4E7A00; /* AA text tone of the lead on paper */
+  --green:       #247420;
+  --green-2:     #3A9A34;
+  --green-deep:  #133F10;
+  --green-tint:  #D7E4C2;
+  --purple:      #3A0140;
+  --purple-2:    #7F18A4;
+  --purple-deep: #220026;
+  --purple-tint: #E2CFE4;
+  --mascot:      #FF2E84;
+  --mascot-2:    #FF3CA7;
+  --mascot-tint: #F7CEDD;
+  --mascot-deep: #B81F63;
+
+  /* Signals */
+  --sun:         #F5C344;
+  /* Error/status tones are theme-tuned: the root values are the LIGHT (paper)
+     pair (flame 4.74:1, amber 4.5+:1 on paper); the dark blocks below restore
+     the originals (#FF5A1F / #D9A93A) which were tuned on ink and fail on
+     paper (2.9:1 / 2.0:1). */
+  --flame:       #C53E00;
+  --amber:       #8A6512;
+  --sky:         #3A6EFF;
+  --warn:        #E0241A;
+  /* Syntax-token aliases: light values pass 4.5:1 on paper; the dark blocks
+     restore the bright dark-tuned originals. Components reference ONLY these. */
+  --code-string:  var(--green);
+  --code-keyword: #2453C9;
+  --code-fn:      #B84300;
+  --code-str-alt: var(--mascot-deep);
+  --code-num:     #946300;
+  --danger:      oklch(0.55 0.18 25);
+  --success:     var(--green-2);
+  --live:        var(--green);
+
+  /* Semantic surfaces */
+  --bg:          var(--paper);
+  --bg-2:        var(--paper-2);
+  --bg-3:        var(--paper-3);
+  --fg:          var(--ink);
+  --fg-2:        var(--ink-2);
+  --fg-3:        var(--ink-3);
+
+  /* The electric lead. --accent is the FILL (sits behind ink text); --accent-ink
+     is the readable TEXT tone for links/eyebrows/accents on paper (the lime
+     itself is too light for text). --accent-fg is what sits ON an --accent fill. */
+  --accent:      var(--acid);
+  --accent-fg:   var(--ink);
+  --accent-ink:  var(--acid-deep);
+  --accent-bright: var(--acid); /* base value so var(--accent-bright) never falls back empty; ink + [data-accent] retune it */
+  --accent-tint: color-mix(in oklab, var(--accent) 30%, var(--bg));
+
+  /* On-color foregrounds — text/icons that sit ON a saturated fill (accent,
+     danger, category chips). Theme-driven so white-on-color never hard-codes
+     #fff. --on-accent tracks --accent-fg; --on-color is the generic light
+     foreground for any colored fill. */
+  --on-accent:   var(--accent-fg);
+  --on-color:    #fff;
+
+  /* Scrims — modal/overlay backdrops. Derived from --fg so a dark theme dims
+     with its own ink rather than a baked rgba(0,0,0). */
+  --scrim:        color-mix(in oklab, var(--fg) 40%, transparent);
+  --scrim-strong: color-mix(in oklab, var(--fg) 72%, transparent);
+  --scrim-media:  color-mix(in oklab, var(--fg) 85%, transparent);
+
+  /* Category palette — surfaces (forum tags, project cards) that color-code by
+     category. Canonical so a theme/accent swap recolors categories instead of
+     drifting from a private --cat-* block. Derived from the base palette. */
+  --cat-green:   var(--green-2);
+  --cat-purple:  var(--purple-2);
+  --cat-mascot:  var(--mascot);
+  --cat-sun:     var(--sun);
+  --cat-flame:   var(--flame);
+  --cat-sky:     var(--sky);
+
+  --panel-bg:     var(--bg);
+  --panel-bg-2:   var(--bg-2);
+  --panel-accent: var(--accent);
+  --panel-0:      var(--bg);
+  --panel-1:      var(--bg-2);
+  --panel-2:      var(--bg-3);
+  --panel-hover:  color-mix(in oklab, var(--fg) 4%, var(--panel-1));
+  --panel-3:      color-mix(in oklab, var(--fg) 12%, transparent);
+  --panel-text:   var(--fg);
+  --panel-text-2: var(--fg-2);
+  --panel-text-3: var(--fg-3);
+  --panel-accent-2: var(--accent-bright, var(--accent));
+  --panel-shadow: 0 1px 0 color-mix(in oklab, var(--fg) 6%, transparent), 0 4px 14px color-mix(in oklab, var(--fg) 8%, transparent);
+
+  /* Type — Space Grotesk carries display/headings (editorial grotesk with real
+     character), Inter carries body and UI, JetBrains carries code. The narrow
+     alias tracks the display face. size-adjust on the fallback keeps the
+     oversized hero from shifting while Space Grotesk loads. */
+  --ff-display:  'Space Grotesk', 'Space Grotesk Fallback', 'Inter', system-ui, sans-serif;
+  --ff-narrow:   'Space Grotesk', 'Space Grotesk Fallback', 'Inter', system-ui, sans-serif;
+  --ff-body:     'Inter', system-ui, sans-serif;
+  --ff-mono:     'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace;
+
+  --fs-micro:    12px;
+  --fs-tiny:     13px;
+  --fs-xs:       14px;
+  --fs-sm:       15px;
+  --fs-body:     16px;
+  --fs-lg:       18px;
+  --fs-xl:       21px;
+  --fs-h4:       clamp(19px, 1.8cqi, 24px);
+  --fs-h3:       clamp(22px, 2.4cqi, 30px);
+  --fs-h2:       clamp(28px, 3.6cqi, 44px);
+  --fs-h1:       clamp(34px, 5cqi, 64px);
+  --fs-hero:     clamp(42px, 7cqi, 96px);
+  --fs-mega:     clamp(56px, 11cqi, 168px);
+
+  /* App/chrome typescale: the default heading scale above is tuned for
+     marketing/hero layouts (h1 up to 64px). Application chrome — page titles,
+     panel headers — needs a compact ceiling so a PageHeader title doesn't
+     dwarf the content. Opt in with `data-typescale="app"` on a container. */
+  --fs-h1-app:   clamp(22px, 2.4cqi, 30px);
+  --fs-h2-app:   clamp(19px, 2cqi, 24px);
+  --fs-h3-app:   clamp(17px, 1.8cqi, 20px);
+  --fs-h4-app:   clamp(15px, 1.6cqi, 17px);
+
+  --lh-tight:    1.05;
+  --lh-snug:     1.2;
+  --lh-base:     1.55;
+  --lh-long:     1.7;
+
+  --tr-caps:     0.06em;
+  --tr-label:    0.10em;
+  --tr-tight:    -0.02em;
+  --tr-tighter:  -0.03em;
+
+  /* Spacing (8pt) */
+  --space-0:     0;
+  --space-1:     4px;
+  --space-2:     8px;
+  --space-3:     16px;
+  --space-4:     24px;
+  --space-5:     32px;
+  --space-6:     48px;
+  --space-7:     64px;
+  --space-8:     96px;
+  --space-9:     128px;
+  --space-10:    192px;
+
+  --density:     1;
+  --pad-y:       calc(var(--space-5) * var(--density));
+  --pad-x:       calc(var(--space-5) * var(--density));
+  --gutter:      calc(var(--space-4) * var(--density));
+
+  /* Borders — chunky or none */
+  --bw-hair:     1px;
+  --bw-rule:     2px;
+  --bw-chunk:    4px;
+  --bw-slab:     8px;
+
+  --rule:        color-mix(in oklab, currentColor 14%, transparent);
+  --rule-strong: color-mix(in oklab, currentColor 28%, transparent);
+
+  --r-1:         10px;
+  --r-2:         14px;
+  --r-3:         22px;
+  --r-4:         32px;
+  --r-pill:      999px;
+
+  --dur-snap:    80ms;
+  --dur-base:    160ms;
+  --dur-slow:    280ms;
+  --dur-reveal:  560ms;
+  --ease:        cubic-bezier(0.2, 0, 0, 1);
+  /* Physical tier — a slight overshoot that reads as a printed stamp landing,
+     used by presses and signature reveals (not by routine UI fades). */
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-exit:   cubic-bezier(0.4, 0, 1, 1);
+
+  /* Print texture — the signature surface treatment. --grain is a tiled
+     fractal-noise data-URI; --halftone is a dot screen. Both are opt-in via
+     .ds-grain / .ds-halftone utilities and tuned faint so type stays crisp. */
+  --grain-opacity:    0.05;
+  --grain-blend:      multiply;
+  --grain:       url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  --halftone-size:    6px;
+  /* Offset-ink registration — the small print-mark offset used on editorial
+     edges (panel spine, expo numbering). A literal length, not a color. */
+  --ink-offset:  3px;
+
+  --z-header:    100;
+  --z-overlay:   1000;
+
+  --measure:     68ch;
+  --measure-wide:   940px;
+  --measure-narrow: 760px;
+
+  --sidebar-width:           220px;
+  --sidebar-width-collapsed: 64px;
+
+  --lh-tall:     1.4;
+
+  /* Control size scale — heights for status/topbar/crumb + controls. */
+  --size-sm:     32px;
+  --size-base:   42px;
+  --size-lg:     56px;
+
+  /* Unified focus-ring tokens (single source for the design system). Outset
+     rings (the default) tokenize colour+width+offset; bordered text fields use
+     the inset variant. Deliberate negative offsets on edge-flush/clipping
+     containers stay literal. */
+  --focus-color:       var(--accent);
+  --focus-w:           2px;
+  --focus-offset:      2px;
+  --focus-ring-inset:  inset 0 0 0 var(--focus-w) var(--focus-color);
+}
+
+/* ============================================================
+   Focus-visible styles for keyboard navigation
+   ============================================================ */
+:focus-visible {
+  outline: var(--focus-w) solid var(--focus-color);
+  outline-offset: var(--focus-offset);
+}
+
+/* Button variants with focus-visible */
+.btn:focus-visible,
+.btn-primary:focus-visible,
+.btn-ghost:focus-visible {
+  outline: var(--focus-w) solid var(--focus-color);
+  outline-offset: var(--focus-offset);
+}
+
+/* Link focus-visible */
+a:focus-visible,
+[role="link"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Form inputs with focus-visible */
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Interactive element focus-visible */
+[tabindex]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+[data-theme="ink"],
+[data-theme="dark"] {
+  color-scheme: dark;
+  --bg:        var(--ink);
+  --bg-2:      var(--ink-2);
+  --bg-3:      var(--ink-3-dark);
+  --fg:        var(--paper);
+  --fg-2:      var(--paper-2);
+  --fg-3:      var(--paper-3-dark);
+  --panel-bg:  var(--bg);
+  --panel-bg-2: var(--bg-2);
+  --panel-0:   var(--bg);
+  --panel-1:   var(--bg-2);
+  --panel-2:   var(--bg-3);
+  --panel-3:   color-mix(in oklab, var(--fg) 20%, transparent);
+  --panel-text:   var(--fg);
+  --panel-text-2: var(--fg-2);
+  --panel-text-3: var(--fg-3);
+  --accent:    var(--acid);
+  --accent-fg: var(--ink);
+  --accent-ink: var(--acid); /* on ink, the lime itself reads as bright text */
+  --accent-bright: var(--acid);
+  --danger:    oklch(0.68 0.19 25);
+  --flame:     #FF5A1F;
+  --amber:     #D9A93A;
+  /* warn/sky dark-tuned pairs (mirror flame/amber): the :root paper values
+     (#E0241A / #3A6EFF) are too dark on ink; these clear AA 4.5:1 on --ink. */
+  --warn:      #FF5A52;
+  --sky:       #6E9BFF;
+  --code-string:  var(--green-2);
+  --code-keyword: var(--sky);
+  --code-fn:      var(--flame);
+  --code-str-alt: var(--mascot);
+  --code-num:     var(--sun);
+}
+
+/* NOTE: the [data-theme="auto"] block below mirrors the
+   [data-theme="ink"/"dark"] block above token-for-token. 'auto + OS-dark' and
+   'explicit dark' are the same visual context and resolve every token —
+   including --danger — identically. The two are kept as separate selectors
+   only because one is media-gated; a future de-drift can consolidate them into
+   a shared selector list once a build step can hoist the media query. */
+@media (prefers-color-scheme: dark) {
+  [data-theme="auto"] {
+    --bg:        var(--ink);
+    --bg-2:      var(--ink-2);
+    --bg-3:      var(--ink-3-dark);
+    --fg:        var(--paper);
+    --fg-2:      var(--paper-2);
+    --fg-3:      var(--paper-3-dark);
+    --panel-bg:  var(--bg);
+    --panel-bg-2: var(--bg-2);
+    --panel-0:   var(--bg);
+    --panel-1:   var(--bg-2);
+    --panel-2:   var(--bg-3);
+    --panel-3:   color-mix(in oklab, var(--fg) 20%, transparent);
+    --panel-text:   var(--fg);
+    --panel-text-2: var(--fg-2);
+    --panel-text-3: var(--fg-3);
+    --accent:    var(--acid);
+    --accent-fg: var(--ink);
+    --accent-ink: var(--acid);
+    --accent-bright: var(--acid);
+    --danger:    oklch(0.68 0.19 25);
+    --flame:     #FF5A1F;
+    --amber:     #D9A93A;
+    --warn:      #FF5A52;
+    --sky:       #6E9BFF;
+    --code-string:  var(--green-2);
+    --code-keyword: var(--sky);
+    --code-fn:      var(--flame);
+    --code-str-alt: var(--mascot);
+    --code-num:     var(--sun);
+  }
+}
+
+/* Nested-scope safety: if .ds-247420 appears under another .ds-247420 (e.g.
+   mount() added the class to an inner element while the ancestor html
+   already had it), the inner element would otherwise re-trigger the root
+   light defaults and detach from the ancestor's data-theme override. Force
+   the inner element to inherit the ancestor's resolved tokens. */
+.ds-247420 .ds-247420 {
+  --bg:        inherit;
+  --bg-2:      inherit;
+  --bg-3:      inherit;
+  --fg:        inherit;
+  --fg-2:      inherit;
+  --fg-3:      inherit;
+  --panel-bg:  inherit;
+  --panel-bg-2: inherit;
+  --accent:    inherit;
+  --accent-fg: inherit;
+  --accent-ink: inherit;
+  --panel-1:   inherit;
+  --panel-2:   inherit;
+  --panel-3:   inherit;
+  --panel-text: inherit;
+  --panel-text-2: inherit;
+  --panel-text-3: inherit;
+  --panel-accent-2: inherit;
+  --panel-shadow: inherit;
+  --on-accent: inherit;
+  --on-color: inherit;
+  --scrim: inherit;
+  --scrim-strong: inherit;
+  --scrim-media: inherit;
+  --cat-green: inherit;
+  --cat-purple: inherit;
+  --cat-mascot: inherit;
+  --cat-sun: inherit;
+  --cat-flame: inherit;
+  --cat-sky: inherit;
+  --code-string: inherit;
+  --code-keyword: inherit;
+  --code-fn: inherit;
+  --code-str-alt: inherit;
+  --code-num: inherit;
+}
+
+/* ============================================================
+   Named-theme preset contract
+   ------------------------------------------------------------
+   A theme is one [data-theme="X"] block that overrides ONLY the semantic
+   surface tokens — never component rules, never raw literals in component
+   sheets. The base :root above IS the "paper" theme; [data-theme="paper"]
+   restates it so the attribute is explicit and round-trippable. To add a
+   theme: copy a block, rename the attr, retune the ~8 semantic tokens.
+   ============================================================ */
+[data-theme="paper"] {
+  color-scheme: light;
+  --bg: var(--paper); --bg-2: var(--paper-2); --bg-3: var(--paper-3);
+  --fg: var(--ink);   --fg-2: var(--ink-2);   --fg-3: var(--ink-3);
+  --accent: var(--acid); --accent-fg: var(--ink); --accent-ink: var(--acid-deep);
+  /* A paper island under a dark ancestor must not inherit the dark signal pair. */
+  --flame: #C53E00; --amber: #8A6512; --warn: #E0241A; --sky: #3A6EFF;
+}
+
+/* thebird — warm-paper brand preset. A first-class swappable theme: it lives
+   here in the canonical layer (not as a global :root override) so any consumer
+   can opt in with data-theme="thebird". The OS-shell chrome (bar heights,
+   window controls) stays in src/kits/os/theme.css; only color lives here. */
+[data-theme="thebird"] {
+  color-scheme: light;
+  --paper:   #F5F0E4;
+  --paper-2: #EFE9DB;
+  --paper-3: #E3DAC7;
+  --bg: var(--paper); --bg-2: var(--paper-2); --bg-3: var(--paper-3);
+  --fg: var(--ink);   --fg-2: var(--ink-2);   --fg-3: var(--ink-3);
+  --accent: var(--green); --accent-fg: var(--paper); --accent-ink: var(--green);
+}
+
+[data-density="compact"]     { --density: 0.75; }
+[data-density="comfortable"] { --density: 1; }
+[data-density="spacious"]    { --density: 1.35; }
+
+[data-accent="acid"]   { --accent: var(--acid);   --accent-bright: var(--acid);     --accent-fg: var(--ink);   --accent-ink: var(--acid-deep); --panel-accent: var(--acid);   }
+[data-accent="green"]  { --accent: var(--green);  --accent-bright: var(--green-2);  --accent-fg: var(--paper); --accent-ink: var(--green);     --panel-accent: var(--green);  }
+[data-accent="purple"] { --accent: var(--purple); --accent-bright: #C277FF;         --accent-fg: var(--paper); --accent-ink: var(--purple-2);  --panel-accent: var(--purple); }
+[data-accent="mascot"] { --accent: var(--mascot); --accent-bright: var(--mascot-2); --accent-fg: var(--ink);   --accent-ink: var(--mascot-deep);--panel-accent: var(--mascot); }
+
+/* Type-scale modifier — opt-in body/lg/xl bump for surfaces that want denser
+   or larger reading sizes without a custom override. */
+[data-typescale="sm"] { --fs-body: 15px; --fs-lg: 17px; --fs-xl: 20px; }
+[data-typescale="lg"] { --fs-body: 17px; --fs-lg: 20px; --fs-xl: 24px; }
+
+/* Debug grid overlay — 8px mascot grid. Toggle via class on any container. */
+.with-grid-overlay {
+  background-image:
+    linear-gradient(to right, rgba(232,75,138,0.15) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(232,75,138,0.15) 1px, transparent 1px);
+  background-size: 8px 8px;
+}
+
+/* Reduced-motion guard — neutralizes every transition/animation/transform
+   inside the design-system scope when the user requests reduced motion.
+   Components remain free to opt back in with
+   `@media (prefers-reduced-motion: no-preference) { ... }`. */
+@media (prefers-reduced-motion: reduce) {
+  .ds-247420 *,
+  .ds-247420 *::before,
+  .ds-247420 *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Elevation tokens consumed by overlays (Tooltip, Popover, Dropdown, Dialog). */
+:root {
+  --shadow-1: 0 1px 2px color-mix(in oklab, var(--fg) 8%, transparent);
+  --shadow-2: 0 4px 12px color-mix(in oklab, var(--fg) 10%, transparent),
+              0 2px 4px  color-mix(in oklab, var(--fg) 6%,  transparent);
+  --shadow-3: 0 12px 32px color-mix(in oklab, var(--fg) 14%, transparent),
+              0 4px 8px   color-mix(in oklab, var(--fg) 8%,  transparent);
+  /* Overlay elevation — the float for dialogs/lightboxes that sit above a
+     scrim; heavier than --shadow-3 and theme-driven (was raw rgba(0,0,0,.4)). */
+  --shadow-overlay: 0 12px 40px color-mix(in oklab, var(--fg) 28%, transparent),
+                    0 4px 12px  color-mix(in oklab, var(--fg) 16%, transparent);
+  --z-dropdown:  600;
+  --z-popover:   700;
+  --z-modal:     800;
+  --z-toast:     900;
+  --z-tooltip:  1000;
+}
