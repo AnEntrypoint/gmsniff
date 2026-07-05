@@ -10,7 +10,7 @@ const FLAGS = {
   string: ['since', 'until', 'before', 'after', 'sub', 'event', 'sess', 'day', 'cwd', 'pid', 'sort', 'rollup', 'format', 'efficiency', 'tree', 'exclude-sess', 'exclude-cwd', 'bucket', 'days'],
   multi: ['grep', 'igrep', 'sub', 'event', 'sess', 'pid', 'exclude-sess', 'exclude-cwd'],
   number: ['limit', 'head', 'tail-n', 'ctx', 'truncate', 'top'],
-  bool: ['json', 'ndjson', 'tail', 'f', 'full', 'reverse', 'invert', 'count', 'stats', 'list-sessions', 'list-deviations', 'own-only', 'foreign-only', 'list-events', 'updates', 'watchers', 'conformance', 'all', 'all-dispatch', 'no-color', 'help', 'h', 'embed-failures', 'recall-misses', 'recall-scores', 'classifier-rejects', 'memory-leverage', 'recall-modes', 'table-drops', 'discipline-sigil-ignored'],
+  bool: ['json', 'ndjson', 'tail', 'f', 'full', 'reverse', 'invert', 'count', 'stats', 'list-sessions', 'list-deviations', 'own-only', 'foreign-only', 'list-events', 'updates', 'watchers', 'conformance', 'projects', 'all', 'all-dispatch', 'no-color', 'help', 'h', 'embed-failures', 'recall-misses', 'recall-scores', 'classifier-rejects', 'memory-leverage', 'recall-modes', 'table-drops', 'discipline-sigil-ignored'],
 };
 
 function parseArgs(argv) {
@@ -50,6 +50,10 @@ USAGE
   gmsniff --updates                     live drift state + update.* event history
   gmsniff --watchers                    one-line liveness + version per project cwd
   gmsniff --conformance                 paper §14 metrics: ε (unresolved mutables) + PRD-pending per project
+  gmsniff --projects                    alias for --conformance: alive/dead, version, PRD-pending, mutable-unknown per discovered project
+  gmsniff --prd-edit <cwd> <id> [--status <s>] [--text <t>]      rewrite a PRD row's status/text in <cwd>/.gm/prd.yml, atomic write
+  gmsniff --mutable-edit <cwd> <id> [--status <s>] [--witness <w>]  rewrite a mutable row's status/witness in <cwd>/.gm/mutables.yml, atomic write
+  gmsniff --dispatch <cwd> <verb> [--json <payload>]  write payload (default {}) to <cwd>/.gm/exec-spool/in/<verb>/<ts>.txt
   gmsniff --embed-failures [--stats]    rs-learn embed_text step failures (structured + watcher.log fallback)
   gmsniff --recall-misses [--top N]     recall events with hit=false grouped by query
   gmsniff --recall-scores [--bucket B]  histogram of top-hit recall scores (B default 0.1)
@@ -260,6 +264,114 @@ function paperConformance(cwds) {
     process.stdout.write(`${state}  v${(r.version || '?').padEnd(8)} ${eps} ${prd}  ${proj}\n`);
   }
   process.stderr.write(`# ${rows.length} projects - unresolved-mutables=eps, PRD-pend=open items\n`);
+}
+
+function collectAllCwds(all) {
+  const cwds = new Set();
+  for (const e of all) {
+    if (e._sub === 'plugkit' && e.event === 'watcher.boot' && e.spool_dir) {
+      cwds.add(path.dirname(path.dirname(e.spool_dir)));
+    } else if (e.cwd) {
+      cwds.add(e.cwd);
+    }
+  }
+  return [...cwds];
+}
+
+// Atomic write: temp file in same dir + rename, so a crash mid-write never leaves a half-written
+// prd.yml/mutables.yml (both are read by the live watcher and other CLI/GUI clients).
+function atomicWriteFileSync(filePath, content) {
+  const dir = path.dirname(filePath);
+  const tmp = path.join(dir, `.${path.basename(filePath)}.${process.pid}.${Date.now()}.tmp`);
+  fs.writeFileSync(tmp, content, 'utf-8');
+  fs.renameSync(tmp, filePath);
+}
+
+// Splits a `- id: <x>\n  field: val\n...` YAML-ish list (same convention readPrdMutablesState
+// relies on) into { header (before first row), rows: [{id, raw}] } so a single row can be
+// rewritten in place without a full YAML parser dependency.
+function splitYamlRows(text) {
+  const idx = text.search(/^- id:/m);
+  if (idx === -1) return { header: text, rows: [] };
+  const header = text.slice(0, idx);
+  const body = text.slice(idx);
+  const parts = body.split(/(?=^- id:)/m).filter(Boolean);
+  const rows = parts.map(raw => {
+    const m = raw.match(/^- id:\s*(.+)\r?\n/);
+    const id = m ? m[1].trim().replace(/^['"]|['"]$/g, '') : null;
+    return { id, raw };
+  });
+  return { header, rows };
+}
+
+function yamlScalar(v) {
+  const s = String(v);
+  if (/[:'"#\n]|^\s|\s$/.test(s) || s === '') return `'${s.replace(/'/g, "''")}'`;
+  return s;
+}
+
+// Rewrites (or appends, if absent) a `  field: value` line within one row's raw text block.
+function setYamlField(raw, field, value) {
+  const re = new RegExp(`^(  ${field}:).*$`, 'm');
+  const line = `  ${field}: ${yamlScalar(value)}`;
+  if (re.test(raw)) return raw.replace(re, line);
+  // insert after the `- id:` line
+  return raw.replace(/^(- id:.*\r?\n)/, `$1${line}\n`);
+}
+
+function editYamlRow(filePath, id, fields) {
+  const text = fs.readFileSync(filePath, 'utf-8');
+  const { header, rows } = splitYamlRows(text);
+  const row = rows.find(r => r.id === id);
+  if (!row) throw new Error(`id not found: ${id}`);
+  let raw = row.raw;
+  for (const [k, v] of Object.entries(fields)) {
+    if (v === undefined) continue;
+    raw = setYamlField(raw, k, v);
+  }
+  row.raw = raw;
+  const out = header + rows.map(r => r.raw).join('');
+  atomicWriteFileSync(filePath, out);
+  return raw;
+}
+
+function prdEdit(cwd, id, opts) {
+  const filePath = path.join(cwd, '.gm', 'prd.yml');
+  const fields = { status: opts.status };
+  if (opts.text !== undefined) {
+    // rows use whichever of subject/note/text already exists as the free-text field;
+    // reuse it rather than bolting on a duplicate `text:` line.
+    const text = fs.readFileSync(filePath, 'utf-8');
+    const { rows } = splitYamlRows(text);
+    const row = rows.find(r => r.id === id);
+    const existingField = row && /^  note:/m.test(row.raw) ? 'note' : (row && /^  text:/m.test(row.raw) ? 'text' : 'subject');
+    fields[existingField] = opts.text;
+  }
+  const raw = editYamlRow(filePath, id, fields);
+  process.stdout.write(`# updated ${filePath} id=${id}\n${raw}`);
+}
+
+function mutableEdit(cwd, id, opts) {
+  const filePath = path.join(cwd, '.gm', 'mutables.yml');
+  const raw = editYamlRow(filePath, id, { status: opts.status, witness: opts.witness });
+  process.stdout.write(`# updated ${filePath} id=${id}\n${raw}`);
+}
+
+function dispatchVerb(cwd, verb, jsonPayload) {
+  if (!/^[a-zA-Z0-9-]+$/.test(verb)) {
+    process.stderr.write(`--dispatch: verb must be alphanumeric+dash only, got: ${verb}\n`);
+    process.exit(2);
+  }
+  let payload = '{}';
+  if (jsonPayload) {
+    JSON.parse(jsonPayload); // validate
+    payload = jsonPayload;
+  }
+  const dir = path.join(cwd, '.gm', 'exec-spool', 'in', verb);
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, `${Date.now()}.txt`);
+  fs.writeFileSync(file, payload, 'utf-8');
+  process.stdout.write(`# dispatched verb=${verb} -> ${file}\n${payload}\n`);
 }
 
 function listSessions(all) {
@@ -879,6 +991,25 @@ async function launchGui(args) {
 const argv = process.argv.slice(2);
 if (argv[0] === 'gui') {
   await launchGui(argv.slice(1));
+} else if (argv[0] === '--prd-edit' || argv[0] === '--mutable-edit' || argv[0] === '--dispatch') {
+  const verb = argv[0];
+  const cwd = argv[1];
+  const idOrVerb = argv[2];
+  if (!cwd || !idOrVerb) {
+    process.stderr.write(`${verb} requires <cwd> <${verb === '--dispatch' ? 'verb' : 'id'}>\n`);
+    process.exit(2);
+  }
+  // Manual mini-parse (not the shared parseArgs/FLAGS.bool table): --json's value here is
+  // always a raw JSON string payload, never the global boolean ndjson-alias flag.
+  const rest = {};
+  const tail = argv.slice(3);
+  for (let i = 0; i < tail.length; i++) {
+    if (tail[i].startsWith('--')) { rest[tail[i].slice(2)] = tail[++i]; }
+  }
+  if (verb === '--prd-edit') prdEdit(cwd, idOrVerb, rest);
+  else if (verb === '--mutable-edit') mutableEdit(cwd, idOrVerb, rest);
+  else dispatchVerb(cwd, idOrVerb, rest.json);
+  process.exit(0);
 } else {
   const opts = parseArgs(argv);
   if (opts.help || argv.length === 0) { printHelp(); process.exit(0); }
@@ -897,16 +1028,8 @@ if (argv[0] === 'gui') {
     if (opts.updates) { updates(all, opts); process.exit(0); }
     if (opts.tree) { tree(all, opts.tree, { allDispatch: opts['all-dispatch'] }); process.exit(0); }
     if (opts.watchers) { watchers(all, opts); process.exit(0); }
-    if (opts.conformance) {
-      const cwds = new Set();
-      for (const e of all) {
-        if (e._sub === 'plugkit' && e.event === 'watcher.boot' && e.spool_dir) {
-          cwds.add(path.dirname(path.dirname(e.spool_dir)));
-        } else if (e.cwd) {
-          cwds.add(e.cwd);
-        }
-      }
-      paperConformance([...cwds]);
+    if (opts.conformance || opts.projects) {
+      paperConformance(collectAllCwds(all));
       process.exit(0);
     }
     if (opts['embed-failures']) { embedFailures(all.filter(filter), opts); process.exit(0); }
