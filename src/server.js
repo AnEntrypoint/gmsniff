@@ -3,10 +3,15 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { GmLogWatcher, replayAll, SUBSYSTEMS, DEFAULT_LOG_DIR } from './index.js';
+import {
+  readPrd, readMutables, rewriteRow, atomicWriteFile, discoverProjects, isKnownVerb, isAllowedProjectCwd,
+} from './registry.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const GUI_DIR = path.join(__dirname, '..', 'gui');
+const OWN_ROOT = path.resolve(__dirname, '..');
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json' };
+const MAX_LIFECYCLE_BODY = 65536;
 
 class Store {
   constructor(logDir) {
@@ -455,6 +460,32 @@ function pq(u) {
   return q;
 }
 
+function readBody(req, maxLen, cb) {
+  let body = '';
+  let tooLarge = false;
+  req.on('data', c => {
+    body += c;
+    if (body.length > maxLen) { tooLarge = true; req.destroy(); }
+  });
+  req.on('end', () => { if (!tooLarge) cb(null, body); });
+  req.on('aborted', () => { if (tooLarge) cb(new Error('body too large'), null); });
+}
+
+// Resolves the effective target cwd for a control endpoint and validates it against the
+// discovered project registry (own repo root always allowed). Returns { ok, cwd, error }.
+function resolveScopedCwd(store, cwdParam) {
+  const cwd = cwdParam || OWN_ROOT;
+  if (typeof cwd !== 'string' || cwd.includes('..')) {
+    return { ok: false, error: 'invalid cwd' };
+  }
+  const projects = discoverProjects(store.events);
+  const allowed = [OWN_ROOT, ...projects.map(p => p.cwd)];
+  if (!isAllowedProjectCwd(cwd, allowed)) {
+    return { ok: false, error: 'cwd not in discovered project registry' };
+  }
+  return { ok: true, cwd };
+}
+
 export function createServer({ logDir = DEFAULT_LOG_DIR, port = 0, host = '127.0.0.1' } = {}) {
   const store = new Store(logDir);
   store.load();
@@ -500,6 +531,87 @@ export function createServer({ logDir = DEFAULT_LOG_DIR, port = 0, host = '127.0
           return;
         }
         return send(res, 405, { error: 'method not allowed' });
+      }
+      if (p === '/api/projects') {
+        return send(res, 200, { projects: discoverProjects(store.events) });
+      }
+      if (p === '/api/prd') {
+        const scope = resolveScopedCwd(store, q.cwd);
+        if (!scope.ok) return send(res, 403, { error: scope.error });
+        const { mtimeMs, rows } = readPrd(scope.cwd);
+        return send(res, 200, { cwd: scope.cwd, mtimeMs, rows });
+      }
+      if (p === '/api/mutables') {
+        const scope = resolveScopedCwd(store, q.cwd);
+        if (!scope.ok) return send(res, 403, { error: scope.error });
+        const { mtimeMs, rows } = readMutables(scope.cwd);
+        return send(res, 200, { cwd: scope.cwd, mtimeMs, rows });
+      }
+      if (p === '/api/prd/edit' || p === '/api/mutables/edit') {
+        if (req.method !== 'POST') return send(res, 405, { error: 'method not allowed' });
+        readBody(req, MAX_LIFECYCLE_BODY, (err, body) => {
+          if (err) return send(res, 413, { error: 'body too large' });
+          let payload;
+          try { payload = body ? JSON.parse(body) : {}; }
+          catch (e) { return send(res, 400, { error: 'body must be JSON', detail: e.message }); }
+          const { cwd: cwdParam, id, since } = payload;
+          if (!id || typeof id !== 'string') return send(res, 400, { error: 'id is required' });
+          const scope = resolveScopedCwd(store, cwdParam);
+          if (!scope.ok) return send(res, 403, { error: scope.error });
+          const isPrd = p === '/api/prd/edit';
+          const relPath = isPrd ? path.join(scope.cwd, '.gm', 'prd.yml') : path.join(scope.cwd, '.gm', 'mutables.yml');
+          let stat;
+          try { stat = fs.statSync(relPath); }
+          catch (e) { return send(res, 404, { error: 'file not found', detail: e.message }); }
+          if (since !== undefined && since !== null) {
+            const sinceMs = Number(since);
+            if (Number.isFinite(sinceMs) && Math.abs(stat.mtimeMs - sinceMs) > 1) {
+              const current = isPrd ? readPrd(scope.cwd) : readMutables(scope.cwd);
+              const currentRow = current.rows.find(r => r.id === id) || null;
+              return send(res, 409, { error: 'conflict: file changed since read', mtimeMs: stat.mtimeMs, currentRow });
+            }
+          }
+          const text = fs.readFileSync(relPath, 'utf-8');
+          const fields = {};
+          if (isPrd) {
+            if (payload.status !== undefined) fields.status = payload.status;
+            if (payload.text !== undefined) fields.text = payload.text;
+          } else {
+            if (payload.status !== undefined) fields.status = payload.status;
+            if (payload.witness !== undefined) fields.witness_evidence = payload.witness;
+          }
+          const newText = rewriteRow(text, id, fields);
+          if (newText === null) return send(res, 404, { error: `row not found: ${id}` });
+          try { atomicWriteFile(relPath, newText); }
+          catch (e) { return send(res, 500, { error: String(e?.message || e) }); }
+          const result = isPrd ? readPrd(scope.cwd) : readMutables(scope.cwd);
+          const updatedRow = result.rows.find(r => r.id === id) || null;
+          return send(res, 200, { ok: true, cwd: scope.cwd, id, row: updatedRow, mtimeMs: result.mtimeMs });
+        });
+        return;
+      }
+      if (p === '/api/lifecycle') {
+        if (req.method !== 'POST') return send(res, 405, { error: 'method not allowed' });
+        readBody(req, MAX_LIFECYCLE_BODY, (err, body) => {
+          if (err) return send(res, 413, { error: 'body too large' });
+          let payload;
+          try { payload = body ? JSON.parse(body) : {}; }
+          catch (e) { return send(res, 400, { error: 'body must be JSON', detail: e.message }); }
+          const { cwd: cwdParam, verb, payload: verbPayload } = payload;
+          if (!isKnownVerb(verb)) return send(res, 400, { error: 'unknown or invalid verb', verb });
+          const scope = resolveScopedCwd(store, cwdParam);
+          if (!scope.ok) return send(res, 403, { error: scope.error });
+          const verbDir = path.join(scope.cwd, '.gm', 'exec-spool', 'in', verb);
+          try {
+            fs.mkdirSync(verbDir, { recursive: true });
+            const file = path.join(verbDir, `${Date.now()}.txt`);
+            fs.writeFileSync(file, JSON.stringify(verbPayload || {}), 'utf-8');
+            return send(res, 200, { ok: true, cwd: scope.cwd, verb, file });
+          } catch (e) {
+            return send(res, 500, { error: String(e?.message || e) });
+          }
+        });
+        return;
       }
       if (p === '/api/stream') {
         res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive', 'Access-Control-Allow-Origin': '*' });
