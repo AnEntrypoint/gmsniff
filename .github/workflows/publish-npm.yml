@@ -3,7 +3,7 @@ name: Bump and Publish to npm
 on:
   push:
     branches:
-      - master
+      - main
 
 jobs:
   publish:
