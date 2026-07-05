@@ -7,9 +7,22 @@
 import * as webjsx from 'webjsx';
 import { Chip, Badge, Btn, Glyph } from 'ds/components/shell.js';
 import { PhaseWalk, TreeNode, BarRow, StatTile, StatsGrid, SubGrid, SessionRow, DevRow, LiveLog } from 'ds/components/data-density.js';
+import { TreeView, TreeItem, PropertyGrid, PropertyField, Dialog } from 'ds/components/editor-primitives.js';
 import { api, apiPost, esc, fmtTs, state, toast } from './data.js';
+import { runForceLayout } from './forcegraph.js';
 
 const h = webjsx.createElement;
+
+// ---------------------------------------------------------------------------
+// TOOLBAR primitive -- gmsniff has no dedicated ds Toolbar component; this
+// is the same inline `.gm-toolbar` row already used by AllEvents/Search/
+// SubsystemPanel/QueryPanel/Codesearch/GmCallConsole, factored into a small
+// helper so panels that had NO toolbar (Sessions, Process Tree, Deviations,
+// Live Stream) can add one with the same visual/behavioral shape.
+// `actions` is an array of vnodes (buttons/inputs/chips) rendered left-to-right.
+function Toolbar(...actions) {
+  return h('div', { class: 'gm-toolbar' }, ...actions);
+}
 
 export const SUB_COLORS = {
   hook: 'var(--purple, #bc8cff)', exec: 'var(--accent, #58a6ff)', rs_learn: 'var(--green, #3fb950)',
@@ -55,7 +68,15 @@ export async function Dashboard() {
   const evRows = evSorted.length
     ? evSorted.map(([ev, n]) => BarRow({ label: ev || '?', value: String(n), pct: snap.total ? Math.round(n / snap.total * 100) : 0 }))
     : [Empty('No events observed yet.')];
+  const exportBtn = Btn({
+    children: 'Export',
+    variant: 'ghost',
+    onClick: () => {
+      window.location.href = '/api/export?cwd=' + encodeURIComponent(state.cwd || '');
+    },
+  });
   return h('div', {},
+    h('div', { style: 'display:flex;justify-content:flex-end;margin-bottom:8px' }, Toolbar(exportBtn)),
     h('div', { style: 'margin-bottom:12px' }, stats),
     h('div', { class: 'gm-flex-row' },
       h('div', { class: 'ds-panel' }, h('h2', {}, 'Subsystems'), ...(snap.total ? subRows : [Empty('No data.')])),
@@ -79,19 +100,36 @@ export async function ByDay() {
 // LIVE STREAM
 // ---------------------------------------------------------------------------
 let liveEntries = [];
+// Pause gates only the autoscroll-on-new-event behavior: paused events still
+// append to liveEntries (so nothing is lost / the buffer stays complete),
+// they just don't yank the view to the bottom, and liveNewCount tracks how
+// many arrived while paused so the toolbar can show an "N new" indicator.
+let livePaused = false;
+let liveNewCount = 0;
 export function pushLiveEntry(ev) {
   const payload = { ...ev };
   delete payload._sub; delete payload._day; delete payload._fp;
   liveEntries.push({ key: liveEntries.length, ts: fmtTs(ev.ts), sub: ev._sub, tone: colorFor(ev._sub || ''), event: ev.event || '?', preview: JSON.stringify(payload).slice(0, 200) });
   if (liveEntries.length > 2000) liveEntries.shift();
+  if (livePaused) liveNewCount++;
 }
 export function LiveStream({ connState = 'connecting' } = {}) {
   const toneMap = { live: 'positive', reconnecting: 'warn', connecting: 'neutral', closed: 'danger' };
+  const pauseBtn = Btn({
+    children: livePaused ? `Resume${liveNewCount ? ` (${liveNewCount} new)` : ''}` : 'Pause',
+    variant: livePaused ? 'primary' : 'ghost',
+    onClick: () => {
+      livePaused = !livePaused;
+      if (!livePaused) liveNewCount = 0; // resume snaps to bottom (autoScroll) and clears the indicator
+    },
+  });
   return h('div', { class: 'ds-panel', style: 'padding:8px' },
     h('div', { style: 'display:flex;justify-content:space-between;align-items:center;margin-bottom:6px' },
       h('h2', { style: 'margin:0' }, 'Live Stream'),
-      Chip({ tone: toneMap[connState] || 'neutral', children: connState })),
-    liveEntries.length ? LiveLog({ entries: liveEntries.slice(-500), autoScroll: true }) : Empty('No live events received yet.'));
+      h('div', { style: 'display:flex;align-items:center;gap:8px' },
+        Chip({ tone: toneMap[connState] || 'neutral', children: connState }),
+        Toolbar(pauseBtn))),
+    liveEntries.length ? LiveLog({ entries: liveEntries.slice(-500), autoScroll: !livePaused }) : Empty('No live events received yet.'));
 }
 
 // ---------------------------------------------------------------------------
@@ -198,33 +236,132 @@ export async function SubsystemPanel(sub, setBody) {
 // ---------------------------------------------------------------------------
 // DEVIATIONS
 // ---------------------------------------------------------------------------
-export async function Deviations() {
+const deviationsFilterState = { sessQuery: '' };
+export async function Deviations(setBody) {
   const r = await api('/api/deviations?limit=200');
   if (r.error) return Empty('Failed to load deviations: ' + r.error);
+  const q = (deviationsFilterState.sessQuery || '').trim().toLowerCase();
+  // Client-side only: no new API call, filters the already-fetched arrays by
+  // session-id substring match before rendering.
+  const recentAll = r.recent || [];
+  const recent = q ? recentAll.filter(e => String(e.sess || '').toLowerCase().includes(q)) : recentAll;
+  const bySessionEntries = Object.entries(r.bySession || {});
+  const bySessionFiltered = q ? bySessionEntries.filter(([s]) => s.toLowerCase().includes(q)) : bySessionEntries;
   const kindRows = Object.entries(r.byKind || {}).sort((a, b) => b[1] - a[1]);
-  const sessRows = Object.entries(r.bySession || {}).sort((a, b) => b[1] - a[1]).slice(0, 15);
+  const sessRows = bySessionFiltered.sort((a, b) => b[1] - a[1]).slice(0, 15);
+  const toolbar = Toolbar(
+    h('input', {
+      placeholder: 'filter by session id...', value: deviationsFilterState.sessQuery,
+      oninput: (e) => { deviationsFilterState.sessQuery = e.target.value; if (setBody) setBody(); },
+    }),
+    q ? Btn({ children: 'Clear', variant: 'ghost', onClick: () => { deviationsFilterState.sessQuery = ''; if (setBody) setBody(); } }) : null,
+  );
   return h('div', {},
+    h('div', { class: 'ds-panel' }, toolbar),
     h('div', { class: 'gm-flex-row' },
       h('div', { class: 'ds-panel' }, h('h2', {}, 'By Deviation Kind'),
         ...(kindRows.length ? kindRows.map(([k, n]) => BarRow({ label: k, value: String(n), tone: 'var(--flame, #f85149)' })) : [Empty('No deviations recorded yet.')])),
       h('div', { class: 'ds-panel' }, h('h2', {}, 'By Session'),
-        ...(sessRows.length ? sessRows.map(([s, n]) => BarRow({ label: s.slice(0, 60), value: String(n) })) : [Empty('-')]))),
-    h('div', { class: 'ds-panel' }, h('h2', {}, `Recent Deviations (${r.total})`),
-      ...((r.recent || []).length ? r.recent.map((e, i) => DevRow({
+        ...(sessRows.length ? sessRows.map(([s, n]) => BarRow({ label: s.slice(0, 60), value: String(n) })) : [Empty(q ? 'No sessions match filter.' : '-')]))),
+    h('div', { class: 'ds-panel' }, h('h2', {}, `Recent Deviations (${recent.length}${q ? ` of ${r.total}` : ` / ${r.total}`})`),
+      ...(recent.length ? recent.map((e, i) => DevRow({
         ts: fmtTs(e.ts), event: e.event, sess: (e.sess || '-').slice(0, 20), operation: e.operation,
         residuals: Array.isArray(e.residuals) ? e.residuals : (e.reason ? [e.reason] : []),
-      })) : [Empty('No deviations recorded -- agents are following the process.')])));
+      })) : [Empty(q ? 'No deviations match filter.' : 'No deviations recorded -- agents are following the process.')])));
 }
 
 // ---------------------------------------------------------------------------
 // SESSIONS / PROCESS TREE
 // ---------------------------------------------------------------------------
 const PHASES = ['PLAN', 'EXECUTE', 'EMIT', 'VERIFY', 'COMPLETE'];
-export async function Sessions(onOpen) {
+
+// Session detail Dialog: focus-trapped modal (ds Dialog primitive) opened by
+// clicking a SessionRow. Fetches the phase walk + full event list scoped to
+// that session (GET /api/process-tree?sessionId=) and the deviations scoped
+// to the same session (GET /api/deviations?sessionId=) -- both server-side
+// filtered, not client-side slicing of the whole-project payload.
+const sessionDetailState = { open: false, sess: null, loading: false, tree: null, deviations: null, error: null };
+
+async function openSessionDetail(sess, setBody) {
+  sessionDetailState.open = true;
+  sessionDetailState.sess = sess;
+  sessionDetailState.loading = true;
+  sessionDetailState.tree = null;
+  sessionDetailState.deviations = null;
+  sessionDetailState.error = null;
+  setBody();
+  try {
+    const [tree, deviations] = await Promise.all([
+      api('/api/process-tree?sessionId=' + encodeURIComponent(sess)),
+      api('/api/deviations?sessionId=' + encodeURIComponent(sess) + '&limit=200'),
+    ]);
+    if (tree.error || deviations.error) {
+      sessionDetailState.error = tree.error || deviations.error;
+      toast(`Failed to load session detail: ${sessionDetailState.error}`, true);
+    } else {
+      sessionDetailState.tree = tree;
+      sessionDetailState.deviations = deviations;
+    }
+  } catch (e) {
+    sessionDetailState.error = String(e && e.message || e);
+    toast(`Failed to load session detail: ${sessionDetailState.error}`, true);
+  }
+  sessionDetailState.loading = false;
+  setBody();
+}
+
+function closeSessionDetail(setBody) {
+  sessionDetailState.open = false;
+  sessionDetailState.sess = null;
+  sessionDetailState.tree = null;
+  sessionDetailState.deviations = null;
+  sessionDetailState.error = null;
+  setBody();
+}
+
+export function SessionDetailDialog(setBody) {
+  const s = sessionDetailState;
+  if (!s.open) return null;
+  const devRows = (s.deviations && s.deviations.recent) || [];
+  const body = s.loading
+    ? Empty('Loading session detail...')
+    : s.error
+      ? h('p', { style: 'color:var(--flame,#f85149)' }, s.error)
+      : h('div', {},
+          PhaseWalk({ reached: s.tree && s.tree.phase_reached, gapKinds: ((s.tree && s.tree.gaps) || []).map(g => g.kind) }),
+          h('h2', { style: 'margin-top:10px' }, `Events (${((s.tree && s.tree.nodes) || []).length})`),
+          ((s.tree && s.tree.nodes) || []).length
+            ? renderEventTable(s.tree.nodes)
+            : Empty('No process events for this session.'),
+          h('h2', { style: 'margin-top:10px' }, `Deviations (${(s.deviations && s.deviations.total) || 0})`),
+          devRows.length
+            ? h('div', {}, ...devRows.map((e, i) => DevRow({
+                ts: fmtTs(e.ts), event: e.event, sess: (e.sess || '-').slice(0, 20), operation: e.operation,
+                residuals: Array.isArray(e.residuals) ? e.residuals : (e.reason ? [e.reason] : []),
+              })))
+            : Empty('No deviations recorded for this session.'));
+  return Dialog({
+    title: `Session ${s.sess ? String(s.sess).slice(0, 40) : ''}`,
+    open: true,
+    dismissible: true,
+    ariaLabel: 'Session detail',
+    onClose: () => closeSessionDetail(setBody),
+    actions: [{ label: 'Close', onClick: () => closeSessionDetail(setBody) }],
+    children: body,
+  });
+}
+
+export async function Sessions(onOpen, setBody) {
+  // Refresh action re-invokes this exact same fetch (api('/api/sessions...'))
+  // via the caller's setBody, then re-renders through the panel's existing
+  // render path -- no new fetch abstraction, same convention every other
+  // panel's toolbar Refresh already uses.
+  const refreshToolbar = setBody ? Toolbar(Btn({ children: 'Refresh', variant: 'ghost', onClick: () => setBody(true) })) : null;
   const r = await api('/api/sessions?limit=200');
-  if (r.error) return Empty('Failed to load sessions: ' + r.error);
-  if (!r.rows || !r.rows.length) return Empty('No sessions recorded yet.');
-  return h('div', { class: 'ds-panel' }, h('h2', {}, `Sessions (${r.total})`),
+  if (r.error) return h('div', {}, refreshToolbar, Empty('Failed to load sessions: ' + r.error));
+  if (!r.rows || !r.rows.length) return h('div', {}, refreshToolbar, Empty('No sessions recorded yet.'));
+  return h('div', {}, h('div', { class: 'ds-panel' }, h('h2', {}, `Sessions (${r.total})`),
+    refreshToolbar,
     ...r.rows.map(s => {
       const gaps = [];
       for (let i = 0; i < PHASES.length - 1; i++) if (s.phases_reached[i + 1] && !s.phases_reached[i]) gaps.push(PHASES[i]);
@@ -233,38 +370,137 @@ export async function Sessions(onOpen) {
         muts: `${s.mutable_adds}/${s.mutable_resolves}`, resid: `${s.residual_fires}f/${s.residual_skips}s`,
         deviations: s.deviations, firstTs: fmtTs(s.first_ts), lastTs: fmtTs(s.last_ts),
         phaseWalkProps: { reached: s.phases_reached, gapKinds: gaps },
-        onClick: () => onOpen(s.sess),
+        onClick: () => openSessionDetail(s.sess, () => setBody && setBody(true)),
       });
-    }));
+    })),
+    SessionDetailDialog(() => setBody && setBody(true)));
 }
 
-export async function ProcessTree(sess, sessList, onSelect) {
+// Hierarchical grouping: sess (root) -> phase (group) -> individual node rows.
+// Every node carries `phase` (its parent-linking field on process-tree events);
+// group id shape is stable across renders so the expanded-Set survives re-fetch.
+function buildProcessTreeHierarchy(sess, nodes) {
+  const groups = new Map(); // phase -> nodes[]
+  for (const n of nodes) {
+    const phase = n.phase || '(no phase)';
+    if (!groups.has(phase)) groups.set(phase, []);
+    groups.get(phase).push(n);
+  }
+  const PHASE_ORDER = ['PLAN', 'EXECUTE', 'EMIT', 'VERIFY', 'CONSOLIDATE', 'COMPLETE', '(no phase)'];
+  const phaseKeys = [...groups.keys()].sort((a, b) => {
+    const ia = PHASE_ORDER.indexOf(a), ib = PHASE_ORDER.indexOf(b);
+    return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
+  });
+  return {
+    id: 'root:' + sess,
+    label: sess,
+    children: phaseKeys.map(phase => ({
+      id: 'phase:' + sess + ':' + phase,
+      label: phase,
+      tag: `${groups.get(phase).length} events`,
+      children: groups.get(phase).map((n, i) => ({
+        id: 'node:' + sess + ':' + phase + ':' + i,
+        label: n.kind + (n.id ? ' ' + n.id : '') + (n.deviation ? ' ' + n.deviation : ''),
+        tag: fmtTs(n.ts),
+        node: n,
+        children: null,
+      })),
+    })),
+  };
+}
+
+// Flatten to the currently-visible rows (root + expanded descendants only),
+// depth-first, for roving-focus index math (Up/Down/Right/Left navigation).
+function visibleTreeRows(root, expanded, depth = 0, out = []) {
+  out.push({ item: root, depth });
+  if (root.children && root.children.length && expanded.has(root.id)) {
+    for (const c of root.children) visibleTreeRows(c, expanded, depth + 1, out);
+  }
+  return out;
+}
+
+const treeUiState = { expanded: new Set(), focusId: null };
+export async function ProcessTree(sess, sessList, onSelect, onOpenSession, onRefresh) {
   const selector = h('select', {
     value: sess || '',
     onchange: (e) => onSelect(e.target.value),
   }, h('option', { value: '' }, 'select session...'),
     ...(sessList || []).map(s => h('option', { value: s.sess, selected: s.sess === sess ? true : null }, `${s.sess.slice(0, 40)} -- ${fmtTs(s.last_ts)} -- ${s.events}ev${s.deviations ? ' !' + s.deviations : ''}`)));
-  if (!sess) return h('div', { class: 'ds-panel' }, h('div', { class: 'gm-toolbar' }, selector), Empty('Select a session.'));
+  // Refresh re-invokes the same api('/api/process-tree...') fetch below (via
+  // the caller's onRefresh, which forces app.js's existing fetch-and-rerender
+  // path) -- no new fetch abstraction.
+  const refreshBtn = onRefresh ? Btn({ children: 'Refresh', variant: 'ghost', onClick: () => onRefresh(sess) }) : null;
+  if (!sess) return h('div', { class: 'ds-panel' }, h('div', { class: 'gm-toolbar' }, selector, refreshBtn), Empty('Select a session.'));
   const r = await api('/api/process-tree?sess=' + encodeURIComponent(sess));
   const gapsBlock = (r.gaps && r.gaps.length)
     ? h('div', { class: 'ds-panel', style: 'border-color:var(--flame,#f85149)' }, h('h2', { style: 'color:var(--flame,#f85149)' }, 'Gaps detected'),
       ...r.gaps.map((g, i) => DevRow({ ts: fmtTs(g.ts), event: g.kind, operation: g.from ? `${g.from} -> ${g.to}` : (g.deviation || ''), residuals: g.detail ? [`first non-instruction event: ${g.detail.event} verb=${g.detail.verb || ''}`] : [] })))
     : null;
-  const nodes = (r.nodes || []).map((n, i) => {
-    const variant = (n.kind === 'transition' || n.kind === 'instruction') ? 'phase' : (n.kind === 'deviation' ? 'deviation' : n.kind === 'mutable-resolve' ? 'mutable-resolve' : n.kind === 'prd-add' ? 'prd-add' : '');
-    return TreeNode({
-      ts: fmtTs(n.ts), kind: n.kind, variant, phase: n.phase, id: n.id,
-      keyLabel: n.key ? 'key:' + String(n.key).slice(0, 30) : null,
-      reason: n.reason || (n.kind === 'instruction' ? `prd:${n.prd_pending || 0} muts:${n.mutables_pending || 0}` : null),
-      deviationLabel: n.deviation, residuals: Array.isArray(n.residuals) ? n.residuals : null,
+
+  const root = buildProcessTreeHierarchy(sess, r.nodes || []);
+  // Collapsed by default below depth 1: root (depth 0) starts expanded so its
+  // phase groups (depth 1) show; phase groups themselves start collapsed.
+  if (!treeUiState.expanded.has(root.id) && !r._seeded) treeUiState.expanded.add(root.id);
+
+  const rerender = () => { /* re-render is driven by caller's setBody via onSelect(sess) re-invoke path below */ renderTreePanelInPlace(); };
+  // A local re-render hook: the caller (app.js) re-computes the whole body on
+  // most actions, but expand/collapse must not require a network refetch --
+  // stash a rerender callback the row handlers can call synchronously.
+  let doRerender = () => {};
+
+  function openSession(targetSess) {
+    if (onOpenSession) onOpenSession(targetSess);
+    else if (onSelect) onSelect(targetSess);
+  }
+
+  function renderNode(item, depth, visRows) {
+    const hasKids = !!(item.children && item.children.length);
+    const expanded = treeUiState.expanded.has(item.id);
+    const isFocused = treeUiState.focusId === item.id;
+    return TreeItem({
+      label: item.label,
+      tag: item.tag || null,
+      depth,
+      selected: isFocused,
+      expanded,
+      hasChildren: hasKids,
+      onToggle: () => { if (expanded) treeUiState.expanded.delete(item.id); else treeUiState.expanded.add(item.id); treeUiState.focusId = item.id; doRerender(); },
+      onSelect: () => {
+        treeUiState.focusId = item.id;
+        if (item.node && item.node.id) openSession(sess);
+        else if (!hasKids && item.node) openSession(sess);
+        else if (hasKids) { if (!expanded) treeUiState.expanded.add(item.id); else treeUiState.expanded.delete(item.id); }
+        doRerender();
+      },
+      children: hasKids ? item.children.map(c => renderNode(c, depth + 1, visRows)) : null,
     });
-  });
-  return h('div', { class: 'ds-panel' },
-    h('div', { class: 'gm-toolbar' }, selector),
-    h('h2', {}, sess), PhaseWalk({ reached: r.phase_reached, gapKinds: [] }),
-    gapsBlock,
-    h('h2', { style: 'margin-top:10px' }, `Timeline (${(r.nodes || []).length})`),
-    ...(nodes.length ? nodes : [Empty('No process events for this session.')]));
+  }
+
+  function build() {
+    if (!treeUiState.focusId) treeUiState.focusId = root.id;
+    return h('div', { class: 'ds-panel' },
+      h('div', { class: 'gm-toolbar' }, selector, refreshBtn),
+      h('h2', {}, sess), PhaseWalk({ reached: r.phase_reached, gapKinds: [] }),
+      gapsBlock,
+      h('h2', { style: 'margin-top:10px' }, `Process Tree (${(r.nodes || []).length} events)`),
+      (r.nodes || []).length
+        ? TreeView({ children: [renderNode(root, 0, [])] })
+        : Empty('No process events for this session.'));
+  }
+
+  // Re-render only this panel's container in place (no network refetch) so
+  // expand/collapse and roving focus feel instant; falls back to full
+  // computeBody() flow on next navigation since ui.bodyNode is recomputed there.
+  function renderTreePanelInPlace() {
+    const container = document.getElementById('panel-body');
+    if (!container) return;
+    import('webjsx').then(webjsx => {
+      webjsx.applyDiff(container, h('main', { id: 'panel-body', class: 'gm-panel-body' }, build()));
+    });
+  }
+  doRerender = renderTreePanelInPlace;
+
+  return build();
 }
 
 // ---------------------------------------------------------------------------
@@ -366,12 +602,41 @@ export async function HookStats() {
 // ---------------------------------------------------------------------------
 // PRD EDITOR / MUTABLES EDITOR
 // ---------------------------------------------------------------------------
-async function editRow(kind, id, since, fields, setBody) {
+const PRD_STATUSES = ['pending', 'in_progress', 'resolved', 'blocked'];
+const MUTABLE_STATUSES = ['unknown', 'resolved'];
+const fieldErrState = {}; // rowId:field -> error message, cleared per-field on successful commit
+
+async function editRow(kind, id, since, fields, setBody, errKey) {
   const path = kind === 'prd' ? '/api/prd/edit' : '/api/mutables/edit';
   const r = await apiPost(path, { id, since, ...fields }, { scoped: true });
   if (r.status === 409) { toast(`Conflict: ${id} was modified since read (mtime ${r.mtimeMs}). Reloading.`, true); setBody(true); return; }
   if (r.status !== 200) { toast(`Edit failed: ${r.error || r.status}`, true); return; }
+  if (errKey) delete fieldErrState[errKey];
   toast(`Saved ${id}`); setBody(true);
+}
+
+// Validates a field value before firing the network commit; returns an error
+// string (shown via PropertyField's hint slot) or null when the value is valid.
+export function validatePrdField(field, value) {
+  if (field === 'text' && !String(value || '').trim()) return 'text is required';
+  if (field === 'status' && !PRD_STATUSES.includes(value)) return `status must be one of: ${PRD_STATUSES.join(', ')}`;
+  return null;
+}
+export function validateMutableField(field, value) {
+  if (field === 'status' && !MUTABLE_STATUSES.includes(value)) return `status must be one of: ${MUTABLE_STATUSES.join(', ')}`;
+  if (field === 'witness' && value != null && String(value).trim() === '' && value !== '') return 'witness evidence cannot be blank once started';
+  return null;
+}
+
+// Exported so the Ctrl+K command palette can commit a PRD/mutable field edit
+// through the identical validate-then-POST /api/{prd,mutables}/edit path the
+// PRD/Mutables Editor panels' inline inputs use.
+export function commitField(kind, row, field, value, since, setBody, validate) {
+  const errKey = `${kind}:${row.id}:${field}`;
+  const err = validate(field, value);
+  if (err) { fieldErrState[errKey] = err; setBody(); return; }
+  delete fieldErrState[errKey];
+  editRow(kind, row.id, since, { [field]: value }, setBody, errKey);
 }
 
 export async function PrdEditor(setBody) {
@@ -380,17 +645,23 @@ export async function PrdEditor(setBody) {
   if (!r.rows || !r.rows.length) return Empty('No PRD rows for this project.');
   const since = r.mtimeMs;
   return h('div', { class: 'ds-panel' }, h('h2', {}, `PRD (${r.rows.length} rows)`),
-    h('table', { class: 'gm-table' }, h('tr', {}, h('th', {}, 'id'), h('th', {}, 'status'), h('th', {}, 'text')),
-      ...r.rows.map((row, i) => h('tr', { key: row.id },
-        h('td', {}, row.id),
-        h('td', {}, h('select', {
-          value: row.status,
-          onchange: (e) => editRow('prd', row.id, since, { status: e.target.value }, setBody),
-        }, ...['pending', 'in_progress', 'resolved', 'blocked'].map(s => h('option', { value: s, selected: s === row.status ? true : null }, s)))),
-        h('td', {}, h('input', {
-          class: 'gm-inline-input', value: row.text,
-          onchange: (e) => editRow('prd', row.id, since, { text: e.target.value }, setBody),
-        }))))));
+    ...r.rows.map(row => {
+      const statusErr = fieldErrState[`prd:${row.id}:status`];
+      const textErr = fieldErrState[`prd:${row.id}:text`];
+      return h('div', { key: row.id, class: 'gm-propgrid-row' },
+        PropertyGrid({ children: [
+          PropertyField({ label: 'id', inline: true, children: h('span', { class: 'gm-inline-input', style: 'opacity:.7' }, row.id) }),
+          PropertyField({ label: 'status', hint: statusErr || null, children: h('select', {
+            value: row.status,
+            class: statusErr ? 'gm-field-error' : '',
+            onchange: (e) => commitField('prd', row, 'status', e.target.value, since, setBody, validatePrdField),
+          }, ...PRD_STATUSES.map(s => h('option', { value: s, selected: s === row.status ? true : null }, s))) }),
+          PropertyField({ label: 'text', hint: textErr || null, children: h('input', {
+            class: 'gm-inline-input' + (textErr ? ' gm-field-error' : ''), value: row.text,
+            onchange: (e) => commitField('prd', row, 'text', e.target.value, since, setBody, validatePrdField),
+          }) }),
+        ] }));
+    }));
 }
 
 export async function MutablesEditor(setBody) {
@@ -399,33 +670,46 @@ export async function MutablesEditor(setBody) {
   if (!r.rows || !r.rows.length) return Empty('No mutable rows for this project.');
   const since = r.mtimeMs;
   return h('div', { class: 'ds-panel' }, h('h2', {}, `Mutables (${r.rows.length} rows)`),
-    h('table', { class: 'gm-table' }, h('tr', {}, h('th', {}, 'id'), h('th', {}, 'status'), h('th', {}, 'witness')),
-      ...r.rows.map(row => h('tr', { key: row.id, style: row.status === 'unknown' ? 'background:color-mix(in oklab, var(--flame,#f85149) 12%, transparent)' : null },
-        h('td', {}, row.id),
-        h('td', {}, Badge({ children: row.status, tone: row.status === 'unknown' ? 'danger' : (row.status === 'resolved' ? 'positive' : 'neutral') })),
-        h('td', {}, h('input', {
-          class: 'gm-inline-input', value: row.witness_evidence || '', placeholder: 'witness evidence...',
-          onchange: (e) => editRow('mutables', row.id, since, { witness: e.target.value }, setBody),
-        }))))));
+    ...r.rows.map(row => {
+      const statusErr = fieldErrState[`mutables:${row.id}:status`];
+      const witnessErr = fieldErrState[`mutables:${row.id}:witness`];
+      return h('div', {
+        key: row.id, class: 'gm-propgrid-row',
+        style: row.status === 'unknown' ? 'background:color-mix(in oklab, var(--flame,#f85149) 12%, transparent)' : null,
+      },
+        PropertyGrid({ children: [
+          PropertyField({ label: 'id', inline: true, children: h('span', { class: 'gm-inline-input', style: 'opacity:.7' }, row.id) }),
+          PropertyField({ label: 'status', hint: statusErr || null, children: h('span', {}, Badge({ children: row.status, tone: row.status === 'unknown' ? 'danger' : (row.status === 'resolved' ? 'positive' : 'neutral') })) }),
+          PropertyField({ label: 'witness', hint: witnessErr || null, children: h('input', {
+            class: 'gm-inline-input' + (witnessErr ? ' gm-field-error' : ''), value: row.witness_evidence || '', placeholder: 'witness evidence...',
+            onchange: (e) => commitField('mutables', row, 'witness', e.target.value, since, setBody, validateMutableField),
+          }) }),
+        ] }));
+    }));
 }
 
 // ---------------------------------------------------------------------------
 // LIFECYCLE CONTROL
 // ---------------------------------------------------------------------------
+// Exported so the Ctrl+K command palette (app.js) can invoke the exact same
+// dispatch the Lifecycle Control panel's buttons call -- one handler, two
+// entry points, no click-simulation.
+export async function lifecycleAct(verb, payload) {
+  const r = await apiPost('/api/lifecycle', { verb, payload }, { scoped: true });
+  toast(r.status === 200 ? `Dispatched ${verb}` : `Dispatch failed: ${r.error || r.status}`, r.status !== 200);
+  return r;
+}
+
 export async function LifecycleControl(setBody) {
   const [prd, mutables] = await Promise.all([api('/api/prd', { scoped: true }), api('/api/mutables', { scoped: true })]);
   const pending = (prd.rows || []).filter(r => r.status !== 'resolved').length;
   const unknown = (mutables.rows || []).filter(r => r.status === 'unknown').length;
-  const act = async (verb, payload) => {
-    const r = await apiPost('/api/lifecycle', { verb, payload }, { scoped: true });
-    toast(r.status === 200 ? `Dispatched ${verb}` : `Dispatch failed: ${r.error || r.status}`, r.status !== 200);
-  };
   return h('div', { class: 'ds-panel' }, h('h2', {}, 'Lifecycle Control'),
     StatsGrid({ items: [{ val: pending, lbl: 'PRD pending' }, { val: unknown, lbl: 'mutables unknown', cls: unknown ? 'err-rate' : '' }] }),
     h('div', { class: 'gm-toolbar', style: 'margin-top:12px' },
-      Btn({ children: 'Transition', onClick: () => act('transition', {}) }),
-      Btn({ children: 'Instruction', onClick: () => act('instruction', {}) }),
-      Btn({ children: 'Residual Scan', onClick: () => act('residual-scan', {}) })));
+      Btn({ children: 'Transition', onClick: () => lifecycleAct('transition', {}) }),
+      Btn({ children: 'Instruction', onClick: () => lifecycleAct('instruction', {}) }),
+      Btn({ children: 'Residual Scan', onClick: () => lifecycleAct('residual-scan', {}) })));
 }
 
 // ---------------------------------------------------------------------------
@@ -484,7 +768,9 @@ export function Codesearch(setBody) {
           h('pre', { class: 'gm-json' }, hit.snippet || JSON.stringify(hit, null, 2))))))
   );
 }
-async function runCodesearch(setBody) {
+// Exported so the Ctrl+K command palette can trigger the exact same search
+// path as the Search panel's "Search" button, reusing codesearchState/setBody.
+export async function runCodesearch(setBody) {
   if (!codesearchState.q) return;
   codesearchState.loading = true; codesearchState.error = null; setBody();
   const r = await apiPost('/api/codesearch', { query: codesearchState.q }, { scoped: true });
@@ -513,7 +799,9 @@ export function GmCallConsole(setBody) {
     consoleState.dispatched ? h('p', { style: 'color:var(--muted);font-size:11px' }, `Dispatched: ${consoleState.dispatched.verb} -> ${consoleState.dispatched.file || ''} ${consoleState.polling ? '(polling for response...)' : ''}`) : null,
     consoleState.result ? h('pre', { class: 'gm-json' }, JSON.stringify(consoleState.result, null, 2)) : Empty('No dispatch yet.'));
 }
-async function dispatchConsole(setBody) {
+// Exported so the Ctrl+K command palette can fire the exact same dispatch
+// as the GM Call Console's "Dispatch" button (same consoleState, same poll).
+export async function dispatchConsole(setBody) {
   let payload;
   try { payload = JSON.parse(consoleState.payload || '{}'); }
   catch (e) { toast('Invalid JSON payload: ' + e.message, true); return; }
@@ -575,18 +863,122 @@ export async function ConversationHistory(sess, sessList, onSelect) {
 }
 
 // ---------------------------------------------------------------------------
-// CODEINSIGHT VISUAL
+// CODEINSIGHT VISUAL -- squarified treemap of per-file size/complexity
 // ---------------------------------------------------------------------------
-export async function CodeInsightPanel() {
+
+// Squarified treemap layout: recursively slices the remaining rect, always
+// placing the next run of items along whichever axis keeps aspect ratios
+// closest to square. Pure function, no DOM/state -- items: [{name,size,
+// complexity,...}], returns [{name,complexity,x,y,w,h}].
+function treemap(items, x, y, w, h) {
+  const out = [];
+  const worstRatio = (row, len) => {
+    if (!row.length) return Infinity;
+    let sum = 0, max = -Infinity, min = Infinity;
+    for (const it of row) { sum += it._sz; if (it._sz > max) max = it._sz; if (it._sz < min) min = it._sz; }
+    const sideSq = (len * len) / (sum * sum);
+    return Math.max(sideSq * max, min > 0 ? 1 / (sideSq * min) : Infinity);
+  };
+  const layoutRow = (row, rx, ry, rw, rh, vertical) => {
+    const areaSum = row.reduce((s, it) => s + it._sz, 0);
+    if (areaSum <= 0 || !row.length) return { rx, ry, rw, rh };
+    if (vertical) {
+      const bandW = rh > 0 ? areaSum / rh : 0;
+      let cy = ry;
+      for (const it of row) {
+        const itH = bandW > 0 ? it._sz / bandW : 0;
+        out.push({ name: it.name, complexity: it.complexity, x: rx, y: cy, w: bandW, h: itH });
+        cy += itH;
+      }
+      return { rx: rx + bandW, ry, rw: rw - bandW, rh };
+    } else {
+      const bandH = rw > 0 ? areaSum / rw : 0;
+      let cx = rx;
+      for (const it of row) {
+        const itW = bandH > 0 ? it._sz / bandH : 0;
+        out.push({ name: it.name, complexity: it.complexity, x: cx, y: ry, w: itW, h: bandH });
+        cx += itW;
+      }
+      return { rx, ry: ry + bandH, rw, rh: rh - bandH };
+    }
+  };
+  const squarify = (queue, rx, ry, rw, rh) => {
+    if (!queue.length || rw <= 0 || rh <= 0) return;
+    const short = Math.min(rw, rh);
+    let row = [];
+    let i = 0;
+    while (i < queue.length) {
+      const candidate = [...row, queue[i]];
+      if (row.length === 0 || worstRatio(candidate, short) <= worstRatio(row, short)) {
+        row = candidate; i++;
+      } else break;
+    }
+    const remaining = queue.slice(i);
+    const vertical = rw >= rh;
+    const rest = layoutRow(row, rx, ry, rw, rh, vertical);
+    squarify(remaining, rest.rx, rest.ry, rest.rw, rest.rh);
+  };
+  const total = items.reduce((s, it) => s + Math.max(it.size || 0, 0.0001), 0);
+  const scaled = items.map(it => ({ ...it, _sz: total > 0 ? (Math.max(it.size || 0, 0.0001) / total) * (w * h) : 0 }));
+  squarify(scaled, x, y, w, h);
+  return out;
+}
+
+// Green (low complexity) -> red (high complexity), linear-interpolated over
+// the observed [min,max] range of this project's items (falls back to a
+// fixed mid-scale point when every item has identical complexity).
+function complexityColor(val, min, max) {
+  const span = max - min;
+  const t = span > 0 ? Math.max(0, Math.min(1, (val - min) / span)) : 0.3;
+  const r = Math.round(60 + t * (210 - 60));
+  const g = Math.round(180 - t * (180 - 50));
+  const b = 60;
+  return `rgb(${r},${g},${b})`;
+}
+
+const codeInsightUi = { selected: null };
+
+export async function CodeInsightPanel(setBody) {
   const r = await api('/api/codeinsight', { scoped: true });
   if (r.error) return Empty('No .codeinsight file found for this project (codeinsight has not run yet).');
   const summary = r.summary || {};
+  const items = r.items || [];
+  const complexities = items.map(it => it.complexity || 0);
+  const minC = complexities.length ? Math.min(...complexities) : 0;
+  const maxC = complexities.length ? Math.max(...complexities) : 1;
+  const W = 900, H = 420;
+  const rects = items.length ? treemap(items, 0, 0, W, H) : [];
+  const byName = new Map(items.map(it => [it.name, it]));
+  const selected = codeInsightUi.selected ? byName.get(codeInsightUi.selected) : null;
+
+  const select = (name) => { codeInsightUi.selected = codeInsightUi.selected === name ? null : name; if (setBody) setBody(); };
+
   return h('div', {},
     StatsGrid({ items: [
       { val: summary.files ?? '?', lbl: 'files' }, { val: summary.lines ?? '?', lbl: 'lines' },
       { val: summary.functions ?? '?', lbl: 'functions' }, { val: summary.classes ?? '?', lbl: 'classes' },
       { val: summary.avgComplexity ?? '?', lbl: 'avg complexity' },
     ] }),
+    h('div', { class: 'ds-panel', style: 'margin-top:12px' },
+      h('h2', {}, `File-size treemap (${items.length} file${items.length === 1 ? '' : 's'})`),
+      !items.length ? Empty('No per-file size/complexity data extracted from .codeinsight.') :
+      h('div', { style: `position:relative;width:100%;max-width:${W}px;height:${H}px;overflow:hidden;border:1px solid var(--border)` },
+        ...rects.map((rect, i) => {
+          const fits = rect.w > 28 && rect.h > 16;
+          const isSel = codeInsightUi.selected === rect.name;
+          return h('div', {
+            key: i,
+            title: `${rect.name} -- complexity ${rect.complexity}`,
+            onclick: () => select(rect.name),
+            style: `position:absolute;left:${rect.x}px;top:${rect.y}px;width:${Math.max(rect.w - 1, 0)}px;height:${Math.max(rect.h - 1, 0)}px;` +
+              `background:${complexityColor(rect.complexity, minC, maxC)};border:1px solid ${isSel ? 'var(--accent, #58a6ff)' : 'rgba(0,0,0,0.25)'};` +
+              `box-sizing:border-box;cursor:pointer;overflow:hidden;font-size:10px;color:#0a0a0a;padding:2px;`,
+          }, fits ? (rect.name.length > Math.floor(rect.w / 6) ? rect.name.slice(0, Math.max(1, Math.floor(rect.w / 6) - 1)) + '...' : rect.name) : null);
+        }))),
+    selected ? h('div', { class: 'ds-panel', style: 'margin-top:12px' },
+      h('h2', {}, `Detail: ${selected.name}`),
+      h('pre', { class: 'gm-json' }, JSON.stringify(selected, null, 2)))
+      : null,
     h('div', { style: 'margin-top:12px' },
       ...((r.entries || []).length ? r.entries.map((entry, i) => h('details', { key: i, class: 'ds-panel', style: 'margin:4px 0' },
         h('summary', { style: 'cursor:pointer' }, entry.section), h('pre', { class: 'gm-json' }, entry.content)))
@@ -594,21 +986,148 @@ export async function CodeInsightPanel() {
 }
 
 // ---------------------------------------------------------------------------
-// MEMORY GRAPH VISUAL
+// MEMORY GRAPH VISUAL -- force-directed SVG (no new deps; runForceLayout in
+// forcegraph.js drives node.x/node.y each rAF tick, this module only paints).
 // ---------------------------------------------------------------------------
+const NODE_R_MIN = 6, NODE_R_MAX = 10;
+const graphUiState = { handle: null, selectedId: null };
+
+export function stopMemoryGraphLayout() {
+  if (graphUiState.handle) { graphUiState.handle.stop(); graphUiState.handle = null; }
+}
+
+// API payload is {nodes:[{key,text,namespace,mtime}], edges:[{id,src,dst,relation,weight,created_at}]}
+// (never changed here) -- normalize to the id/source/target shape runForceLayout expects.
+function toGraphModel(r) {
+  const nodes = (r.nodes || []).slice(0, 150).map(n => ({
+    id: n.key, label: `${n.namespace}/${n.key}`.slice(0, 28), namespace: n.namespace, text: n.text,
+  }));
+  const nodeIds = new Set(nodes.map(n => n.id));
+  const edges = (r.edges || []).filter(e => nodeIds.has(e.src) && nodeIds.has(e.dst))
+    .map(e => ({ source: e.src, target: e.dst, relation: e.relation }));
+  return { nodes, edges };
+}
+
+function neighborSet(edges, id) {
+  const s = new Set([id]);
+  for (const e of edges) {
+    if (e.source === id) s.add(e.target);
+    if (e.target === id) s.add(e.source);
+  }
+  return s;
+}
+
 export async function MemoryGraphPanel() {
+  stopMemoryGraphLayout();
   const r = await api('/api/memory-graph', { scoped: true });
   if (r.error) return Empty('Failed to load memory graph: ' + r.error);
   if (!r.nodes || !r.nodes.length) return Empty(r.note || 'No memory nodes found for this project.');
-  return h('div', {},
+
+  const { nodes, edges } = toGraphModel(r);
+  const width = 900, height = 520;
+  graphUiState.selectedId = null;
+
+  const container = h('div', { class: 'ds-panel' },
     r.note ? h('p', { style: 'color:var(--muted);font-size:11px;margin-bottom:8px' }, r.note) : null,
-    h('div', { class: 'ds-panel' }, h('h2', {}, `Nodes (${r.nodes.length})`),
-      h('div', {}, ...r.nodes.slice(0, 100).map((n, i) => h('span', {
-        key: i, class: 'gm-graph-node', title: n.text,
-      }, `${n.namespace}/${n.key.slice(0, 20)}`)))),
-    h('div', { class: 'ds-panel', style: 'margin-top:12px' }, h('h2', {}, `Edges (${(r.edges || []).length})`),
-      (r.edges || []).length ? h('table', { class: 'gm-table' },
-        h('tr', {}, h('th', {}, 'src'), h('th', {}, 'relation'), h('th', {}, 'dst')),
-        ...r.edges.slice(0, 100).map((e, i) => h('tr', { key: i }, h('td', {}, e.src), h('td', {}, e.relation), h('td', {}, e.dst))))
-        : Empty('No graph edges available.')));
+    h('h2', {}, `Memory Graph -- ${nodes.length} nodes, ${edges.length} edges`),
+    h('svg', {
+      class: 'gm-force-svg', viewBox: `0 0 ${width} ${height}`, preserveAspectRatio: 'xMidYMid meet',
+      id: 'memory-graph-svg',
+    }));
+
+  // Defer the live simulation + SVG paint to right after mount: app.js's
+  // renderShell() does one synchronous applyDiff, so schedule on next tick
+  // once the <svg id="memory-graph-svg"> node actually exists in the DOM.
+  setTimeout(() => mountForceGraph(nodes, edges, width, height), 0);
+
+  return container;
+}
+
+function mountForceGraph(nodes, edges, width, height) {
+  const svg = document.getElementById('memory-graph-svg');
+  if (!svg) return; // panel navigated away before mount fired
+
+  let dragging = null; // {node, offsetX, offsetY}
+
+  function paint() {
+    if (!document.getElementById('memory-graph-svg')) { stopMemoryGraphLayout(); return; }
+    const sel = graphUiState.selectedId;
+    const neighbors = sel ? neighborSet(edges, sel) : null;
+
+    const svgNS = 'http://www.w3.org/2000/svg';
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+
+    const edgeGroup = document.createElementNS(svgNS, 'g');
+    for (const e of edges) {
+      const a = nodes.find(n => n.id === e.source), b = nodes.find(n => n.id === e.target);
+      if (!a || !b) continue;
+      const line = document.createElementNS(svgNS, 'line');
+      line.setAttribute('x1', a.x); line.setAttribute('y1', a.y);
+      line.setAttribute('x2', b.x); line.setAttribute('y2', b.y);
+      let cls = 'gm-force-edge';
+      if (sel) cls += (neighbors.has(a.id) && neighbors.has(b.id)) ? ' hi' : ' dim';
+      line.setAttribute('class', cls);
+      edgeGroup.appendChild(line);
+    }
+    svg.appendChild(edgeGroup);
+
+    const nodeGroup = document.createElementNS(svgNS, 'g');
+    for (const n of nodes) {
+      const g = document.createElementNS(svgNS, 'g');
+      let cls = 'gm-force-node';
+      if (sel) cls += (n.id === sel) ? ' hi' : (neighbors.has(n.id) ? '' : ' dim');
+      if (dragging && dragging.node === n) cls += ' dragging';
+      g.setAttribute('class', cls);
+
+      const r = NODE_R_MIN + Math.min(4, (n.label.length % 5));
+      const circle = document.createElementNS(svgNS, 'circle');
+      circle.setAttribute('cx', n.x); circle.setAttribute('cy', n.y); circle.setAttribute('r', r);
+      circle.setAttribute('fill', colorFor(n.namespace || 'default'));
+      circle.setAttribute('title', n.text || n.label);
+
+      circle.addEventListener('pointerdown', (ev) => {
+        ev.stopPropagation();
+        n.pinned = true; n.vx = 0; n.vy = 0;
+        const pt = svgPoint(svg, ev);
+        dragging = { node: n, offsetX: pt.x - n.x, offsetY: pt.y - n.y };
+        try { circle.setPointerCapture(ev.pointerId); } catch (_) {}
+      });
+      circle.addEventListener('pointermove', (ev) => {
+        if (!dragging || dragging.node !== n) return;
+        const pt = svgPoint(svg, ev);
+        n.x = pt.x - dragging.offsetX; n.y = pt.y - dragging.offsetY;
+        paint();
+      });
+      const endDrag = () => {
+        if (dragging && dragging.node === n) { n.pinned = false; dragging = null; paint(); }
+      };
+      circle.addEventListener('pointerup', endDrag);
+      circle.addEventListener('pointercancel', endDrag);
+      circle.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        graphUiState.selectedId = (graphUiState.selectedId === n.id) ? null : n.id;
+        paint();
+      });
+
+      const text = document.createElementNS(svgNS, 'text');
+      text.setAttribute('x', n.x + r + 3); text.setAttribute('y', n.y + 3);
+      text.textContent = n.label;
+
+      g.appendChild(circle); g.appendChild(text);
+      nodeGroup.appendChild(g);
+    }
+    svg.appendChild(nodeGroup);
+  }
+
+  svg.addEventListener('click', () => { if (graphUiState.selectedId) { graphUiState.selectedId = null; paint(); } });
+
+  graphUiState.handle = runForceLayout(nodes, edges, { width, height, onTick: paint });
+  paint();
+}
+
+function svgPoint(svg, ev) {
+  const rect = svg.getBoundingClientRect();
+  const vb = svg.viewBox.baseVal;
+  const scaleX = vb.width / rect.width, scaleY = vb.height / rect.height;
+  return { x: (ev.clientX - rect.left) * scaleX, y: (ev.clientY - rect.top) * scaleY };
 }

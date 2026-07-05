@@ -1,0 +1,1200 @@
+/* editor-primitives.css — chrome for in-engine editors, inspectors, IDEs,
+   debug HUDs. All rules under .ds-247420 scope (build prefixes). Tokens
+   resolved from colors_and_type.css: --panel-{0..3}, --panel-text(-2/-3),
+   --accent, --accent-fg, --rule, --rule-strong, --r-1/-2, --ff-mono. */
+
+/* ---------------------------------------------------------------
+   Docked panel — the engine-editor idiom: flush, square, dense,
+   full-height. Unlike the dashboard .panel card (rounded, margined,
+   shadowed) this docks edge-to-edge with a 1px --rule seam. Use for
+   inspector / hierarchy / apps / events columns inside an editor.
+   --------------------------------------------------------------- */
+.ds-ep-panel {
+    display: flex; flex-direction: column;
+    min-height: 0; height: 100%;
+    margin: 0; border-radius: 0; box-shadow: none;
+    background: var(--panel-1);
+    color: var(--panel-text);
+    font: var(--fs-tiny, 12px)/var(--lh-base, 1.4) var(--ff-mono, monospace);
+    overflow: hidden;
+}
+.ds-ep-panel-head {
+    flex-shrink: 0;
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--rule);
+    font-size: var(--fs-micro, 11px); font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.1em;
+    color: var(--panel-text-3);
+    white-space: nowrap;
+}
+.ds-ep-panel-head > :last-child {
+    font-weight: 500; letter-spacing: 0;
+    color: var(--panel-text-2);
+    overflow: hidden; text-overflow: ellipsis;
+}
+.ds-ep-panel-body {
+    flex: 1; min-height: 0; overflow: auto;
+    padding: 6px 8px;
+}
+.ds-ep-panel-body.flush { padding: 0; }
+/* A sub-section divider inside a docked panel (e.g. app-prop mount). Only
+   shows its top seam when it actually has content — an empty section is
+   collapsed so no stray dashed rule floats over an empty inspector. */
+.ds-ep-panel-section {
+    flex-shrink: 0;
+    border-top: 1px solid var(--rule);
+    overflow: auto;
+}
+.ds-ep-panel-section:empty { display: none; border-top: 0; }
+
+/* Dense status strip for editor chrome — thin, flush, bordered top. */
+.ds-ep-statusbar {
+    flex-shrink: 0;
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    min-height: 0; height: 26px;
+    padding: 0 10px;
+    border-top: 1px solid var(--rule);
+    background: var(--panel-1);
+    color: var(--panel-text-2);
+    font: var(--fs-micro, 11px)/1 var(--ff-mono, monospace);
+}
+.ds-ep-statusbar-left, .ds-ep-statusbar-right { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.ds-ep-statusbar-left { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Buttons inside the dense strip shrink to fit the 26px band. */
+.ds-ep-statusbar button {
+    min-height: 0; height: 20px; padding: 0 8px;
+    border-radius: var(--r-1, 4px);
+    font: var(--fs-micro, 11px)/1 var(--ff-mono, monospace);
+}
+
+/* Toolbar */
+.ds-ep-toolbar {
+    display: flex; align-items: center; gap: 6px;
+    padding: 8px 10px;
+    background: var(--panel-1);
+    color: var(--panel-text);
+    border-bottom: 1px solid var(--rule);
+    font: var(--fs-tiny, 12px)/var(--lh-base, 1.4) var(--ff-mono, monospace);
+}
+.ds-ep-toolbar.dense { padding: 2px 4px; gap: 2px; }
+.ds-ep-toolbar-leading,
+.ds-ep-toolbar-center,
+.ds-ep-toolbar-trailing { display: flex; align-items: center; gap: 4px; }
+.ds-ep-toolbar-trailing { margin-left: auto; }
+.ds-ep-toolbar-center { flex: 1; min-width: 0; }
+
+/* Tabs */
+.ds-ep-tabs { display: flex; flex-direction: column; min-height: 0; height: 100%; }
+.ds-ep-tabs-head {
+    display: flex; flex-shrink: 0; flex-wrap: nowrap;
+    overflow-x: auto; scroll-behavior: smooth;
+    background: var(--panel-1);
+    border-bottom: 1px solid var(--rule);
+}
+.ds-ep-tab {
+    flex: 1; appearance: none; background: transparent; border: 0;
+    border-bottom: 2px solid transparent;
+    color: var(--panel-text-3);
+    padding: 8px 10px;
+    font: inherit; cursor: pointer;
+    transition: color var(--dur-snap, 80ms) var(--ease, ease), border-color var(--dur-snap, 80ms) var(--ease, ease);
+}
+.ds-ep-tab:hover { color: var(--panel-text-2); }
+.ds-ep-tab.active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+}
+/* Flex column so a full-height docked child (e.g. an inspector panel) fills
+   the tab body instead of collapsing under a block container. */
+.ds-ep-tabs-body { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; }
+
+/* EventLog — dense console-style log rows (one event per line). */
+.ds-ep-eventlog {
+    display: flex; flex-direction: column;
+    font: var(--fs-tiny, 12px)/1.4 var(--ff-mono, monospace);
+    color: var(--panel-text);
+}
+.ds-ep-eventrow {
+    display: flex; align-items: baseline; gap: 8px;
+    padding: 3px 8px;
+    border-bottom: 1px solid color-mix(in oklab, var(--rule) 50%, transparent);
+}
+.ds-ep-eventrow:hover { background: color-mix(in oklab, var(--accent) 6%, transparent); }
+.ds-ep-eventrow-type { color: var(--panel-text); font-weight: 600; flex-shrink: 0; }
+.ds-ep-eventrow-sub { color: var(--panel-text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* TreeView / TreeItem */
+.ds-ep-tree {
+    display: flex; flex-direction: column;
+    color: var(--panel-text);
+    font: var(--fs-tiny, 12px)/var(--lh-base, 1.4) var(--ff-mono, monospace);
+    overflow: auto;
+}
+.ds-ep-tree-item { display: flex; flex-direction: column; }
+.ds-ep-tree-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ds-ep-tree-row {
+    display: flex; align-items: center; gap: 6px;
+    padding: 4px 8px 4px 0;
+    border-radius: var(--r-1, 10px);
+    cursor: pointer;
+    color: var(--panel-text-2);
+    transition: background var(--dur-snap, 80ms) var(--ease, ease), color var(--dur-snap, 80ms) var(--ease, ease);
+}
+.ds-ep-tree-row:hover {
+    background: color-mix(in oklab, var(--accent) 8%, transparent);
+    color: var(--panel-text);
+}
+.ds-ep-tree-item.selected > .ds-ep-tree-row {
+    background: color-mix(in oklab, var(--accent) 22%, transparent);
+    color: var(--accent);
+}
+.ds-ep-tree-twist {
+    width: 12px; flex-shrink: 0; text-align: center;
+    color: var(--panel-text-3);
+    transition: transform var(--dur-snap, 80ms) var(--ease, ease);
+}
+.ds-ep-tree-twist.open { transform: rotate(90deg); }
+.ds-ep-tree-glyph { flex-shrink: 0; color: var(--panel-text-3); }
+.ds-ep-tree-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ds-ep-tree-tag {
+    flex-shrink: 0; padding-left: 6px;
+    font-size: 0.85em; color: var(--panel-text-3);
+}
+.ds-ep-tree-children { display: flex; flex-direction: column; }
+
+/* PropertyGrid / PropertyField */
+.ds-ep-propgrid {
+    display: flex; flex-direction: column; gap: 6px;
+    padding: 8px;
+    color: var(--panel-text);
+    font: var(--fs-tiny, 12px)/var(--lh-base, 1.4) var(--ff-mono, monospace);
+}
+.ds-ep-propfield {
+    display: grid;
+    grid-template-columns: minmax(80px, 120px) 1fr;
+    gap: 4px 10px;
+    align-items: center;
+}
+.ds-ep-propfield.inline { display: flex; gap: 8px; }
+.ds-ep-propfield-label {
+    color: var(--panel-text-3);
+    font-size: 0.85em;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+.ds-ep-propfield-value {
+    color: var(--panel-text);
+    display: flex; align-items: center; gap: 4px; min-width: 0;
+}
+.ds-ep-propfield-value input,
+.ds-ep-propfield-value select,
+.ds-ep-propfield-value textarea {
+    appearance: none;
+    background: var(--panel-2);
+    color: var(--panel-text);
+    border: 1px solid var(--rule);
+    border-radius: var(--r-1, 10px);
+    padding: 4px 8px;
+    font: inherit;
+    min-width: 0; width: 100%;
+}
+.ds-ep-propfield-value input:focus-visible,
+.ds-ep-propfield-value select:focus-visible,
+.ds-ep-propfield-value textarea:focus-visible {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: var(--focus-ring-inset);
+}
+.ds-ep-propfield-hint {
+    grid-column: 1 / -1;
+    font-size: 0.8em;
+    color: var(--panel-text-3);
+}
+/* x/y/z packed on one row, each field equal width, no horizontal overflow. */
+.ds-ep-vec3 {
+    display: flex; gap: 4px; width: 100%; min-width: 0;
+}
+.ds-ep-vec3 > * { flex: 1 1 0; min-width: 0; }
+/* Each axis cell (axis letter + scrub input) must show its full 3-decimal value
+   without clipping. The axis letter is a fixed micro-glyph; the input flexes to
+   fill the rest with tight padding and centered text so 0.000 / -0.0 / 1.000 are
+   always legible even in the narrow 3-up layout. */
+.ds-ep-vec3 > * {
+    display: flex; align-items: center; gap: 2px;
+}
+.ds-ep-vec3 .ds-ep-propfield-hint {
+    flex: 0 0 auto; width: 9px; text-align: center;
+    grid-column: auto; font-size: 0.8em; opacity: 0.7;
+}
+.ds-ep-vec3 .ds-input-bare {
+    flex: 1 1 auto; min-width: 0; width: auto;
+    padding: 2px 4px; text-align: center; text-overflow: clip;
+}
+/* Dense numeric inputs in the inspector — compact, tight radius, mono. */
+.ds-ep-propfield-value input,
+.ds-ep-propfield-value .ds-input-bare {
+    padding: 2px 6px;
+    border-radius: var(--r-1, 4px);
+    font: var(--fs-tiny, 12px)/1.3 var(--ff-mono, monospace);
+}
+.ds-input-bare {
+    appearance: none;
+    background: var(--panel-2);
+    color: var(--panel-text);
+    border: 1px solid var(--rule);
+    border-radius: var(--r-1, 4px);
+    padding: 2px 6px;
+    font: var(--fs-tiny, 12px)/1.3 var(--ff-mono, monospace);
+    min-width: 0;
+}
+.ds-input-bare:focus-visible { outline: none; border-color: var(--accent); box-shadow: var(--focus-ring-inset); }
+/* A property field whose control spans the full panel width (label above,
+   control below) — used for wide segmented controls that would clip in the
+   narrow value column. */
+.ds-ep-propfield.block {
+    display: flex; flex-direction: column; align-items: stretch; gap: 4px;
+}
+.ds-ep-propfield.block > .ds-ep-propfield-value { width: 100%; }
+.ds-ep-propfield.block .ds-ep-btngrp { width: 100%; }
+.ds-ep-propfield.block .ds-ep-btngrp-btn { flex: 1 1 0; text-align: center; }
+
+/* Flush dense action bar docked at a panel bottom (inspector Edit/Delete etc.).
+   Compact buttons, square-ish, bordered top — not big floating pills. */
+.ds-ep-actionbar {
+    flex-shrink: 0;
+    display: flex; align-items: center; gap: 6px;
+    padding: 6px 8px;
+    border-top: 1px solid var(--rule);
+    background: var(--panel-1);
+}
+.ds-ep-actionbar > * { flex: 1 1 0; }
+.ds-ep-actionbar button {
+    width: 100%;
+    min-height: 28px; height: 28px; padding: 0 10px;
+    border-radius: var(--r-1, 4px);
+    font: var(--fs-tiny, 12px)/1 var(--ff-mono, monospace);
+}
+
+/* Inline buttons inside a tree row (e.g. app-list Place) and the editor toolbars
+   are compact — small, square-ish, not big pills. Excludes the segmented
+   IconButtonGroup which manages its own sizing. */
+.ds-ep-tree-row button:not(.ds-ep-btngrp-btn),
+.ds-ep-toolbar button:not(.ds-ep-btngrp-btn) {
+    min-height: 24px; height: 24px; padding: 0 8px;
+    border-radius: var(--r-1, 4px);
+    font: var(--fs-tiny, 12px)/1 var(--ff-mono, monospace);
+}
+@media (pointer: coarse) {
+    .ds-ep-tree-row button:not(.ds-ep-btngrp-btn),
+    .ds-ep-toolbar button:not(.ds-ep-btngrp-btn) { min-height: 36px; height: 36px; }
+}
+
+/* Dock — 3x3 grid for in-engine overlay (canvas pass-through center) */
+.ds-ep-dock {
+    display: grid;
+    grid-template-areas:
+        "top top top"
+        "left center right"
+        "bottom bottom bottom";
+    grid-template-rows: auto 1fr auto;
+    grid-template-columns: auto 1fr auto;
+    height: 100%; width: 100%;
+    color: var(--panel-text);
+}
+.ds-ep-dock-top    { grid-area: top;    background: var(--panel-1); border-bottom: 1px solid var(--rule); }
+.ds-ep-dock-bottom { grid-area: bottom; background: var(--panel-1); border-top: 1px solid var(--rule); }
+.ds-ep-dock-left   { grid-area: left;   background: var(--panel-1); border-right: 1px solid var(--rule); overflow: auto; }
+.ds-ep-dock-right  { grid-area: right;  background: var(--panel-1); border-left: 1px solid var(--rule); overflow: auto; }
+.ds-ep-dock-center {
+    grid-area: center;
+    background: transparent;
+    pointer-events: none;
+    position: relative;
+}
+.ds-ep-dock-center > * { pointer-events: auto; }
+
+/* Mobile — stack dock regions vertically instead of the 3x3 grid */
+@media (max-width: 600px) {
+    .ds-ep-dock {
+        display: flex;
+        flex-direction: column;
+    }
+}
+
+/* IconButtonGroup */
+.ds-ep-btngrp {
+    display: inline-flex;
+    border: 1px solid var(--rule);
+    border-radius: var(--r-1, 10px);
+    overflow: hidden;
+    background: var(--panel-2);
+}
+.ds-ep-btngrp.dense .ds-ep-btngrp-btn { padding: 2px 6px; min-width: 22px; }
+.ds-ep-btngrp-btn {
+    appearance: none; border: 0;
+    background: transparent;
+    color: var(--panel-text-2);
+    padding: 4px 10px;
+    font: inherit; cursor: pointer;
+    border-right: 1px solid var(--rule);
+    transition: background var(--dur-snap, 80ms) var(--ease, ease), color var(--dur-snap, 80ms) var(--ease, ease);
+}
+.ds-ep-btngrp-btn:last-child { border-right: 0; }
+.ds-ep-btngrp-btn:hover:not([disabled]) {
+    background: color-mix(in oklab, var(--accent) 10%, transparent);
+    color: var(--panel-text);
+}
+.ds-ep-btngrp-btn.active {
+    background: var(--accent);
+    color: var(--accent-fg);
+}
+.ds-ep-btngrp-btn[disabled] {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+/* Breakpoint custom property mirrors (consumers can use var()) */
+:root {
+    --bp-sm: 480px;
+    --bp-md: 768px;
+    --bp-lg: 1024px;
+    --bp-xl: 1440px;
+}
+
+/* ---------------------------------------------------------------
+   ResizeHandle / SplitPanel
+   --------------------------------------------------------------- */
+.ds-ep-resize {
+    background: var(--rule);
+    flex: 0 0 auto;
+    touch-action: none;
+    user-select: none;
+    transition: background 120ms ease;
+}
+.ds-ep-resize:hover, .ds-ep-resize:focus-visible {
+    background: var(--accent);
+}
+.ds-ep-resize.axis-h { width: 6px; cursor: col-resize; align-self: stretch; }
+.ds-ep-resize.axis-v { height: 6px; cursor: row-resize; }
+.ds-ep-split { display: flex; width: 100%; height: 100%; }
+.ds-ep-split.horiz { flex-direction: row; }
+.ds-ep-split.vert  { flex-direction: column; }
+.ds-ep-split-pane { overflow: auto; }
+.ds-ep-split.horiz > .ds-ep-split-pane:not(.grow) { width: var(--split-size); }
+.ds-ep-split.vert  > .ds-ep-split-pane:not(.grow) { height: var(--split-size); }
+.ds-ep-split-pane.grow { flex: 1 1 0; }
+
+/* ---------------------------------------------------------------
+   ContextMenu
+   --------------------------------------------------------------- */
+.ds-ep-ctxmenu-backdrop {
+    position: fixed; inset: 0; z-index: 9000;
+}
+.ds-ep-ctxmenu {
+    position: absolute;
+    min-width: 180px;
+    background: var(--panel-1, var(--panel-bg));
+    color: var(--panel-text, var(--fg-text));
+    border: 1px solid var(--rule);
+    border-radius: var(--r-2, 8px);
+    box-shadow: var(--shadow-2);
+    padding: 4px;
+    display: flex; flex-direction: column;
+    outline: none;
+}
+.ds-ep-ctxmenu-item {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 10px;
+    background: transparent; border: 0;
+    color: inherit; font: inherit; text-align: left;
+    border-radius: var(--r-1, 4px);
+    cursor: pointer;
+}
+.ds-ep-ctxmenu-item:hover:not(.disabled),
+.ds-ep-ctxmenu-item:focus-visible {
+    background: var(--panel-2, var(--rule));
+}
+.ds-ep-ctxmenu-item.danger { color: var(--danger); }
+.ds-ep-ctxmenu-item.disabled { opacity: 0.45; cursor: not-allowed; }
+.ds-ep-ctxmenu-icon { width: 16px; display: inline-flex; justify-content: center; }
+.ds-ep-ctxmenu-sep { height: 1px; background: var(--rule); margin: 4px 6px; }
+
+/* ---------------------------------------------------------------
+   Drawer
+   --------------------------------------------------------------- */
+.ds-ep-drawer-backdrop {
+    position: fixed; inset: 0; z-index: 8500;
+    background: var(--scrim);
+}
+.ds-ep-drawer {
+    position: absolute;
+    background: var(--panel-1, var(--panel-bg));
+    color: var(--panel-text, var(--fg-text));
+    box-shadow: var(--shadow-overlay);
+    outline: none;
+    transition: transform 180ms ease;
+    padding: 12px;
+    padding-top: max(12px, env(safe-area-inset-top));
+    padding-bottom: max(12px, env(safe-area-inset-bottom));
+    padding-left: max(12px, env(safe-area-inset-left));
+    padding-right: max(12px, env(safe-area-inset-right));
+}
+.ds-ep-drawer.side-left   { left: 0; top: 0; bottom: 0; width: 86vw; max-width: 320px; }
+.ds-ep-drawer.side-right  { right: 0; top: 0; bottom: 0; width: 86vw; max-width: 320px; }
+.ds-ep-drawer.side-bottom { left: 0; right: 0; bottom: 0; max-height: 80vh; border-top-left-radius: 12px; border-top-right-radius: 12px; }
+@media (min-width: 768px) {
+    .ds-ep-drawer.side-left, .ds-ep-drawer.side-right { width: 360px; max-width: 360px; }
+}
+
+/* ---------------------------------------------------------------
+   Dialog
+   --------------------------------------------------------------- */
+.ds-ep-dialog-backdrop {
+    position: fixed; inset: 0; z-index: 9500;
+    background: var(--scrim-strong);
+    display: flex; align-items: center; justify-content: center;
+    padding: 16px;
+}
+.ds-ep-dialog {
+    background: var(--panel-1, var(--panel-bg));
+    color: var(--panel-text, var(--fg-text));
+    border: 1px solid var(--rule);
+    border-radius: var(--r-2, 10px);
+    box-shadow: var(--shadow-overlay);
+    min-width: 280px; max-width: min(560px, 100%);
+    max-height: 90vh; overflow: auto;
+    display: flex; flex-direction: column;
+    outline: none;
+}
+.ds-ep-dialog-head { padding: 14px 16px 6px; border-bottom: 1px solid var(--rule); }
+.ds-ep-dialog-title { margin: 0; font-size: 16px; font-weight: 600; }
+.ds-ep-dialog-body { padding: 14px 16px; }
+.ds-ep-dialog-actions {
+    display: flex; gap: 8px; justify-content: flex-end;
+    padding: 10px 14px; border-top: 1px solid var(--rule);
+}
+.ds-ep-dialog-btn {
+    padding: 8px 14px;
+    border: 1px solid var(--rule);
+    border-radius: var(--r-1, 6px);
+    background: var(--panel-2, transparent);
+    color: inherit; font: inherit; cursor: pointer;
+}
+.ds-ep-dialog-btn.kind-primary {
+    background: var(--accent); color: var(--accent-fg); border-color: var(--accent);
+}
+.ds-ep-dialog-btn.kind-danger {
+    background: var(--danger); color: var(--on-accent); border-color: var(--danger);
+}
+
+/* ---------------------------------------------------------------
+   Toast
+   --------------------------------------------------------------- */
+.ds-ep-toast-host {
+    position: fixed;
+    top: max(16px, env(safe-area-inset-top));
+    right: max(16px, env(safe-area-inset-right));
+    z-index: 9800;
+    display: flex; flex-direction: column; gap: 8px;
+    pointer-events: none;
+}
+.ds-ep-toast {
+    pointer-events: auto;
+    background: var(--panel-1, var(--panel-bg));
+    color: var(--panel-text, var(--fg-text));
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--accent);
+    border-radius: var(--r-1, 6px);
+    padding: 10px 14px;
+    box-shadow: var(--shadow-3);
+    min-width: 220px; max-width: 360px;
+    opacity: 1;
+    transition: opacity 180ms ease, transform 180ms ease;
+}
+.ds-ep-toast.kind-success { border-left-color: var(--success); }
+.ds-ep-toast.kind-warn    { border-left-color: var(--warn); }
+.ds-ep-toast.kind-error   { border-left-color: var(--danger); }
+.ds-ep-toast.leaving { opacity: 0; transform: translateY(-6px); }
+@media (max-width: 480px) {
+    .ds-ep-toast-host { left: 16px; right: 16px; align-items: center; }
+    .ds-ep-toast { width: 100%; max-width: 100%; }
+}
+
+/* ---------------------------------------------------------------
+   Focus-visible across interactive primitives
+   --------------------------------------------------------------- */
+.ds-ep-tab:focus-visible,
+.ds-ep-tree-row:focus-visible,
+.ds-ep-btngrp-btn:focus-visible,
+.ds-ep-ctxmenu-item:focus-visible,
+.ds-ep-resize:focus-visible,
+.ds-ep-dialog-btn:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+
+/* ---------------------------------------------------------------
+   Coarse pointer — bump tap targets to 44px
+   --------------------------------------------------------------- */
+@media (pointer: coarse) {
+    .ds-ep-tab,
+    .ds-ep-btngrp-btn,
+    .ds-ep-ctxmenu-item,
+    .ds-ep-dialog-btn,
+    .ds-ep-tree-row {
+        min-height: 44px;
+        padding-top: 10px;
+        padding-bottom: 10px;
+    }
+    .ds-ep-resize.axis-h { width: 14px; }
+    .ds-ep-resize.axis-v { height: 14px; }
+}
+
+/* ---------------------------------------------------------------
+   Reduced motion — disable transitions on transient surfaces
+   --------------------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+    .ds-ep-drawer,
+    .ds-ep-dialog,
+    .ds-ep-toast,
+    .ds-ep-resize {
+        transition: none !important;
+    }
+    /* Catch the transitions on tabs, tree rows, and primitive buttons that weren't
+       previously wrapped — vestibular users get a static UI. */
+    .ds-ep-tab,
+    .ds-ep-tree-row,
+    .ds-ep-tree-twist,
+    .ds-ep-toolbar button,
+    .ds-ep-iconbtn,
+    .ds-ep-iconbtn-group button {
+        transition: none !important;
+        animation: none !important;
+    }
+}
+
+/* ---------- focus-visible on editor-primitive interactive elements ---------- */
+.ds-ep-tab:focus-visible,
+.ds-ep-tree-row:focus-visible,
+.ds-ep-toolbar button:focus-visible,
+.ds-ep-iconbtn:focus-visible,
+.ds-ep-iconbtn-group button:focus-visible,
+.ds-ep-resize:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: var(--r-1);
+}
+
+/* ---------------------------------------------------------------
+   Form primitives — Checkbox, Radio, RadioGroup, Toggle, Field
+   --------------------------------------------------------------- */
+.ds-check-row,
+.ds-radio-row,
+.ds-toggle-row {
+    display: inline-flex; align-items: center; gap: var(--space-2, 8px);
+    min-height: 44px;
+    padding: var(--space-1, 4px) var(--space-2, 8px);
+    cursor: pointer;
+    color: var(--fg);
+    font: inherit;
+}
+.ds-check-row:has(input:disabled),
+.ds-radio-row:has(input:disabled),
+.ds-toggle-row:has(button:disabled) { opacity: 0.5; cursor: not-allowed; }
+
+.ds-check, .ds-radio {
+    width: 18px; height: 18px;
+    accent-color: var(--accent, var(--fg));
+    flex-shrink: 0;
+    cursor: inherit;
+}
+.ds-check:focus-visible, .ds-radio:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+
+.ds-check-label, .ds-radio-label, .ds-toggle-label {
+    color: var(--fg);
+    font-size: var(--fs-sm, 14px);
+}
+
+.ds-radio-group {
+    border: 0; padding: 0; margin: 0;
+    display: flex; flex-direction: column; gap: var(--space-1, 4px);
+}
+.ds-radio-group.horiz { flex-direction: row; flex-wrap: wrap; gap: var(--space-3, 16px); }
+.ds-radio-group > legend { padding: 0 0 var(--space-1, 4px); }
+
+.ds-toggle {
+    appearance: none; border: 0;
+    width: 44px; height: 24px;
+    border-radius: var(--r-pill, 999px);
+    background: var(--panel-2, var(--bg-2));
+    border: 1px solid var(--rule);
+    position: relative;
+    cursor: pointer;
+    padding: 0;
+    flex-shrink: 0;
+}
+.ds-toggle-knob {
+    position: absolute;
+    top: 1px; left: 1px;
+    width: 20px; height: 20px;
+    border-radius: 50%;
+    background: var(--fg);
+    transform: translateX(0);
+}
+.ds-toggle[aria-checked="true"] {
+    background: var(--accent);
+    border-color: var(--accent);
+}
+.ds-toggle[aria-checked="true"] .ds-toggle-knob {
+    background: var(--accent-fg);
+    transform: translateX(20px);
+}
+.ds-toggle:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+.ds-toggle:disabled { cursor: not-allowed; }
+
+@media (prefers-reduced-motion: no-preference) {
+    .ds-toggle { transition: background var(--dur-base, 160ms) var(--ease), border-color var(--dur-base, 160ms) var(--ease); }
+    .ds-toggle-knob { transition: transform var(--dur-base, 160ms) var(--ease), background var(--dur-base, 160ms) var(--ease); }
+}
+
+.ds-field-wrap {
+    display: flex; flex-direction: column; gap: var(--space-1, 4px);
+    margin-bottom: var(--space-2, 8px);
+}
+.ds-field-label {
+    color: var(--fg-2, var(--fg));
+    font-size: var(--fs-sm, 14px);
+    font-weight: 500;
+}
+.ds-field-required {
+    color: var(--danger);
+    font-weight: 700;
+    margin-left: 2px;
+}
+.ds-field-hint {
+    color: var(--fg-3, var(--fg-2));
+    font-size: var(--fs-tiny, 12px);
+}
+.ds-field-error {
+    color: var(--danger);
+    font-size: var(--fs-tiny, 12px);
+    font-weight: 500;
+}
+.ds-field-wrap [aria-invalid="true"] {
+    border-color: var(--danger) !important;
+}
+
+.sr-only {
+    position: absolute; width: 1px; height: 1px;
+    padding: 0; margin: -1px; overflow: hidden;
+    clip: rect(0,0,0,0); white-space: nowrap; border: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .ds-toggle, .ds-toggle-knob { transition: none !important; }
+}
+
+/* ---------------------------------------------------------------
+   Tooltip
+   --------------------------------------------------------------- */
+.ds-tooltip {
+    position: fixed;
+    left: 0; top: 0;
+    z-index: 9700;
+    background: var(--panel-1, var(--panel-bg));
+    color: var(--panel-text, var(--fg-text));
+    border: 1px solid var(--rule);
+    border-radius: var(--r-1, 6px);
+    padding: 6px 10px;
+    font-size: 12px;
+    line-height: 1.4;
+    max-width: 280px;
+    box-shadow: var(--shadow-3);
+    pointer-events: none;
+}
+.ds-tooltip.kind-danger { border-color: var(--danger); color: var(--danger); }
+@media (prefers-reduced-motion: no-preference) {
+    .ds-tooltip { transition: opacity 120ms ease; }
+}
+
+/* ---------------------------------------------------------------
+   Popover (shared surface for Popover + Dropdown)
+   --------------------------------------------------------------- */
+.ds-popover {
+    position: fixed;
+    left: 0; top: 0;
+    z-index: 9600;
+    background: var(--panel-1, var(--panel-bg));
+    color: var(--panel-text, var(--fg-text));
+    border: 1px solid var(--rule);
+    border-radius: var(--r-2, 8px);
+    box-shadow: var(--shadow-3);
+    padding: 0;
+    outline: none;
+    min-width: 160px;
+}
+@media (prefers-reduced-motion: no-preference) {
+    .ds-popover { transition: opacity 140ms ease, transform 140ms ease; }
+}
+
+/* ---------------------------------------------------------------
+   Dropdown
+   --------------------------------------------------------------- */
+.ds-dropdown-menu { padding: 4px; }
+.ds-dropdown-list { display: flex; flex-direction: column; }
+.ds-dropdown-item {
+    display: flex; align-items: center; gap: 8px;
+    min-height: 44px;
+    padding: 8px 12px;
+    background: transparent; border: 0;
+    color: inherit; font: inherit; text-align: left;
+    border-radius: var(--r-1, 4px);
+    cursor: pointer;
+}
+.ds-dropdown-item:hover,
+.ds-dropdown-item:focus-visible {
+    background: var(--panel-2, var(--rule));
+    outline: none;
+}
+.ds-dropdown-item:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+}
+.ds-dropdown-item[aria-disabled="true"] {
+    opacity: 0.5;
+    pointer-events: none;
+    cursor: not-allowed;
+}
+.ds-dropdown-item.is-danger { color: var(--danger); }
+.ds-dropdown-glyph { width: 16px; display: inline-flex; justify-content: center; flex-shrink: 0; }
+.ds-dropdown-label { flex: 1; min-width: 0; }
+.ds-dropdown-separator { height: 1px; background: var(--rule); margin: 4px 6px; }
+.ds-dropdown-trigger {
+    appearance: none;
+    background: var(--panel-2, transparent);
+    color: inherit; font: inherit;
+    border: 1px solid var(--rule);
+    border-radius: var(--r-1, 6px);
+    padding: 6px 12px;
+    cursor: pointer;
+    min-height: 32px;
+}
+@media (pointer: coarse) {
+    .ds-dropdown-trigger { min-height: 44px; }
+}
+
+/* Interaction primitives — drag/drop + keyboard shortcuts */
+.ds-reorderable { display: flex; gap: var(--space-1, 4px); }
+.ds-reorderable-vertical { flex-direction: column; }
+.ds-reorderable-horizontal { flex-direction: row; }
+.ds-reorder-item {
+    display: flex; align-items: center; gap: var(--space-2, 8px);
+    padding: var(--space-1, 4px); border-radius: var(--r-1, 10px);
+    background: var(--panel-1); color: var(--panel-text);
+    transition: transform var(--dur-snap, 120ms) var(--ease, ease), opacity var(--dur-snap, 120ms) var(--ease, ease);
+}
+.ds-reorder-handle {
+    min-width: 44px; min-height: 44px;
+    display: inline-flex; align-items: center; justify-content: center;
+    appearance: none; background: transparent; color: var(--panel-text-2, var(--panel-text));
+    border: 0; border-radius: var(--r-1, 10px);
+    cursor: grab; font: 14px/1 var(--ff-mono, monospace); letter-spacing: -2px;
+    touch-action: none; user-select: none;
+}
+.ds-reorder-handle:focus-visible { outline: 2px solid var(--focus-ring, var(--accent)); outline-offset: 2px; }
+.ds-reorder-handle:active { cursor: grabbing; }
+[data-dragging="true"] { opacity: 0.6; cursor: grabbing; transform: scale(0.98); }
+[data-drop-target-active="true"] {
+    outline: 2px dashed var(--focus-ring, var(--accent)); outline-offset: 2px;
+    background: color-mix(in srgb, var(--accent) 8%, var(--panel-1));
+}
+.ds-reorder-insertion-line {
+    height: 2px; background: var(--focus-ring, var(--accent));
+    border-radius: 1px; animation: ds-insertion-in var(--dur-snap, 120ms) var(--ease, ease);
+}
+@keyframes ds-insertion-in { from { transform: scaleX(0); opacity: 0; } to { transform: scaleX(1); opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+    .ds-reorder-item, [data-dragging="true"] { transition: none; transform: none; }
+    .ds-reorder-insertion-line { animation: none; }
+}
+.ds-kbd {
+    display: inline-block; font: 0.85em/1 var(--ff-mono, monospace);
+    padding: var(--space-1, 4px) calc(var(--space-1, 4px) * 1.5);
+    border: 1px solid var(--rule, var(--panel-text-3));
+    border-radius: var(--r-1, 10px);
+    background: var(--panel-2, var(--panel-1)); color: var(--panel-text);
+}
+.ds-kbd-group { margin: var(--space-3, 12px) 0; }
+.ds-kbd-group h3 { font-size: 0.9em; opacity: 0.7; margin: 0 0 var(--space-1, 4px); text-transform: capitalize; }
+/* One shortcut per row: the key chip on the left, its description on the right,
+   so the dialog reads as "G  Translate gizmo" rather than a wall of bare keys. */
+.ds-kbd-group ul { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: var(--space-1, 4px); }
+.ds-kbd-row { display: flex; align-items: baseline; gap: var(--space-2, 8px); }
+.ds-kbd-row .ds-kbd { flex: 0 0 auto; min-width: 3.5em; text-align: center; }
+.ds-kbd-label { flex: 1 1 auto; opacity: 0.85; }
+
+/* ---------------------------------------------------------------
+   CommandPalette (ov-cmd)
+   --------------------------------------------------------------- */
+.ov-cmd-backdrop {
+    position: fixed; inset: 0;
+    z-index: var(--z-overlay, 1000);
+    background: color-mix(in oklab, var(--fg) 32%, transparent);
+    display: flex; align-items: flex-start; justify-content: center;
+    padding: 12vh var(--space-3, 16px) var(--space-3, 16px);
+}
+.ov-cmd-panel {
+    width: min(560px, 100%);
+    max-height: 64vh;
+    display: flex; flex-direction: column;
+    background: var(--bg-2); color: var(--fg);
+    border: 1px solid var(--rule);
+    border-radius: var(--r-2, 14px);
+    box-shadow: var(--shadow-3);
+    overflow: hidden;
+}
+.ov-cmd-input {
+    appearance: none; border: 0;
+    border-bottom: 1px solid var(--rule);
+    background: transparent; color: var(--fg);
+    padding: var(--space-3, 16px);
+    font: var(--fs-body, 16px)/1.4 var(--ff-body, sans-serif);
+    outline: none;
+}
+.ov-cmd-input::placeholder { color: var(--fg-3); }
+.ov-cmd-list { overflow: auto; padding: var(--space-1, 4px); min-height: 0; }
+.ov-cmd-group {
+    padding: var(--space-2, 8px) var(--space-2, 8px) var(--space-1, 4px);
+    font: var(--fs-micro, 11px)/1 var(--ff-mono, monospace);
+    text-transform: uppercase; letter-spacing: var(--tr-label, 0.1em);
+    color: var(--fg-3);
+}
+.ov-cmd-item {
+    display: flex; align-items: center; gap: var(--space-2, 8px);
+    width: 100%; min-height: 40px;
+    padding: var(--space-2, 8px) var(--space-3, 16px);
+    background: transparent; border: 0;
+    color: var(--fg); font: inherit; text-align: left;
+    border-radius: var(--r-1, 10px); cursor: pointer;
+}
+.ov-cmd-item.is-active { background: var(--accent); color: var(--accent-fg); }
+.ov-cmd-glyph { width: 18px; display: inline-flex; justify-content: center; flex-shrink: 0; }
+.ov-cmd-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ov-cmd-hint {
+    flex-shrink: 0; color: var(--fg-3);
+    font: var(--fs-tiny, 12px)/1 var(--ff-mono, monospace);
+}
+.ov-cmd-item.is-active .ov-cmd-hint { color: var(--accent-fg); }
+.ov-cmd-empty { padding: var(--space-4, 24px); text-align: center; color: var(--fg-3); }
+
+/* ---------------------------------------------------------------
+   EmojiPicker (ov-emoji)
+   --------------------------------------------------------------- */
+.ov-emoji-root {
+    position: fixed; left: 0; top: 0;
+    z-index: var(--z-overlay, 1000);
+    width: 280px;
+    display: flex; flex-direction: column;
+    background: var(--bg-2); color: var(--fg);
+    border: 1px solid var(--rule);
+    border-radius: var(--r-2, 14px);
+    box-shadow: var(--shadow-3);
+    outline: none; overflow: hidden;
+}
+.ov-emoji-tabs {
+    display: flex; flex-shrink: 0;
+    border-bottom: 1px solid var(--rule);
+    background: var(--bg-3);
+}
+.ov-emoji-tab {
+    flex: 1; appearance: none; border: 0; background: transparent;
+    padding: var(--space-2, 8px); cursor: pointer; font-size: var(--fs-lg, 18px);
+    border-bottom: 2px solid transparent;
+}
+.ov-emoji-tab[aria-selected="true"] { border-bottom-color: var(--accent); background: var(--bg-2); }
+.ov-emoji-grid { overflow: auto; max-height: 220px; padding: var(--space-2, 8px); }
+.ov-emoji-grid-inner { display: grid; grid-template-columns: repeat(8, 1fr); gap: var(--space-1, 4px); }
+.ov-emoji-cell {
+    appearance: none; border: 0; background: transparent;
+    aspect-ratio: 1; font-size: var(--fs-lg, 18px);
+    border-radius: var(--r-1, 10px); cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center;
+}
+.ov-emoji-cell:hover, .ov-emoji-cell:focus-visible {
+    background: color-mix(in oklab, var(--accent) 18%, transparent); outline: none;
+}
+
+/* ---------------------------------------------------------------
+   BootOverlay (ov-boot)
+   --------------------------------------------------------------- */
+.ov-boot {
+    position: fixed; inset: 0;
+    z-index: calc(var(--z-overlay, 1000) + 100);
+    background: var(--bg);
+    display: flex; align-items: center; justify-content: center;
+    color: var(--fg);
+}
+.ov-boot-inner {
+    display: flex; flex-direction: column; align-items: center;
+    gap: var(--space-3, 16px); width: min(320px, 80vw);
+}
+.ov-boot-spinner {
+    width: 40px; height: 40px; border-radius: 50%;
+    border: 3px solid var(--rule);
+    border-top-color: var(--accent);
+    animation: ov-boot-spin 0.8s linear infinite;
+}
+@keyframes ov-boot-spin { to { transform: rotate(360deg); } }
+.ov-boot-mark { font-size: 40px; line-height: 1; }
+.ov-boot-mark-error { color: var(--danger); }
+.ov-boot-bar {
+    width: 100%; height: 6px;
+    background: var(--bg-3); border-radius: var(--r-pill, 999px);
+    overflow: hidden;
+}
+.ov-boot-bar-fill {
+    height: 100%; background: var(--accent);
+    border-radius: var(--r-pill, 999px);
+    transition: width var(--dur-base, 160ms) var(--ease, ease);
+}
+.ov-boot-phase {
+    font: var(--fs-sm, 14px)/1.4 var(--ff-mono, monospace);
+    color: var(--fg-2); text-align: center;
+}
+.ov-boot.is-error .ov-boot-phase { color: var(--danger); }
+@media (prefers-reduced-motion: reduce) {
+    .ov-boot-spinner { animation: none; }
+    .ov-boot-bar-fill { transition: none; }
+}
+
+/* ---------------------------------------------------------------
+   SettingsPopover (ov-set)
+   --------------------------------------------------------------- */
+.ov-set-root {
+    position: fixed; left: 0; top: 0;
+    z-index: var(--z-overlay, 1000);
+    width: 300px; max-height: 70vh;
+    display: flex; flex-direction: column;
+    background: var(--bg-2); color: var(--fg);
+    border: 1px solid var(--rule);
+    border-radius: var(--r-2, 14px);
+    box-shadow: var(--shadow-3);
+    outline: none; overflow: hidden;
+}
+.ov-set-head {
+    flex-shrink: 0;
+    padding: var(--space-3, 16px);
+    border-bottom: 1px solid var(--rule);
+    font: var(--fs-sm, 14px)/1 var(--ff-mono, monospace);
+    text-transform: uppercase; letter-spacing: var(--tr-label, 0.1em);
+    color: var(--fg);
+}
+.ov-set-body { overflow: auto; padding: var(--space-2, 8px); }
+.ov-set-section + .ov-set-section { margin-top: var(--space-2, 8px); }
+.ov-set-section-head {
+    padding: var(--space-2, 8px) var(--space-2, 8px) var(--space-1, 4px);
+    font: var(--fs-micro, 11px)/1 var(--ff-mono, monospace);
+    text-transform: uppercase; letter-spacing: var(--tr-label, 0.1em);
+    color: var(--fg-3);
+}
+.ov-set-row {
+    display: flex; align-items: center; gap: var(--space-2, 8px);
+    min-height: 40px; padding: var(--space-1, 4px) var(--space-2, 8px);
+}
+.ov-set-row-label { flex: 1; min-width: 0; font-size: var(--fs-sm, 14px); color: var(--fg-2); }
+.ov-set-row-value { color: var(--fg); font: var(--fs-sm, 14px)/1 var(--ff-mono, monospace); }
+.ov-set-control {
+    appearance: none; flex-shrink: 0; max-width: 55%;
+    background: var(--bg-3); color: var(--fg);
+    border: 1px solid var(--rule); border-radius: var(--r-1, 10px);
+    padding: var(--space-1, 4px) var(--space-2, 8px); font: inherit;
+}
+.ov-set-control:focus-visible { outline: none; border-color: var(--accent); }
+input.ov-set-control[type="range"] { padding: 0; accent-color: var(--accent); }
+.ov-set-toggle { width: 18px; height: 18px; accent-color: var(--accent); flex-shrink: 0; cursor: pointer; }
+.ov-set-btn {
+    width: 100%; appearance: none; cursor: pointer;
+    background: var(--accent); color: var(--accent-fg);
+    border: 0; border-radius: var(--r-1, 10px);
+    padding: var(--space-2, 8px); font: inherit;
+}
+
+/* AuthModal — ov-auth-* */
+.ov-auth-backdrop {
+    position: fixed; inset: 0; z-index: var(--z-overlay, 1000);
+    display: flex; align-items: center; justify-content: center;
+    background: var(--scrim-strong);
+}
+.ov-auth-panel {
+    width: min(420px, 92vw);
+    display: flex; flex-direction: column;
+    background: var(--bg-2); color: var(--fg);
+    border: 1px solid var(--rule); border-radius: var(--r-2, 8px);
+    box-shadow: var(--shadow-overlay);
+    overflow: hidden;
+}
+.ov-auth-head { display: flex; align-items: center; justify-content: space-between; padding: var(--space-3); border-bottom: 1px solid var(--rule); }
+.ov-auth-title { margin: 0; font-size: var(--fs-2, 16px); font-weight: 700; }
+.ov-auth-x { border: none; background: transparent; color: var(--fg-2, var(--fg)); font-size: 22px; line-height: 1; cursor: pointer; }
+.ov-auth-x:hover { color: var(--fg); }
+.ov-auth-tabs { display: flex; gap: var(--space-1); padding: var(--space-2) var(--space-3) 0; }
+.ov-auth-tab { flex: 1; padding: var(--space-1) var(--space-2); border: 1px solid var(--rule); border-bottom: none; border-radius: var(--r-1) var(--r-1) 0 0; background: var(--bg-3); color: var(--fg-2, var(--fg)); cursor: pointer; }
+.ov-auth-tab.is-active { background: var(--bg-2); color: var(--fg); font-weight: 700; }
+.ov-auth-body { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-3); }
+.ov-auth-hint { margin: 0; font-size: var(--fs-0, 12px); color: var(--fg-2, var(--fg)); }
+.ov-auth-input { padding: var(--space-2); border: 1px solid var(--rule-strong); border-radius: var(--r-1); background: var(--bg-3); color: var(--fg); }
+.ov-auth-primary { padding: var(--space-2); border: none; border-radius: var(--r-1); background: var(--accent); color: var(--on-accent); font-weight: 700; cursor: pointer; }
+.ov-auth-primary:disabled { opacity: .6; cursor: progress; }
+.ov-auth-error { margin: 0 var(--space-3) var(--space-3); padding: var(--space-2); border-radius: var(--r-1); background: color-mix(in oklab, var(--danger) 15%, transparent); color: var(--danger); font-size: var(--fs-0, 12px); }
+
+/* VideoLightbox — ov-lightbox-* */
+.ov-lightbox-backdrop {
+    position: fixed; inset: 0; z-index: var(--z-overlay-top, 1100);
+    display: flex; align-items: center; justify-content: center;
+    background: var(--scrim-media);
+}
+.ov-lightbox-x { position: absolute; top: 16px; right: 16px; width: 40px; height: 40px; border: none; border-radius: 50%; background: color-mix(in oklab, var(--on-color) 12%, transparent); color: var(--on-color); font-size: 24px; line-height: 1; cursor: pointer; }
+.ov-lightbox-x:hover { background: color-mix(in oklab, var(--on-color) 24%, transparent); }
+.ov-lightbox-stage { display: flex; flex-direction: column; align-items: center; gap: var(--space-2); max-width: 92vw; max-height: 90vh; }
+.ov-lightbox-video { max-width: 92vw; max-height: 82vh; border-radius: var(--r-1); background: #000; /* true black media letterbox, intentional */ }
+.ov-lightbox-label { color: var(--on-color); font-size: var(--fs-0, 12px); opacity: .85; }
+
+/* ---------------------------------------------------------------
+   Editor-primitive scrollbars — thin, dark, themed so docked panels
+   don't show a fat light OS scrollbar over the dark engine chrome.
+   --------------------------------------------------------------- */
+.ds-ep-panel,
+.ds-ep-panel-body,
+.ds-ep-tree,
+.ds-ep-eventlog,
+.ds-ep-drawer { scrollbar-width: thin; scrollbar-color: var(--rule) transparent; }
+.ds-ep-panel ::-webkit-scrollbar,
+.ds-ep-panel-body::-webkit-scrollbar,
+.ds-ep-tree::-webkit-scrollbar,
+.ds-ep-eventlog::-webkit-scrollbar { width: 8px; height: 8px; }
+.ds-ep-panel ::-webkit-scrollbar-track,
+.ds-ep-panel-body::-webkit-scrollbar-track,
+.ds-ep-tree::-webkit-scrollbar-track,
+.ds-ep-eventlog::-webkit-scrollbar-track { background: transparent; }
+.ds-ep-panel ::-webkit-scrollbar-thumb,
+.ds-ep-panel-body::-webkit-scrollbar-thumb,
+.ds-ep-tree::-webkit-scrollbar-thumb,
+.ds-ep-eventlog::-webkit-scrollbar-thumb {
+    background: var(--rule); border-radius: var(--r-pill, 999px);
+    border: 2px solid transparent; background-clip: padding-box;
+}
+.ds-ep-panel ::-webkit-scrollbar-thumb:hover,
+.ds-ep-panel-body::-webkit-scrollbar-thumb:hover {
+    background: var(--panel-text-3, var(--rule)); background-clip: padding-box;
+}
+
+/* ---------------------------------------------------------------
+   Dense app-prop inputs — color swatch + checkbox sized to match the
+   engine-editor density (raw browser controls otherwise read as jank).
+   --------------------------------------------------------------- */
+/* Specificity bump (.ds-ep-propfield-value prefix) so the sized swatch/check win
+   over the generic `.ds-ep-propfield-value input { width:100% }` rule — otherwise
+   a color/checkbox app-prop stretches to the full field width and reads as jank. */
+.ds-ep-propfield-value input.ds-input-color { width: 28px; flex: 0 0 auto; }
+.ds-ep-propfield-value input.ds-input-check { width: 16px; flex: 0 0 auto; }
+.ds-input-color {
+    appearance: none; -webkit-appearance: none;
+    width: 28px; height: 22px; padding: 0;
+    border: 1px solid var(--rule); border-radius: var(--r-1, 4px);
+    background: var(--panel-2); cursor: pointer; flex-shrink: 0;
+}
+.ds-input-color::-webkit-color-swatch-wrapper { padding: 2px; }
+.ds-input-color::-webkit-color-swatch { border: none; border-radius: 2px; }
+.ds-input-color:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ds-input-check {
+    appearance: none; -webkit-appearance: none;
+    width: 16px; height: 16px; flex-shrink: 0;
+    border: 1px solid var(--rule); border-radius: var(--r-1, 4px);
+    background: var(--panel-2); cursor: pointer; position: relative;
+}
+.ds-input-check:checked { background: var(--accent); border-color: var(--accent); }
+.ds-input-check:checked::after {
+    content: ''; position: absolute; left: 4px; top: 1px;
+    width: 4px; height: 8px; border: solid var(--accent-fg);
+    border-width: 0 2px 2px 0; transform: rotate(45deg);
+}
+.ds-input-check:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ---------------------------------------------------------------
+   Tree drag-reparent affordance — clear drop target + dragging row.
+   useDropTarget marks the active row with [data-drop-target-active]; the
+   dragged source carries [data-dragging]. Both surfaced as visible state so a
+   reparent drag shows exactly where it will land.
+   --------------------------------------------------------------- */
+.ds-ep-tree-item[data-drop-target-active] > .ds-ep-tree-row,
+.ds-ep-tree-row[data-drop-target-active],
+.ds-ep-tree-row.drag-over {
+    background: color-mix(in oklab, var(--accent) 22%, transparent);
+    box-shadow: inset 0 0 0 1px var(--accent);
+}
+.ds-ep-panel-body[data-drop-target-active] {
+    box-shadow: inset 0 0 0 2px color-mix(in oklab, var(--accent) 50%, transparent);
+}
+.ds-ep-tree-item[data-dragging] > .ds-ep-tree-row,
+.ds-ep-tree-item.dragging > .ds-ep-tree-row { opacity: 0.5; }
+
+/* ---------------------------------------------------------------
+   Floating editor docks — the non-occluding idiom. The game/3D
+   viewport fills the whole editor stage; the hierarchy + inspector
+   ride over it as translucent, backdrop-blurred, collapsible cards
+   so the play area stays visible (and clickable) behind them. The
+   dock layer is pointer-events:none; only the dock cards capture
+   input, so the exposed viewport gutter clicks through to the canvas.
+   --------------------------------------------------------------- */
+.ds-247420 .ds-ep-stage { position: relative; flex: 1; min-height: 0; overflow: hidden; }
+.ds-247420 .ds-ep-dock-layer { display: block; }
+.ds-247420 .ds-ep-dock {
+    position: absolute; top: 8px; bottom: 8px;
+    display: flex; flex-direction: column;
+    width: 280px; max-width: calc(50% - 12px);
+    pointer-events: all;
+    background: color-mix(in oklab, var(--panel-1) 82%, transparent);
+    -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+    border: 1px solid var(--rule);
+    border-radius: var(--r-2, 8px);
+    box-shadow: var(--shadow-3);
+    color: var(--panel-text);
+    overflow: hidden;
+}
+.ds-247420 .ds-ep-dock-left { left: 8px; }
+.ds-247420 .ds-ep-dock-right { right: 8px; }
+/* Collapsed: shrink to just the header strip, freeing the viewport. */
+.ds-247420 .ds-ep-dock.collapsed { bottom: auto; height: auto; }
+.ds-247420 .ds-ep-dock-head {
+    display: flex; align-items: center; gap: 6px;
+    flex: 0 0 auto; padding: 4px 6px 4px 10px;
+    border-bottom: 1px solid var(--rule);
+    background: color-mix(in oklab, var(--panel-1) 60%, transparent);
+}
+.ds-247420 .ds-ep-dock.collapsed .ds-ep-dock-head { border-bottom: 0; }
+.ds-247420 .ds-ep-dock-title {
+    flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font: 8px/1 var(--ff-mono, monospace); text-transform: uppercase; letter-spacing: 0.12em;
+    color: var(--panel-text-3);
+}
+.ds-247420 .ds-ep-dock-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; background: transparent; }
+.ds-247420 .ds-ep-dock-body.hidden { display: none; }
+/* The right dock's body reuses .ds-ep-panel but must stay transparent so the
+   dock's own translucency/blur shows the game view through. */
+.ds-247420 .ds-ep-dock-body.ds-ep-panel { background: transparent; }
+
+/* Mobile: docks become full-width bottom-anchored sheets so they don't crowd
+   the narrow viewport side-by-side; the viewport still fills the stage behind. */
+@media (max-width: 760px) {
+    .ds-247420 .ds-ep-dock { width: auto; max-width: none; left: 6px; right: 6px; top: auto; bottom: 6px; max-height: 46vh; }
+    .ds-247420 .ds-ep-dock-left { bottom: calc(46vh + 12px); max-height: 40vh; }
+    .ds-247420 .ds-ep-dock.collapsed { bottom: auto; }
+    .ds-247420 .ds-ep-dock-left.collapsed { top: 6px; bottom: auto; }
+}

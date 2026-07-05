@@ -5,9 +5,12 @@ import { fileURLToPath } from 'url';
 import { GmLogWatcher, replayAll, SUBSYSTEMS, DEFAULT_LOG_DIR } from './index.js';
 import {
   readPrd, readMutables, rewriteRow, atomicWriteFile, discoverProjects, isKnownVerb, isAllowedProjectCwd,
+  readWatcherStatus,
 } from './registry.js';
 
 const MAX_QUERY_LEN = 4096;
+const HEALTH_WINDOW_MS = 15 * 60 * 1000; // rolling deviation-rate window
+const HEALTH_STALE_MS = 5 * 60 * 1000; // stale-heartbeat threshold
 const CODESEARCH_POLL_MS = 10000;
 const CODESEARCH_POLL_INTERVAL_MS = 200;
 const VERB_FILE_SHAPE = /^[a-zA-Z0-9-]+$/;
@@ -157,7 +160,45 @@ function parseCodeInsight(text) {
     if (currentSection) sectionLines.push(line);
   }
   flush();
-  return { summary, entries };
+  return { summary, entries, items: extractCodeInsightItems(entries, summary) };
+}
+
+// -- per-file treemap items: the real .codeinsight digest has no structured per-file
+// {name,size,complexity} table -- it is prose sections ("Large files:", "Long funcs:",
+// "Complex funcs:") with embedded "path:line:name(NL)" / "path:NNNL" fragments. Extract
+// a best-effort per-file size (line count where stated) and a complexity proxy (count of
+// complex/long-func mentions for that path, plus avgComplexity fallback) so the GUI can
+// render a treemap without fabricating data the format doesn't provide.
+function extractCodeInsightItems(entries, summary) {
+  const bySection = {};
+  for (const e of entries) bySection[e.section] = e.content;
+  const sizeOf = new Map();
+  const complexityOf = new Map();
+  const bump = (name, complexityInc) => {
+    if (!name) return;
+    complexityOf.set(name, (complexityOf.get(name) || 0) + complexityInc);
+  };
+  // "Large files:" -- "path:NNNL" comma-separated fragments carry real line counts.
+  const largeFiles = bySection['Code Organization'] || bySection['📊 Code Organization'] || '';
+  for (const m of largeFiles.matchAll(/([\w./\\-]+\.\w+):(\d+)L/g)) {
+    sizeOf.set(m[1], parseInt(m[2], 10));
+  }
+  // "Long funcs:" / "Complex funcs:" -- "path:line:name(NL)" or "(NNNL)" fragments bump
+  // the complexity proxy for that file; each mention counts as one complexity unit.
+  const funcSections = [bySection['Code Organization'], bySection['Issues'], bySection['🚨 Issues']].filter(Boolean).join('\n');
+  for (const m of funcSections.matchAll(/([\w./\\-]+\.\w+):\d+:[\w$]+\((\d+)[Lp]\)/g)) {
+    bump(m[1], 1);
+    if (!sizeOf.has(m[1])) sizeOf.set(m[1], parseInt(m[2], 10));
+  }
+  const names = new Set([...sizeOf.keys(), ...complexityOf.keys()]);
+  const fallbackComplexity = summary.avgComplexity ?? 1;
+  const items = [...names].map(name => ({
+    name,
+    size: sizeOf.get(name) || 1,
+    complexity: complexityOf.get(name) || fallbackComplexity,
+  }));
+  items.sort((a, b) => b.size - a.size);
+  return items;
 }
 
 // -- memory-graph reader: real schema witnessed via Read on anentrypoint-design's disciplines --
@@ -358,9 +399,10 @@ class Store {
     return { total: evs.length, byEvent, recent };
   }
 
-  deviations({ limit = 200, sess } = {}) {
+  deviations({ limit = 200, sess, sessionId } = {}) {
+    const sessFilter = sess || sessionId;
     let arr = this.events.filter(e => typeof e.event === 'string' && e.event.startsWith('deviation.'));
-    if (sess) arr = arr.filter(e => e.sess === sess);
+    if (sessFilter) arr = arr.filter(e => e.sess === sessFilter);
     const byKind = {};
     for (const e of arr) byKind[e.event] = (byKind[e.event] || 0) + 1;
     const bySession = {};
@@ -455,7 +497,8 @@ class Store {
     return { total: arr.length, rows: arr.slice(0, limit) };
   }
 
-  processTree(sess) {
+  processTree(sess, sessionId) {
+    sess = sess || sessionId;
     if (!sess) return { sess: null, nodes: [], gaps: [] };
     const match = sess === '(no-session)' ? '' : sess;
     const evs = this.events.filter(e => (e.sess || '') === match).slice().sort((a,b)=>(a.ts||'').localeCompare(b.ts||''));
@@ -712,6 +755,52 @@ function resolveScopedCwd(store, cwdParam) {
   return { ok: true, cwd };
 }
 
+// Turns a project cwd (absolute path) into a filesystem/header-safe slug for use in
+// Content-Disposition filenames: last path segment, non [a-zA-Z0-9-_] chars collapsed
+// to '-', falls back to 'project' if the result is empty.
+function sanitizeProjectName(cwd) {
+  const base = String(cwd || '').split(/[\\/]/).filter(Boolean).pop() || 'project';
+  const slug = base.replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/^-+|-+$/g, '');
+  return slug || 'project';
+}
+
+// Cross-project health summary: reuses discoverProjects (same discovery heuristic backing
+// /api/projects), the deviation.* event stream (same source /api/deviations counts) windowed
+// to the last HEALTH_WINDOW_MS, readWatcherStatus (same alive-flag /api/projects surfaces),
+// and each project's own last-seen event ts for stale-heartbeat detection.
+function healthSummary(store) {
+  const projects = discoverProjects(store.events);
+  const now = Date.now();
+  const out = [];
+  for (const proj of projects) {
+    const cwd = proj.cwd;
+    const projEvents = store.events.filter(e => e.cwd === cwd);
+    let lastTs = 0;
+    let devCountInWindow = 0;
+    for (const e of projEvents) {
+      const t = typeof e.ts === 'number' ? e.ts : (e.ts ? Date.parse(e.ts) : 0);
+      if (!t) continue;
+      if (t > lastTs) lastTs = t;
+      if (typeof e.event === 'string' && e.event.startsWith('deviation.') && (now - t) <= HEALTH_WINDOW_MS) {
+        devCountInWindow++;
+      }
+    }
+    const windowMinutes = HEALTH_WINDOW_MS / 60000;
+    const deviationRate = devCountInWindow / windowMinutes;
+    const status = readWatcherStatus(cwd);
+    const watcherAlive = !!(status && status.alive);
+    const staleSeconds = lastTs ? Math.max(0, Math.floor((now - lastTs) / 1000)) : null;
+    out.push({
+      cwd,
+      name: path.basename(cwd),
+      deviationRate,
+      watcherAlive,
+      staleSeconds,
+    });
+  }
+  return out;
+}
+
 export function createServer({ logDir = DEFAULT_LOG_DIR, port = 0, host = '127.0.0.1' } = {}) {
   const store = new Store(logDir);
   store.load();
@@ -735,7 +824,7 @@ export function createServer({ logDir = DEFAULT_LOG_DIR, port = 0, host = '127.0
       if (p === '/api/search') return send(res, 200, { q: q.q || '', results: store.search(q.q, q) });
       if (p === '/api/deviations') return send(res, 200, store.deviations(q));
       if (p === '/api/sessions') return send(res, 200, store.sessions(q));
-      if (p === '/api/process-tree') return send(res, 200, store.processTree(q.sess));
+      if (p === '/api/process-tree') return send(res, 200, store.processTree(q.sess, q.sessionId));
       if (p === '/api/observed-subsystems') return send(res, 200, { subsystems: store.observedSubsystems() });
       if (p === '/api/distinct') return send(res, 200, { field: q.field, values: store.distinctValues(q.field, q) });
       if (p === '/api/query') {
@@ -761,6 +850,9 @@ export function createServer({ logDir = DEFAULT_LOG_DIR, port = 0, host = '127.0
       if (p === '/api/projects') {
         return send(res, 200, { projects: discoverProjects(store.events) });
       }
+      if (p === '/api/health-summary') {
+        return send(res, 200, healthSummary(store));
+      }
       if (p === '/api/prd') {
         const scope = resolveScopedCwd(store, q.cwd);
         if (!scope.ok) return send(res, 403, { error: scope.error });
@@ -772,6 +864,33 @@ export function createServer({ logDir = DEFAULT_LOG_DIR, port = 0, host = '127.0
         if (!scope.ok) return send(res, 403, { error: scope.error });
         const { mtimeMs, rows } = readMutables(scope.cwd);
         return send(res, 200, { cwd: scope.cwd, mtimeMs, rows });
+      }
+      if (p === '/api/export') {
+        const scope = resolveScopedCwd(store, q.cwd);
+        if (!scope.ok) return send(res, 403, { error: scope.error });
+        let prdRows = [], mutablesRows = [];
+        try { prdRows = readPrd(scope.cwd).rows || []; } catch (_) { prdRows = []; }
+        try { mutablesRows = readMutables(scope.cwd).rows || []; } catch (_) { mutablesRows = []; }
+        const bundle = {
+          snapshot: store.snapshot(),
+          sessions: store.sessions({ limit: 20 }),
+          deviations: store.deviations(q),
+          prd: prdRows,
+          mutables: mutablesRows,
+          exportedAt: new Date().toISOString(),
+          cwd: scope.cwd,
+        };
+        const slug = sanitizeProjectName(scope.cwd);
+        const ts = new Date().toISOString().replace(/[:.]/g, '-');
+        const filename = `gmsniff-export-${slug}-${ts}.json`;
+        const bodyStr = JSON.stringify(bundle);
+        res.writeHead(200, {
+          'Content-Type': 'application/json',
+          'Content-Disposition': `attachment; filename="${filename}"`,
+          'Cache-Control': 'no-cache',
+          'Access-Control-Allow-Origin': '*',
+        });
+        return res.end(bodyStr);
       }
       if (p === '/api/prd/edit' || p === '/api/mutables/edit') {
         if (req.method !== 'POST') return send(res, 405, { error: 'method not allowed' });
