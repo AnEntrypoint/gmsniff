@@ -92,6 +92,20 @@
 .gm-row-gap-8 { display:flex; align-items:center; gap:8px; }
 .gm-row-full { display:flex; align-items:center; width:100%; }
 .gm-row-auto-gap-10 { margin-left:auto; display:flex; align-items:center; gap:10px; }
+
+/* Mobile: the topbar row packs three independent clusters (brand+leaf,
+   project select, connection chip+theme toggle) into one non-wrapping flex
+   row -- fine down to tablet width, but at phone width all three squeeze to
+   the point of the brand text overflowing its own box. Mirror
+   anentrypoint-design's .app-topbar mobile pattern (app-shell.css ~1030-1054):
+   let the row wrap onto a second line instead of shrinking past legibility,
+   and drop the select back to full width so it stays a comfortable tap
+   target rather than a 44px sliver. */
+@media (max-width: 480px) {
+  .gm-row-full { flex-wrap: wrap; row-gap: 8px; }
+  .gm-row-full > select.gm-ml-10 { margin-left: 0; flex: 1 1 100%; order: 3; }
+  .gm-row-full > .gm-row-auto-gap-10 { margin-left: auto; order: 2; }
+}
 .gm-ml-6 { margin-left:6px; }
 .gm-ml-10 { margin-left:10px; }
 .gm-mr-8 { margin-right:8px; }
