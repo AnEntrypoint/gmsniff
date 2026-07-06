@@ -32,6 +32,14 @@ function todayDir() {
   return new Date().toISOString().slice(0, 10);
 }
 
+// Retry interval for GmLogWatcher's watch-setup when this._dir does not exist yet at start()
+// (e.g. a fresh machine before any event has ever been written to the central log) or the
+// watch handle needs re-arming after the directory reappears -- fs.watch() throws ENOENT
+// synchronously for a non-existent path (verified: Node re-checks the path at watch-call time,
+// it does not wait for the path to appear), so without a retry loop a directory created any
+// time after start() is silently never observed, permanently, for that process's lifetime.
+const WATCH_RETRY_MS = parseInt(process.env.GM_WATCH_RETRY_MS, 10) || 1000;
+
 export class GmLogWatcher extends EventEmitter {
   constructor(logDir = DEFAULT_LOG_DIR) {
     super();
@@ -39,17 +47,51 @@ export class GmLogWatcher extends EventEmitter {
     this._tails = new Map();
     this._timers = new Map();
     this._watcher = null;
+    this._retryTimer = null;
+    this._stopped = false;
   }
 
   start() {
     this._scanAll();
+    this._armWatch();
+    return this;
+  }
+
+  _armWatch() {
+    if (this._stopped || this._watcher) return;
+    try {
+      fs.mkdirSync(this._dir, { recursive: true });
+    } catch (e) {
+      this.emit('error', e);
+    }
     try {
       this._watcher = fs.watch(this._dir, { recursive: true }, (_, f) => {
         if (f && f.endsWith('.jsonl')) this._debounce(path.join(this._dir, f));
       });
-      this._watcher.on('error', e => this.emit('error', e));
-    } catch (e) { this.emit('error', e); }
-    return this;
+      this._watcher.on('error', e => { this.emit('error', e); this._rearm(); });
+    } catch (e) {
+      this.emit('error', e);
+      this._scheduleRetry();
+    }
+  }
+
+  // A watch handle that later errors (e.g. the directory is removed out from under it) is
+  // torn down and the same retry loop used for start()'s ENOENT case re-arms it once the
+  // directory is available again, so recovery after any transient directory loss looks
+  // identical to first-boot-before-directory-exists recovery.
+  _rearm() {
+    if (this._watcher) { try { this._watcher.close(); } catch (_) {} this._watcher = null; }
+    this._scheduleRetry();
+  }
+
+  _scheduleRetry() {
+    if (this._stopped || this._retryTimer) return;
+    this._retryTimer = setTimeout(() => {
+      this._retryTimer = null;
+      if (this._stopped) return;
+      this._scanAll(); // pick up any files written while unwatched, same as a fresh start()
+      this._armWatch();
+    }, WATCH_RETRY_MS);
   }
 
   // async + real drain for the same reason MultiProjectWatcher.stop() drains: closing an
@@ -58,6 +100,8 @@ export class GmLogWatcher extends EventEmitter {
   // handle-close bookkeeping (Windows UV_HANDLE_CLOSING assertion, reproduced and fixed
   // identically on the per-project tailer path -- see WATCH_CLOSE_DRAIN_MS).
   async stop() {
+    this._stopped = true;
+    if (this._retryTimer) { clearTimeout(this._retryTimer); this._retryTimer = null; }
     if (this._watcher) try { this._watcher.close(); } catch (_) {}
     for (const s of this._tails.values()) if (s.fd !== null) try { fs.closeSync(s.fd); } catch (_) {}
     for (const t of this._timers.values()) clearTimeout(t);
