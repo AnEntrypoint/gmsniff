@@ -9,7 +9,7 @@ import {
   Deviations, Sessions, ProcessTree, QueryPanel, RecallStats, ExecStats, HookStats,
   PrdEditor, MutablesEditor, LifecycleControl, RsTools, Codesearch, GmCallConsole,
   BrowserSessions, ConversationHistory, CodeInsightPanel, MemoryGraphPanel, stopMemoryGraphLayout, SUB_LIST,
-  lifecycleAct, runCodesearch, dispatchConsole,
+  lifecycleAct, runCodesearch, dispatchConsole, liveStreamDebugSnapshot,
 } from './panels.js';
 
 const h = webjsx.createElement;
@@ -410,7 +410,7 @@ async function boot() {
   refreshDeviationBadge();
   setInterval(refreshDeviationBadge, 10000);
   connectSSE();
-  window.gmsniff = { state, ui, go, renderBody, renderShell, openPalette, closePalette, buildCommandRegistry, parseHash, hashForState, syncHash };
+  window.gmsniff = { state, ui, go, renderBody, renderShell, openPalette, closePalette, buildCommandRegistry, parseHash, hashForState, syncHash, liveStreamDebugSnapshot };
 }
 
 boot();

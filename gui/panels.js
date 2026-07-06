@@ -111,14 +111,40 @@ let liveNewCount = 0;
 // project, same set /api/projects returns so the dropdown always matches
 // reality instead of a hand-maintained project list.
 let liveProjectFilter = null;
+// Monotonic, never-reused row key. `liveEntries.length` was used as the key previously, but
+// that value freezes at 2000 the instant the buffer starts shifting (push then immediate shift
+// nets a constant post-push length) -- every entry pushed after the first 2000 collided on the
+// same key (2000), and webjsx's keyed applyDiff reconciles same-key nodes as in-place updates
+// to ONE DOM node rather than distinct rows. Measured live under a real 2000+ event backlog:
+// the log rendered only a handful of distinct rows (colliding keys collapsing thousands of
+// pushes onto a few keyed nodes) while burning heavy diff/reflow cost repeatedly updating those
+// same collided nodes in place -- the dominant real cause of observed LiveStream jank (fps~1)
+// under load, distinct from and larger than the server-side discoverProjects/healthSummary
+// costs fixed alongside this. A module-level counter that only ever increments removes the
+// collision regardless of how many entries are ever pushed or shifted.
+let liveEntrySeq = 0;
 function projectBasename(cwd) {
   if (!cwd) return '(unknown)';
   return String(cwd).replace(/[\\/]+$/, '').split(/[\\/]/).pop() || cwd;
 }
+// Debug accessor -- the module-level liveEntries/liveProjectFilter/liveEntrySeq state had no
+// window.* exposure, so diagnosing a live-panel rendering anomaly required guessing from DOM
+// snapshots alone. Read-only snapshot (never returns the live array/mutable references) so a
+// caller can inspect but not corrupt push/shift ordering from the console.
+export function liveStreamDebugSnapshot() {
+  return {
+    liveEntriesLength: liveEntries.length,
+    liveEntrySeq,
+    liveProjectFilter,
+    livePaused,
+    liveNewCount,
+    lastEntries: liveEntries.slice(-5),
+  };
+}
 export function pushLiveEntry(ev) {
   const payload = { ...ev };
   delete payload._sub; delete payload._day; delete payload._fp;
-  liveEntries.push({ key: liveEntries.length, ts: fmtTs(ev.ts), sub: ev._sub, tone: colorFor(ev._sub || ''), event: ev.event || '?', preview: JSON.stringify(payload).slice(0, 200), cwd: ev.cwd || null });
+  liveEntries.push({ key: liveEntrySeq++, ts: fmtTs(ev.ts), sub: ev._sub, tone: colorFor(ev._sub || ''), event: ev.event || '?', preview: JSON.stringify(payload).slice(0, 200), cwd: ev.cwd || null });
   if (liveEntries.length > 2000) liveEntries.shift();
   if (livePaused) liveNewCount++;
 }

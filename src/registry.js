@@ -138,20 +138,42 @@ export function readWatcherStatus(cwd) {
   } catch (_) { return null; }
 }
 
+// mtime-gated per-cwd cache: readPrdMutablesState does 2 reads + regex-parse per call and is
+// invoked once per discovered project on every /api/projects and /api/health-summary request.
+// At real scale (55 discovered projects under C:/dev, measured live) that serial per-request
+// fan-out of blocking sync fs.readFileSync calls was the dominant cost behind observed GUI
+// jank under a real event backlog (health-summary/discoverProjects latency, knock-on main-
+// thread stalls). A cheap fs.statSync (mtimeMs only, no content read) gates the cache: result
+// is reused unless either file's mtime has actually changed since the last read, so the cache
+// never serves content staler than what's really on disk.
+const _prdMutStateCache = new Map(); // cwd -> { prdMtime, mutMtime, value }
+
+function statMtimeMs(p) {
+  try { return fs.statSync(p).mtimeMs; } catch (_) { return null; }
+}
+
 export function readPrdMutablesState(cwd) {
+  const prdPath = path.join(cwd, '.gm', 'prd.yml');
+  const mutPath = path.join(cwd, '.gm', 'mutables.yml');
+  const prdMtime = statMtimeMs(prdPath);
+  const mutMtime = statMtimeMs(mutPath);
+  const cached = _prdMutStateCache.get(cwd);
+  if (cached && cached.prdMtime === prdMtime && cached.mutMtime === mutMtime) return cached.value;
+
   const out = { prd_pending: 0, prd_total: 0, mut_unknown: 0, mut_total: 0 };
   try {
-    const prdText = fs.readFileSync(path.join(cwd, '.gm', 'prd.yml'), 'utf-8');
+    const prdText = fs.readFileSync(prdPath, 'utf-8');
     const items = prdText.split(/^- id:/m).slice(1);
     out.prd_total = items.length;
     out.prd_pending = items.filter(i => !/status:\s*(done|complete|completed)/.test(i)).length;
   } catch (_) {}
   try {
-    const mutText = fs.readFileSync(path.join(cwd, '.gm', 'mutables.yml'), 'utf-8');
+    const mutText = fs.readFileSync(mutPath, 'utf-8');
     const items = mutText.split(/^- id:/m).slice(1);
     out.mut_total = items.length;
     out.mut_unknown = items.filter(i => /status:\s*unknown/.test(i)).length;
   } catch (_) {}
+  _prdMutStateCache.set(cwd, { prdMtime, mutMtime, value: out });
   return out;
 }
 
