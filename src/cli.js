@@ -2,16 +2,114 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { GmLogWatcher, replayAll, DEFAULT_LOG_DIR } from './index.js';
+import { GmLogWatcher, MultiProjectWatcher, replayAll, DEFAULT_LOG_DIR } from './index.js';
 
 const PHASES = ['PLAN', 'EXECUTE', 'EMIT', 'VERIFY', 'COMPLETE'];
 
+// EXIT CODE CONTRACT (single source of truth -- printed by --schema/--describe and --help so
+// an agentic caller never has to infer this from source): 0 = success (including zero-match,
+// empty-result queries -- absence of data is not a failure), 2 = usage error (bad/missing
+// argument, unresolvable session, malformed flag value). No code path exits 0 on a thrown
+// error or genuine failure; uncaught exceptions propagate to Node's default non-zero exit.
+const EXIT_CODES = { 0: 'success (includes zero-match queries)', 2: 'usage error (bad/missing argument, malformed value)' };
+
+// Declarative flag registry -- single source of truth for parseArgs, printHelp, and
+// --schema/--describe. Every flag an agentic caller can pass is described here with its
+// type, default, and one-line meaning; nothing in parseArgs recognizes a flag this registry
+// does not also describe, so help text and machine-schema output cannot drift from behavior.
+const FLAG_DEFS = [
+  { name: 'help', alias: 'h', type: 'bool', desc: 'print human-readable help and exit 0' },
+  { name: 'schema', type: 'bool', desc: 'print machine-readable JSON description of every flag + output shape, then exit 0' },
+  { name: 'spool', type: 'string', desc: 'force one project dir (or .watcher.log path) as the event source' },
+  { name: 'since', type: 'string', desc: 'ISO date, epoch ms, or relative Ns/Nm/Nh/Nd/Nw; alias --after' },
+  { name: 'after', type: 'string', desc: 'alias for --since' },
+  { name: 'until', type: 'string', desc: 'ISO date, epoch ms, or relative Ns/Nm/Nh/Nd/Nw; alias --before' },
+  { name: 'before', type: 'string', desc: 'alias for --until' },
+  { name: 'sub', type: 'multi', desc: 'filter by subsystem (plugkit, hook, exec, rs_learn, ...); repeat = OR' },
+  { name: 'event', type: 'multi', desc: 'filter by event type (dispatch.end, deviation.gate-deny, ...); repeat = OR' },
+  { name: 'sess', type: 'multi', desc: 'filter by session id prefix; repeat = OR' },
+  { name: 'exclude-sess', type: 'multi', desc: 'exclude session id prefix; repeat = exclude any' },
+  { name: 'exclude-cwd', type: 'multi', desc: 'exclude working-dir regex; repeat = exclude any' },
+  { name: 'pid', type: 'multi', desc: 'filter by process id; repeat = OR' },
+  { name: 'grep', type: 'multi', desc: 'text regex the JSON-stringified event must match; repeat = AND' },
+  { name: 'igrep', type: 'multi', desc: 'text regex that excludes an event if matched' },
+  { name: 'day', type: 'string', desc: 'restrict to one day, YYYY-MM-DD' },
+  { name: 'cwd', type: 'string', desc: 'working-dir regex filter' },
+  { name: 'sort', type: 'string', default: 'ts', desc: 'sort key: ts|sub|event|sess|pid' },
+  { name: 'rollup', type: 'string', desc: 'dump filtered events as ndjson to this file path' },
+  { name: 'efficiency', type: 'string', desc: 'session id: turn count, dispatch ratio, time-to-COMPLETE' },
+  { name: 'tree', type: 'string', desc: 'session id (or "current"/"."/"@" to auto-resolve from cwd): chronological process tree' },
+  { name: 'bucket', type: 'string', default: '0.1', desc: 'histogram bucket width for --recall-scores' },
+  { name: 'days', type: 'string', default: '7', desc: 'day window for --memory-leverage' },
+  { name: 'limit', alias: 'head', type: 'number', default: 0, desc: 'stop after N matches (0 = unlimited); --head is an alias' },
+  { name: 'head', type: 'number', desc: 'alias for --limit' },
+  { name: 'tail-n', type: 'number', desc: 'keep only the last N rows after sort' },
+  { name: 'ctx', type: 'number', default: 0, desc: 'N events of context before+after each match' },
+  { name: 'truncate', type: 'number', default: 200, desc: 'max chars per row body; default 200 human / 2000 --json; --full disables' },
+  { name: 'top', type: 'number', default: 20, desc: 'top-N cutoff for --recall-misses/--classifier-rejects' },
+  { name: 'json', alias: 'ndjson', type: 'bool', desc: 'emit ndjson rows (one JSON event per line) instead of human-formatted text' },
+  { name: 'ndjson', type: 'bool', desc: 'alias for --json' },
+  { name: 'tail', alias: 'f', type: 'bool', desc: 'live tail after replay, fanned out across every discovered project + central log (also -f); narrow with --spool' },
+  { name: 'full', type: 'bool', desc: 'do not truncate row bodies' },
+  { name: 'reverse', type: 'bool', desc: 'newest first' },
+  { name: 'invert', type: 'bool', desc: 'invert the filter result' },
+  { name: 'count', type: 'bool', desc: 'print only the match count, then exit 0' },
+  { name: 'stats', type: 'bool', desc: 'breakdown by sub / event / sess / day' },
+  { name: 'list-sessions', type: 'bool', desc: 'per-session summary with phase walk' },
+  { name: 'list-deviations', type: 'bool', desc: 'recent deviations grouped by kind, own/foreign split, severity, recovery verb' },
+  { name: 'own-only', type: 'bool', desc: 'with --list-deviations: only own-session deviations' },
+  { name: 'foreign-only', type: 'bool', desc: 'with --list-deviations: only foreign-session deviations' },
+  { name: 'list-events', type: 'bool', desc: 'event-type histogram (optionally scoped by --sub)' },
+  { name: 'updates', type: 'bool', desc: 'live drift state + update.* event history' },
+  { name: 'watchers', type: 'bool', desc: 'one-line liveness + version per project cwd' },
+  { name: 'conformance', alias: 'projects', type: 'bool', desc: 'paper S14 metrics: unresolved-mutables + PRD-pending per project; --projects is an alias' },
+  { name: 'projects', type: 'bool', desc: 'alias for --conformance' },
+  { name: 'all', type: 'bool', desc: 'with --watchers: include dead watchers too' },
+  { name: 'all-dispatch', type: 'bool', desc: 'with --tree: show dispatch.start events too (dropped by default)' },
+  { name: 'no-color', type: 'bool', desc: 'disable ANSI color in output' },
+  { name: 'embed-failures', type: 'bool', desc: 'rs-learn embed_text step failures (structured + watcher.log fallback)' },
+  { name: 'recall-misses', type: 'bool', desc: 'recall events with hit=false grouped by query' },
+  { name: 'recall-scores', type: 'bool', desc: 'histogram of top-hit recall scores' },
+  { name: 'classifier-rejects', type: 'bool', desc: 'memorize_reject events grouped by reason' },
+  { name: 'memory-leverage', type: 'bool', desc: 'memorize_fired vs subsequent recall reuse per session' },
+  { name: 'recall-modes', type: 'bool', desc: 'distribution of recall.mode (vector_top_k|fallback_like|kv_query)' },
+  { name: 'table-drops', type: 'bool', desc: 'catastrophic table_dropped events with dim deltas' },
+  { name: 'discipline-sigil-ignored', type: 'bool', desc: 'discipline_sigil_ignored events (doc-vs-code drift)' },
+];
+
 const FLAGS = {
-  string: ['spool', 'since', 'until', 'before', 'after', 'sub', 'event', 'sess', 'day', 'cwd', 'pid', 'sort', 'rollup', 'format', 'efficiency', 'tree', 'exclude-sess', 'exclude-cwd', 'bucket', 'days'],
-  multi: ['grep', 'igrep', 'sub', 'event', 'sess', 'pid', 'exclude-sess', 'exclude-cwd'],
-  number: ['limit', 'head', 'tail-n', 'ctx', 'truncate', 'top'],
-  bool: ['json', 'ndjson', 'tail', 'f', 'full', 'reverse', 'invert', 'count', 'stats', 'list-sessions', 'list-deviations', 'own-only', 'foreign-only', 'list-events', 'updates', 'watchers', 'conformance', 'projects', 'all', 'all-dispatch', 'no-color', 'help', 'h', 'embed-failures', 'recall-misses', 'recall-scores', 'classifier-rejects', 'memory-leverage', 'recall-modes', 'table-drops', 'discipline-sigil-ignored'],
+  string: FLAG_DEFS.filter(f => f.type === 'string').map(f => f.name),
+  multi: FLAG_DEFS.filter(f => f.type === 'multi').map(f => f.name),
+  number: FLAG_DEFS.filter(f => f.type === 'number').map(f => f.name),
+  bool: FLAG_DEFS.filter(f => f.type === 'bool').map(f => f.name),
 };
+const KNOWN_FLAG_NAMES = new Set(FLAG_DEFS.map(f => f.name));
+
+function schemaObject() {
+  return {
+    exitCodes: EXIT_CODES,
+    flags: FLAG_DEFS.map(f => ({ flag: `--${f.name}`, alias: f.alias ? `--${f.alias}` : undefined, type: f.type, default: f.default, description: f.desc })),
+    subcommands: [
+      { name: 'gui', usage: 'gmsniff gui [--port N] [--open]', desc: 'launch the browser GUI server' },
+      { name: '--prd-edit', usage: 'gmsniff --prd-edit <cwd> <id> [--status <s>] [--text <t>]', desc: 'rewrite a PRD row\'s status/text in <cwd>/.gm/prd.yml, atomic write' },
+      { name: '--mutable-edit', usage: 'gmsniff --mutable-edit <cwd> <id> [--status <s>] [--witness <w>]', desc: 'rewrite a mutable row\'s status/witness in <cwd>/.gm/mutables.yml, atomic write' },
+      { name: '--dispatch', usage: 'gmsniff --dispatch <cwd> <verb> [--json <payload>]', desc: 'write payload (default {}) to <cwd>/.gm/exec-spool/in/<verb>/<ts>.txt' },
+    ],
+    outputModes: {
+      human: 'default: fixed-width columns, ANSI color unless --no-color/NO_COLOR/non-TTY, truncated to --truncate (default 200 chars)',
+      json: '--json/--ndjson: one JSON object per line (ndjson), untruncated up to --truncate (default 2000 chars); same field set as human mode, no fields hidden or renamed between modes',
+    },
+    notes: [
+      'An unrecognized --flag is a usage error (exit 2), never a silent no-op.',
+      'A --limit/--head/--ctx/--truncate/--top/--tail-n value that does not parse as an integer is a usage error (exit 2), never a silent 0.',
+      'This object is generated from the same FLAG_DEFS table that drives argument parsing and --help text -- it cannot drift from actual CLI behavior.',
+    ],
+  };
+}
+
+function printSchema() {
+  process.stdout.write(JSON.stringify(schemaObject(), null, 2) + '\n');
+}
 
 function parseArgs(argv) {
   const opts = { _multi: {} };
@@ -22,11 +120,23 @@ function parseArgs(argv) {
     if (a === '-f') { opts.tail = true; continue; }
     if (!a.startsWith('--')) continue;
     const key = a.slice(2);
+    if (!KNOWN_FLAG_NAMES.has(key)) {
+      process.stderr.write(`unknown flag: --${key}\nrun 'gmsniff --help' for the flag list, or 'gmsniff --schema' for machine-readable flag descriptions\n`);
+      process.exit(2);
+    }
     if (FLAGS.bool.includes(key)) { opts[key] = true; continue; }
     const val = argv[++i];
-    if (FLAGS.multi.includes(key)) opts._multi[key].push(val);
-    else if (FLAGS.number.includes(key)) opts[key] = parseInt(val, 10) || 0;
-    else opts[key] = val;
+    if (FLAGS.multi.includes(key)) { opts._multi[key].push(val); continue; }
+    if (FLAGS.number.includes(key)) {
+      const n = parseInt(val, 10);
+      if (val === undefined || Number.isNaN(n)) {
+        process.stderr.write(`--${key} requires an integer value, got: ${val === undefined ? '(missing)' : JSON.stringify(val)}\n`);
+        process.exit(2);
+      }
+      opts[key] = n;
+      continue;
+    }
+    opts[key] = val;
   }
   return opts;
 }
@@ -36,7 +146,7 @@ function printHelp() {
 
 USAGE
   gmsniff [filters] [output]            dump matching events (requires ≥1 flag)
-  gmsniff -f [filters]                  live tail
+  gmsniff -f [filters]                  live tail, fanned out across every discovered project
   gmsniff --list-sessions [filters]     per-session summary with phase walk
   gmsniff --list-deviations             recent deviations grouped by kind, with own/foreign split,
                                         severity, recovery verb, and per-hour rate
@@ -64,6 +174,15 @@ USAGE
   gmsniff --discipline-sigil-ignored    discipline_sigil_ignored events (doc-vs-code drift)
   gmsniff --tree <sess> [--all-dispatch] drops dispatch.start unless --all-dispatch
   gmsniff gui [--port N] [--open]       launch browser GUI
+  gmsniff --schema                      machine-readable JSON: every flag, type, default, exit codes,
+                                        output-mode contract -- for agentic/programmatic callers
+
+EXIT CODES
+  0                      success (includes zero-match/empty-result queries -- absence of
+                         data is not a failure)
+  2                      usage error: bad/missing argument, unresolvable session id, or a
+                         numeric flag value that failed to parse as an integer
+  (other)                uncaught exception (Node default); never silently mapped to 0
 
 SOURCES
   default                ~/.gm/gm-log (or GM_LOG_DIR) day/subsystem jsonl files
@@ -71,6 +190,11 @@ SOURCES
                          <project>/.gm/exec-spool/.watcher.log (roots: GM_SPOOL_DIRS,
                          DEV_ROOT, GM_DEV_ROOT, cwd, C:/dev or ~/dev)
   --spool <path>         force one project dir (or .watcher.log path) as the source
+  -f / --tail            live: both sources run concurrently -- the central log watcher plus
+                         a per-project .watcher.log tailer for every discovered project,
+                         merged into one stream with cwd attribution preserved; rediscovers
+                         new/removed projects every GM_FANOUT_REDISCOVER_MS (default 30000)
+                         without restart. --spool with -f pins the fanout to one project.
 
 TIME
   --since <t>            ISO date, epoch ms, or relative Ns/Nm/Nh/Nd/Nw
@@ -101,7 +225,7 @@ OUTPUT
   --reverse              newest first
   --sort <key>           ts|sub|event|sess|pid (default ts)
   --count                print only the match count
-  -f, --tail             live tail after replay
+  -f, --tail             live tail after replay, fanned out across every discovered project
   --no-color             disable ANSI color
 
 EXAMPLES
@@ -967,13 +1091,30 @@ async function rollup(out, all, filter) {
   process.stderr.write(`# rolled up ${filtered.length} events -> ${out}\n`);
 }
 
+// Live tail fans out across every discovered gm-plugkit project concurrently (one
+// ProjectLogTailer per project's .gm/exec-spool/.watcher.log via MultiProjectWatcher),
+// same coverage as the GUI server's Store.startLive -- plus the central ~/.gm/gm-log tree
+// watcher for the case where that log aggregates events directly. New projects appearing
+// on disk after the CLI started are picked up by the fanout's periodic rediscovery with no
+// restart; --spool <path> narrows to one explicit project dir (or .watcher.log path), same
+// semantics as the replay path's --spool, bypassing rediscovery for a pinned single target.
 async function liveTail(filter, opts) {
   const watcher = new GmLogWatcher(DEFAULT_LOG_DIR);
   watcher.on('event', e => { if (filter(e)) process.stdout.write(formatRow(e, opts)); });
   watcher.on('error', err => process.stderr.write(`# error: ${err?.message || err}\n`));
   watcher.start();
-  process.stdout.write('# tailing... (Ctrl-C to exit)\n');
+
+  const fanout = new MultiProjectWatcher({ explicit: opts.spool });
+  fanout.on('event', e => { if (filter(e)) process.stdout.write(formatRow(e, opts)); });
+  fanout.on('error', err => process.stderr.write(`# error (${err?.cwd || '?'}): ${err?.message || err}\n`));
+  fanout.on('project.added', p => process.stderr.write(`# watching: ${p.cwd}\n`));
+  fanout.on('project.removed', p => process.stderr.write(`# stopped watching (log gone): ${p.cwd}\n`));
+  fanout.start();
+
+  const projectCount = fanout.projects().length;
+  process.stdout.write(`# tailing... ${projectCount} project(s) + central log (Ctrl-C to exit)\n`);
   process.stdin.resume();
+  process.on('SIGINT', () => { watcher.stop(); fanout.stop(); process.exit(0); });
 }
 
 async function launchGui(args) {
@@ -998,6 +1139,9 @@ async function launchGui(args) {
 const argv = process.argv.slice(2);
 if (argv[0] === 'gui') {
   await launchGui(argv.slice(1));
+} else if (argv[0] === '--schema') {
+  printSchema();
+  process.exit(0);
 } else if (argv[0] === '--prd-edit' || argv[0] === '--mutable-edit' || argv[0] === '--dispatch') {
   const verb = argv[0];
   const cwd = argv[1];
@@ -1020,6 +1164,7 @@ if (argv[0] === 'gui') {
 } else {
   const opts = parseArgs(argv);
   if (opts.help || argv.length === 0) { printHelp(); process.exit(0); }
+  if (opts.schema) { printSchema(); process.exit(0); }
   if (opts['no-color']) process.env.NO_COLOR = '1';
 
   const filter = buildFilter(opts);

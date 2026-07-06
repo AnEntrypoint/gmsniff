@@ -208,7 +208,10 @@ export function discoverProjects(events, { extraRoots = [] } = {}) {
   return rows;
 }
 
-const VERB_ALLOWLIST = new Set([
+// Exported (not just isKnownVerb) so a capabilities/introspection surface (server.js's
+// GET /api/capabilities) can enumerate the exact allowlist an agentic caller's /api/lifecycle
+// POST is validated against, rather than that list being duplicated/hardcoded a second place.
+export const VERB_ALLOWLIST = new Set([
   'instruction', 'transition', 'prd-add', 'prd-resolve', 'mutable-add', 'mutable-resolve',
   'residual-scan', 'codesearch', 'recall', 'browser', 'exec_js', 'phase-status',
   'git_status', 'git_log', 'git_diff', 'git_show', 'git_branch', 'git_add', 'git_commit',

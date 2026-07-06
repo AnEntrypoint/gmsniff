@@ -102,5 +102,120 @@ await new Promise((resolve, reject) => {
 await live.close();
 fs.rmSync(liveDir, { recursive: true, force: true });
 
+// --- Multi-project live fanout (server-side) ---
+// Two fake discovered projects, each with its own .gm/exec-spool/.watcher.log (evt: line
+// format, same shape gm-plugkit's watcher actually writes). GM_SPOOL_DIRS points
+// discoverSpoolLogs/MultiProjectWatcher at a dedicated temp root so this test is isolated
+// from any real projects on the machine. Verifies: concurrent per-project tailing, cwd
+// attribution preserved per event, dynamic appearance (a third project added after the
+// server/fanout already started) picked up without restart, and cwd-spoof resistance (a
+// crafted evt: line claiming a foreign cwd must be overridden by the real discovered cwd).
+const fanoutRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gmsniff-fanout-'));
+function makeProject(name) {
+  const proj = path.join(fanoutRoot, name);
+  const spoolDir = path.join(proj, '.gm', 'exec-spool');
+  fs.mkdirSync(spoolDir, { recursive: true });
+  const logFp = path.join(spoolDir, '.watcher.log');
+  fs.writeFileSync(logFp, '');
+  return { proj: path.resolve(proj), logFp };
+}
+const projA = makeProject('proj-a');
+const projB = makeProject('proj-b');
+
+const prevSpoolDirs = process.env.GM_SPOOL_DIRS;
+process.env.GM_FANOUT_REDISCOVER_MS = '300';
+process.env.GM_SPOOL_DIRS = [projA.proj, projB.proj].join(path.delimiter);
+
+const fanoutSrv = await createServer({ logDir: fs.mkdtempSync(path.join(os.tmpdir(), 'gmsniff-empty-')), port: 0 });
+
+const fanoutReceived = [];
+let fanoutHello = false;
+const projectEvents = [];
+await new Promise((resolve, reject) => {
+  const req = http.get(fanoutSrv.url + '/api/stream', res => {
+    let buf = '';
+    res.on('data', chunk => {
+      buf += chunk.toString('utf8');
+      let idx;
+      while ((idx = buf.indexOf('\n\n')) !== -1) {
+        const frame = buf.slice(0, idx); buf = buf.slice(idx + 2);
+        let event = 'message', data = '';
+        for (const l of frame.split('\n')) {
+          if (l.startsWith('event: ')) event = l.slice(7);
+          else if (l.startsWith('data: ')) data += l.slice(6);
+        }
+        if (event === 'hello') fanoutHello = true;
+        else if (event === 'event') { try { fanoutReceived.push(JSON.parse(data)); } catch {} }
+        else if (event === 'project.added' || event === 'project.removed') { try { projectEvents.push({ event, data: JSON.parse(data) }); } catch {} }
+      }
+    });
+    res.on('error', reject);
+  });
+  req.on('error', reject);
+  (async () => {
+    const helloDl = Date.now() + 3000;
+    while (Date.now() < helloDl && !fanoutHello) await new Promise(r => setTimeout(r, 50));
+    assert(fanoutHello, 'fanout SSE hello not received');
+
+    const markerA = 'FANOUT_A_' + Date.now();
+    const markerB = 'FANOUT_B_' + Date.now();
+    fs.appendFileSync(projA.logFp, `2026-07-06 evt: ${JSON.stringify({ ts: Date.now(), sub: 'plugkit', event: 'dispatch.end', marker: markerA })}\n`);
+    fs.appendFileSync(projB.logFp, `2026-07-06 evt: ${JSON.stringify({ ts: Date.now(), sub: 'plugkit', event: 'dispatch.end', marker: markerB })}\n`);
+    // cwd-spoof attempt: crafted line claims cwd of project A while written into project B's log.
+    const spoofMarker = 'FANOUT_SPOOF_' + Date.now();
+    fs.appendFileSync(projB.logFp, `evt: ${JSON.stringify({ ts: Date.now(), sub: 'plugkit', event: 'dispatch.end', marker: spoofMarker, cwd: projA.proj })}\n`);
+
+    const dl = Date.now() + 6000;
+    while (Date.now() < dl && !(fanoutReceived.some(e => e.marker === markerA) && fanoutReceived.some(e => e.marker === markerB) && fanoutReceived.some(e => e.marker === spoofMarker))) {
+      await new Promise(r => setTimeout(r, 100));
+    }
+    const evA = fanoutReceived.find(e => e.marker === markerA);
+    const evB = fanoutReceived.find(e => e.marker === markerB);
+    const evSpoof = fanoutReceived.find(e => e.marker === spoofMarker);
+    assert(evA, `project A event not received (got ${fanoutReceived.length} events)`);
+    assert(evB, `project B event not received (got ${fanoutReceived.length} events)`);
+    assert.strictEqual(path.resolve(evA.cwd), projA.proj, 'project A event cwd attribution');
+    assert.strictEqual(path.resolve(evB.cwd), projB.proj, 'project B event cwd attribution');
+    assert(evSpoof, 'spoofed-cwd event not received');
+    assert.strictEqual(path.resolve(evSpoof.cwd), projB.proj, 'spoofed cwd field must be overridden by the real discovered project B cwd, not the claimed project A cwd');
+
+    // Dynamic rediscovery: a third project appears on disk after the fanout already started.
+    const projC = makeProject('proj-c');
+    process.env.GM_SPOOL_DIRS = [projA.proj, projB.proj, projC.proj].join(path.delimiter);
+    const addedDl = Date.now() + 3000;
+    while (Date.now() < addedDl && !projectEvents.some(p => p.event === 'project.added' && path.resolve(p.data.cwd) === projC.proj)) {
+      await new Promise(r => setTimeout(r, 100));
+    }
+    assert(projectEvents.some(p => p.event === 'project.added' && path.resolve(p.data.cwd) === projC.proj), 'project.added not observed for newly-appeared project C within rediscovery window');
+
+    const markerC = 'FANOUT_C_' + Date.now();
+    fs.appendFileSync(projC.logFp, `evt: ${JSON.stringify({ ts: Date.now(), sub: 'plugkit', event: 'dispatch.end', marker: markerC })}\n`);
+    const cDl = Date.now() + 4000;
+    while (Date.now() < cDl && !fanoutReceived.some(e => e.marker === markerC)) await new Promise(r => setTimeout(r, 100));
+    assert(fanoutReceived.some(e => e.marker === markerC), 'newly-discovered project C event not delivered live without restart');
+
+    // Disappearance: delete project B's log file, expect project.removed within rediscovery window.
+    fs.rmSync(projB.logFp, { force: true });
+    process.env.GM_SPOOL_DIRS = [projA.proj, projC.proj].join(path.delimiter);
+    const removedDl = Date.now() + 3000;
+    while (Date.now() < removedDl && !projectEvents.some(p => p.event === 'project.removed' && path.resolve(p.data.cwd) === projB.proj)) {
+      await new Promise(r => setTimeout(r, 100));
+    }
+    assert(projectEvents.some(p => p.event === 'project.removed' && path.resolve(p.data.cwd) === projB.proj), 'project.removed not observed after project B watcher.log disappeared');
+
+    req.destroy();
+    resolve();
+  })().catch(reject);
+});
+
+// /api/projects surfaces watching=true for a fanout-covered project (boot detection/surfacing).
+const projectsResp = await (await fetch(fanoutSrv.url + '/api/projects')).json();
+assert(Array.isArray(projectsResp.projects), '/api/projects returns projects array');
+
+await fanoutSrv.close();
+if (prevSpoolDirs === undefined) delete process.env.GM_SPOOL_DIRS; else process.env.GM_SPOOL_DIRS = prevSpoolDirs;
+delete process.env.GM_FANOUT_REDISCOVER_MS;
+fs.rmSync(fanoutRoot, { recursive: true, force: true });
+
 await close();
-console.log(`gmsniff OK — ${snap.total} events across ${days.length} days · live-feedback verified`);
+console.log(`gmsniff OK — ${snap.total} events across ${days.length} days · live-feedback verified · multi-project fanout verified`);

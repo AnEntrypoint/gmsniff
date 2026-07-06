@@ -2,10 +2,10 @@ import http from 'http';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { GmLogWatcher, replayAll, SUBSYSTEMS, DEFAULT_LOG_DIR } from './index.js';
+import { GmLogWatcher, MultiProjectWatcher, replayAll, SUBSYSTEMS, DEFAULT_LOG_DIR } from './index.js';
 import {
   readPrd, readMutables, rewriteRow, atomicWriteFile, discoverProjects, isKnownVerb, isAllowedProjectCwd,
-  readWatcherStatus,
+  readWatcherStatus, VERB_ALLOWLIST,
 } from './registry.js';
 
 const MAX_QUERY_LEN = 4096;
@@ -291,14 +291,24 @@ class Store {
     this.events = [];
     this.sseClients = new Set();
     this.watcher = null;
+    this.fanout = null;
+    this.watchedProjects = [];
   }
 
   load() {
     this.events = replayAll(this.logDir);
   }
 
+  // Live coverage is two concurrent sources merged into the same broadcast/events array,
+  // each cwd-tagged: (1) the central ~/.gm/gm-log tree (single machine-wide GmLogWatcher,
+  // present when a central log aggregates events), and (2) a MultiProjectWatcher fanning
+  // out across every project discoverSpoolLogs finds (one tailer per project's
+  // .gm/exec-spool/.watcher.log), which is the live path this environment actually uses
+  // since gm-log is typically absent/empty and replayAll falls back to per-project logs.
+  // Running both concurrently means a project is observed the moment either source carries
+  // its events, and dynamic project appearance/disappearance (fanout side) needs no restart.
   startLive() {
-    if (this.watcher) return;
+    if (this.watcher || this.fanout) return;
     this.watcher = new GmLogWatcher(this.logDir);
     this.watcher.on('event', ev => {
       this.events.push(ev);
@@ -306,10 +316,25 @@ class Store {
     });
     this.watcher.on('error', e => this._broadcast('error', { msg: String(e?.message || e) }));
     this.watcher.start();
+
+    this.fanout = new MultiProjectWatcher();
+    this.fanout.on('event', ev => {
+      this.events.push(ev);
+      this._broadcast('event', ev);
+    });
+    this.fanout.on('error', e => this._broadcast('error', { msg: String(e?.message || e), cwd: e?.cwd }));
+    this.fanout.on('project.added', p => { this.watchedProjects = this.fanout.projects(); this._broadcast('project.added', p); });
+    this.fanout.on('project.removed', p => { this.watchedProjects = this.fanout.projects(); this._broadcast('project.removed', p); });
+    this.fanout.start();
+    this.watchedProjects = this.fanout.projects();
   }
 
   stop() {
     if (this.watcher) this.watcher.stop();
+    if (this.fanout) this.fanout.stop();
+    this.watcher = null;
+    this.fanout = null;
+    this.watchedProjects = [];
     for (const r of this.sseClients) try { r.end(); } catch {}
     this.sseClients.clear();
   }
@@ -806,6 +831,48 @@ function healthSummary(store) {
   return out;
 }
 
+// Declarative route manifest -- single source of truth served by GET /api/capabilities so an
+// agentic HTTP caller (or the GUI) can introspect every route/method/param/response-shape
+// without hardcoding route knowledge duplicated from this file. Kept directly above the
+// handler it describes so a route added/changed in createServer's dispatch chain below is
+// reviewed in the same diff hunk as its manifest entry -- proximity is the drift guard, since
+// this array is documentation of the handler rather than code the handler is generated from.
+const API_ROUTES = [
+  { path: '/api/capabilities', method: 'GET', params: [], response: '{routes: API_ROUTES, verbAllowlist, subsystems}' },
+  { path: '/api/snapshot', method: 'GET', params: [], response: '{total, bySub, byEvent, byDay, pids, errors, subsystems, observedSubsystems}' },
+  { path: '/api/days', method: 'GET', params: [], response: '[{day, total, bySub}]' },
+  { path: '/api/events', method: 'GET', params: ['limit', 'offset', 'sub', 'event', 'day', 'q'], response: '{total, rows}' },
+  { path: '/api/subsystem', method: 'GET', params: ['sub', 'limit', 'offset', 'event', 'day', 'q', 'pid'], response: '{total, rows}' },
+  { path: '/api/event-types', method: 'GET', params: ['sub'], response: '[{event, count}]' },
+  { path: '/api/pids', method: 'GET', params: ['sub'], response: '[{pid, count, first, last}]' },
+  { path: '/api/recall', method: 'GET', params: [], response: '{total, hits, misses, hitRate, avgDur, recent}' },
+  { path: '/api/exec', method: 'GET', params: [], response: '{total, byRuntime, errors, recent}' },
+  { path: '/api/hooks', method: 'GET', params: [], response: '{total, byEvent, recent}' },
+  { path: '/api/search', method: 'GET', params: ['q', 'sub', 'limit'], response: '{q, results}' },
+  { path: '/api/deviations', method: 'GET', params: ['sess', 'sessionId', 'limit'], response: '{total, byKind, bySession, recent}' },
+  { path: '/api/sessions', method: 'GET', params: ['limit'], response: '{total, rows}' },
+  { path: '/api/process-tree', method: 'GET', params: ['sess', 'sessionId'], response: '{sess, nodes, gaps, phase_reached}' },
+  { path: '/api/observed-subsystems', method: 'GET', params: [], response: '{subsystems}' },
+  { path: '/api/distinct', method: 'GET', params: ['field', 'sub', 'limit'], response: '{field, values: [{value, count}]}' },
+  { path: '/api/query', method: 'GET', params: ['q (JSON-encoded query spec)'], response: '{total, groupBy?, groups?} or {total, returned, rows}' },
+  { path: '/api/query', method: 'POST', params: ['body: {filter, projection, groupBy, sort, limit}'], response: '{total, groupBy?, groups?} or {total, returned, rows}' },
+  { path: '/api/projects', method: 'GET', params: [], response: '{projects: [{cwd, alive, version, prd_pending, prd_total, mut_unknown, mut_total, watching}]}' },
+  { path: '/api/health-summary', method: 'GET', params: [], response: '[{cwd, name, deviationRate, watcherAlive, staleSeconds}]' },
+  { path: '/api/prd', method: 'GET', params: ['cwd'], response: '{cwd, mtimeMs, rows}' },
+  { path: '/api/mutables', method: 'GET', params: ['cwd'], response: '{cwd, mtimeMs, rows}' },
+  { path: '/api/export', method: 'GET', params: ['cwd'], response: 'file download: {snapshot, sessions, deviations, prd, mutables, exportedAt, cwd}' },
+  { path: '/api/prd/edit', method: 'POST', params: ['body: {cwd, id, since?, status?, text?}'], response: '{ok, cwd, id, row, mtimeMs} | 409 conflict {error, mtimeMs, currentRow}' },
+  { path: '/api/mutables/edit', method: 'POST', params: ['body: {cwd, id, since?, status?, witness?}'], response: '{ok, cwd, id, row, mtimeMs} | 409 conflict {error, mtimeMs, currentRow}' },
+  { path: '/api/lifecycle', method: 'POST', params: ['body: {cwd, verb, payload}'], response: '{ok, cwd, verb, file}; verb must be in the known-verb allowlist (see verbAllowlist in this same response)' },
+  { path: '/api/rs-tools', method: 'GET', params: ['cwd', 'top', 'bucket', 'days', 'sess'], response: '{cwd, eventCount, embedFailures, recallMisses, recallScores, classifierRejects, memoryLeverage, recallModes, disciplines}' },
+  { path: '/api/codeinsight', method: 'GET', params: ['cwd'], response: '{cwd, summary, entries, items} | 404 if .codeinsight absent' },
+  { path: '/api/memory-graph', method: 'GET', params: ['cwd'], response: '{cwd, nodes, edges, note?}' },
+  { path: '/api/codesearch', method: 'POST', params: ['body: {cwd, query}'], response: '{ok, cwd, query, hits, raw} | 504 on dispatch timeout' },
+  { path: '/api/browser-sessions', method: 'GET', params: ['cwd'], response: '{cwd, sessions, ports, sessionsFileFound, portsFileFound}' },
+  { path: '/api/lifecycle/response', method: 'GET', params: ['cwd', 'verb', 'file'], response: '{ok, cwd, verb, file, response} | 404 if not yet written' },
+  { path: '/api/stream', method: 'GET', params: [], response: 'text/event-stream SSE: event/data frames of kind "event"|"error"|"hello"|"project.added"|"project.removed"' },
+];
+
 export function createServer({ logDir = DEFAULT_LOG_DIR, port = 0, host = '127.0.0.1' } = {}) {
   const store = new Store(logDir);
   store.load();
@@ -817,6 +884,9 @@ export function createServer({ logDir = DEFAULT_LOG_DIR, port = 0, host = '127.0
     const p = u.pathname;
     if (!p.startsWith('/api/')) return serveStatic(req, res);
     try {
+      if (p === '/api/capabilities') {
+        return send(res, 200, { routes: API_ROUTES, verbAllowlist: [...VERB_ALLOWLIST], subsystems: SUBSYSTEMS });
+      }
       if (p === '/api/snapshot') return send(res, 200, store.snapshot());
       if (p === '/api/days') return send(res, 200, store.days());
       if (p === '/api/events') return send(res, 200, store.allEvents(q));
@@ -853,7 +923,12 @@ export function createServer({ logDir = DEFAULT_LOG_DIR, port = 0, host = '127.0
         return send(res, 405, { error: 'method not allowed' });
       }
       if (p === '/api/projects') {
-        return send(res, 200, { projects: discoverProjects(store.events) });
+        const watchedKeys = new Set((store.watchedProjects || []).map(w => path.resolve(w.cwd).replace(/\\/g, '/').toLowerCase()));
+        const projects = discoverProjects(store.events).map(proj => ({
+          ...proj,
+          watching: watchedKeys.has(path.resolve(proj.cwd).replace(/\\/g, '/').toLowerCase()),
+        }));
+        return send(res, 200, { projects });
       }
       if (p === '/api/health-summary') {
         return send(res, 200, healthSummary(store));

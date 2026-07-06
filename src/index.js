@@ -116,6 +116,16 @@ function normalizeTs(ts) {
 
 const EVT_RE = /evt:\s*(\{.*\})\s*$/;
 
+// Parse-completeness audit (real .watcher.log content from 6 live gm-plugkit repos, 87k+
+// lines): EVT_RE correctly parses every line gm-plugkit actually prefixes with "evt: ", but
+// that prefix covers only deviation.*, recall, embed.*, memory.*/memorize_*, git.*, and
+// codeinsight_rebuild -- it does NOT carry phase.transitioned, dispatch.start/end,
+// prd.added/resolved, mutable.added/resolved, instruction.served, or residual.fired/skipped
+// in any observed repo (those event classes were seen only inside git.commit summary text,
+// never as their own evt: line). This is a real upstream gap, not a parser bug: any project
+// whose only live source is this file (the common case -- gm-log is typically empty/absent,
+// see replayAll's fallback) will show near-empty Store.sessions()/healthSummary() phase-walk
+// and dispatch counts even while its .status.json proves the watcher is alive and busy.
 export function replayWatcherLog(fp, cwd) {
   const events = [];
   let text;
@@ -127,7 +137,10 @@ export function replayWatcherLog(fp, cwd) {
     try { o = JSON.parse(m[1]); } catch { continue; }
     const sub = o.sub || 'plugkit';
     const ts = normalizeTs(o.ts);
-    const ev = { ...o, ts, cwd: o.cwd || cwd, _sub: sub, _day: ts.slice(0, 10), _fp: fp, _src: 'watcher.log' };
+    // cwd is always the discovered file's own project dir, never o.cwd from the log line's
+    // JSON body -- trusting log content for attribution would let a crafted watcher.log line
+    // claim an arbitrary cwd outside the discovered project registry (security scoping).
+    const ev = { ...o, ts, cwd, _sub: sub, _day: ts.slice(0, 10), _fp: fp, _src: 'watcher.log' };
     if (!ev.event) ev.event = o.phase || o.action || o.kind || o.type || '?';
     events.push(ev);
   }
@@ -171,6 +184,154 @@ export function replaySpoolFallback(explicit) {
   const events = [];
   for (const { cwd, fp } of discoverSpoolLogs(explicit)) events.push(...replayWatcherLog(fp, cwd));
   return events.sort((a, b) => (a.ts || '') < (b.ts || '') ? -1 : 1);
+}
+
+// Read lazily (function, not a frozen module-load-time const) so a caller that sets
+// GM_FANOUT_REDISCOVER_MS after this module has already been imported elsewhere in the
+// process (as every test/CLI invocation does, since index.js is imported for DEFAULT_LOG_DIR
+// well before any per-test env override) still gets the overridden interval.
+function defaultRediscoverMs() {
+  return parseInt(process.env.GM_FANOUT_REDISCOVER_MS, 10) || 30000;
+}
+
+// Tails a single project's .gm/exec-spool/.watcher.log incrementally (evt: line format,
+// same EVT_RE the replay path uses), emitting 'event' with cwd attribution preserved.
+// Mirrors GmLogWatcher's fd-offset tailing shape but sourced from the per-project
+// watcher.log file directly rather than a day/subsystem jsonl tree.
+class ProjectLogTailer extends EventEmitter {
+  constructor(cwd, fp) {
+    super();
+    this.cwd = cwd;
+    this._fp = fp;
+    this._fd = null;
+    this._offset = 0;
+    this._partial = '';
+    this._watcher = null;
+    this._timer = null;
+  }
+
+  start() {
+    this._read(); // pick up any lines already present since last known offset (0 on first start)
+    try {
+      this._watcher = fs.watch(this._fp, () => this._debounce());
+      this._watcher.on('error', e => this.emit('error', e));
+    } catch (e) { this.emit('error', e); }
+    return this;
+  }
+
+  stop() {
+    if (this._watcher) { try { this._watcher.close(); } catch (_) {} this._watcher = null; }
+    if (this._timer) { clearTimeout(this._timer); this._timer = null; }
+    if (this._fd !== null) { try { fs.closeSync(this._fd); } catch (_) {} this._fd = null; }
+  }
+
+  _debounce() {
+    if (this._timer) clearTimeout(this._timer);
+    this._timer = setTimeout(() => { this._timer = null; this._read(); }, DEBOUNCE_MS);
+  }
+
+  _read() {
+    try {
+      if (this._fd === null) this._fd = fs.openSync(this._fp, 'r');
+      const stat = fs.fstatSync(this._fd);
+      if (stat.size < this._offset) { this._offset = 0; this._partial = ''; } // truncated/rotated
+      if (stat.size <= this._offset) return;
+      const buf = Buffer.allocUnsafe(stat.size - this._offset);
+      const n = fs.readSync(this._fd, buf, 0, buf.length, this._offset);
+      this._offset += n;
+      const text = this._partial + buf.toString('utf8', 0, n);
+      const lines = []; let start = 0, idx;
+      while ((idx = text.indexOf('\n', start)) !== -1) { lines.push(text.slice(start, idx)); start = idx + 1; }
+      this._partial = text.slice(start);
+      for (const l of lines) this._line(l);
+    } catch (e) {
+      if (e.code !== 'ENOENT') this.emit('error', e);
+      if (this._fd !== null) { try { fs.closeSync(this._fd); } catch (_) {} this._fd = null; }
+    }
+  }
+
+  _line(raw) {
+    const m = raw.match(EVT_RE);
+    if (!m) return;
+    let o;
+    try { o = JSON.parse(m[1]); } catch { return; }
+    const sub = o.sub || 'plugkit';
+    const ts = normalizeTs(o.ts);
+    // cwd is always this tailer's own discovered project cwd, never o.cwd from the log
+    // line's JSON body -- see replayWatcherLog's identical hardening for the rationale.
+    const ev = { ...o, ts, cwd: this.cwd, _sub: sub, _day: ts.slice(0, 10), _fp: this._fp, _src: 'watcher.log' };
+    if (!ev.event) ev.event = o.phase || o.action || o.kind || o.type || '?';
+    this.emit('event', ev);
+    this.emit(`sub:${sub}`, ev);
+  }
+}
+
+// Fans a live event stream out across every project discoverSpoolLogs finds, one
+// ProjectLogTailer per project, merged into a single 'event' stream with cwd attribution
+// preserved on every emitted event. Periodically re-runs discovery so a project whose
+// watcher.log appears after this process started is picked up, and stops+drops the tailer
+// for a project whose watcher.log disappears -- both without a process restart.
+export class MultiProjectWatcher extends EventEmitter {
+  constructor({ explicit, rediscoverMs } = {}) {
+    super();
+    this._explicit = explicit;
+    this._rediscoverMs = rediscoverMs != null ? rediscoverMs : defaultRediscoverMs();
+    this._tailers = new Map(); // key (lowercased resolved fp) -> ProjectLogTailer
+    this._rediscoverTimer = null;
+    this._stopped = true;
+  }
+
+  start() {
+    this._stopped = false;
+    this._sync();
+    this._scheduleRediscover();
+    return this;
+  }
+
+  stop() {
+    this._stopped = true;
+    if (this._rediscoverTimer) { clearTimeout(this._rediscoverTimer); this._rediscoverTimer = null; }
+    for (const t of this._tailers.values()) t.stop();
+    this._tailers.clear();
+  }
+
+  // Current set of project cwds actively tailed (for status/diagnostics surfacing).
+  projects() {
+    return [...this._tailers.values()].map(t => ({ cwd: t.cwd, fp: t._fp }));
+  }
+
+  _scheduleRediscover() {
+    if (this._stopped) return;
+    this._rediscoverTimer = setTimeout(() => {
+      if (this._stopped) return;
+      this._sync();
+      this._scheduleRediscover();
+    }, this._rediscoverMs);
+  }
+
+  _sync() {
+    let found;
+    try { found = discoverSpoolLogs(this._explicit); } catch (e) { this.emit('error', e); found = []; }
+    const seen = new Set();
+    for (const { cwd, fp } of found) {
+      const key = fp.replace(/\\/g, '/').toLowerCase();
+      seen.add(key);
+      if (this._tailers.has(key)) continue;
+      const t = new ProjectLogTailer(cwd, fp);
+      t.on('event', ev => this.emit('event', ev));
+      t.on('error', e => this.emit('error', Object.assign(e instanceof Error ? e : new Error(String(e)), { cwd })));
+      t.start();
+      this._tailers.set(key, t);
+      this.emit('project.added', { cwd, fp });
+    }
+    for (const [key, t] of this._tailers) {
+      if (seen.has(key)) continue;
+      if (fs.existsSync(t._fp)) continue; // still present, just not returned this cycle (defensive)
+      t.stop();
+      this._tailers.delete(key);
+      this.emit('project.removed', { cwd: t.cwd, fp: t._fp });
+    }
+  }
 }
 
 export function replayAll(logDir = DEFAULT_LOG_DIR, opts = {}) {
