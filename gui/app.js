@@ -224,7 +224,7 @@ async function computeBody(force) {
   if (p !== 'memory-graph') stopMemoryGraphLayout();
   if (p === 'overview') return Dashboard();
   if (p === 'days') return ByDay();
-  if (p === 'live') return LiveStream({ connState: ui.connState });
+  if (p === 'live') return LiveStream({ connState: ui.connState }, setBody);
   if (p === 'events') return AllEvents(setBody);
   if (p === 'search-panel') return Search(setBody);
   if (p.startsWith('sub-')) return SubsystemPanel(p.slice(4), setBody);

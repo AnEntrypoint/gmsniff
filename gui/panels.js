@@ -106,14 +106,23 @@ let liveEntries = [];
 // many arrived while paused so the toolbar can show an "N new" indicator.
 let livePaused = false;
 let liveNewCount = 0;
+// Multi-project filter: null = show every discovered project's events (the
+// whole point of the system-wide fanout); a cwd string narrows to just that
+// project, same set /api/projects returns so the dropdown always matches
+// reality instead of a hand-maintained project list.
+let liveProjectFilter = null;
+function projectBasename(cwd) {
+  if (!cwd) return '(unknown)';
+  return String(cwd).replace(/[\\/]+$/, '').split(/[\\/]/).pop() || cwd;
+}
 export function pushLiveEntry(ev) {
   const payload = { ...ev };
   delete payload._sub; delete payload._day; delete payload._fp;
-  liveEntries.push({ key: liveEntries.length, ts: fmtTs(ev.ts), sub: ev._sub, tone: colorFor(ev._sub || ''), event: ev.event || '?', preview: JSON.stringify(payload).slice(0, 200) });
+  liveEntries.push({ key: liveEntries.length, ts: fmtTs(ev.ts), sub: ev._sub, tone: colorFor(ev._sub || ''), event: ev.event || '?', preview: JSON.stringify(payload).slice(0, 200), cwd: ev.cwd || null });
   if (liveEntries.length > 2000) liveEntries.shift();
   if (livePaused) liveNewCount++;
 }
-export function LiveStream({ connState = 'connecting' } = {}) {
+export function LiveStream({ connState = 'connecting' } = {}, setBody) {
   const toneMap = { live: 'positive', reconnecting: 'warn', connecting: 'neutral', closed: 'danger' };
   const pauseBtn = Btn({
     children: livePaused ? `Resume${liveNewCount ? ` (${liveNewCount} new)` : ''}` : 'Pause',
@@ -121,15 +130,26 @@ export function LiveStream({ connState = 'connecting' } = {}) {
     onClick: () => {
       livePaused = !livePaused;
       if (!livePaused) liveNewCount = 0; // resume snaps to bottom (autoScroll) and clears the indicator
+      if (setBody) setBody();
     },
   });
+  const cwds = [...new Set(liveEntries.map(e => e.cwd).filter(Boolean))].sort((a, b) => projectBasename(a).localeCompare(projectBasename(b)));
+  const projectSelect = h('select', {
+    value: liveProjectFilter || '',
+    onchange: (e) => { liveProjectFilter = e.target.value || null; if (setBody) setBody(); },
+  },
+    h('option', { value: '' }, `all projects (${cwds.length})`),
+    ...cwds.map(cwd => h('option', { key: cwd, value: cwd }, projectBasename(cwd))));
+  const filtered = liveProjectFilter ? liveEntries.filter(e => e.cwd === liveProjectFilter) : liveEntries;
+  const tagged = filtered.slice(-500).map(e => ({ ...e, sub: e.cwd ? `${projectBasename(e.cwd)}/${e.sub}` : e.sub }));
   return h('div', { class: 'ds-panel', style: 'padding:8px' },
     h('div', { style: 'display:flex;justify-content:space-between;align-items:center;margin-bottom:6px' },
       h('h2', { style: 'margin:0' }, 'Live Stream'),
       h('div', { style: 'display:flex;align-items:center;gap:8px' },
         Chip({ tone: toneMap[connState] || 'neutral', children: connState }),
+        projectSelect,
         Toolbar(pauseBtn))),
-    liveEntries.length ? LiveLog({ entries: liveEntries.slice(-500), autoScroll: !livePaused }) : Empty('No live events received yet.'));
+    tagged.length ? LiveLog({ entries: tagged, autoScroll: !livePaused }) : Empty(liveProjectFilter ? 'No live events yet for this project.' : 'No live events received yet.'));
 }
 
 // ---------------------------------------------------------------------------
