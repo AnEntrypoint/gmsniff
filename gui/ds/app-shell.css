@@ -1,6 +1,6 @@
 /* ============================================================
    247420 design system — component sheet
-   "Acid Editorial": Space Grotesk display + Inter body + JetBrains code.
+   "Acid Editorial": system-font display + body + mono, no custom web fonts.
    Confident hierarchy, asymmetric grid tension, print texture over glow,
    one electric lead accent. Indicator rails over hairlines.
    ============================================================ */
@@ -30,7 +30,7 @@ button, input, select, textarea { font: inherit; }
 }
 .skip-link:focus {
   top: 10px;
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-ink);
   outline-offset: 2px;
 }
 body {
@@ -247,7 +247,7 @@ body.canvas-host { background: transparent !important; }
 }
 .app-topbar nav a:hover { background: var(--bg-2); color: var(--fg); }
 .app-topbar nav a:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-ink);
   outline-offset: 2px;
 }
 /* Active tab reads as a subtle tinted pill with an accent underline rather than
@@ -283,7 +283,7 @@ body.canvas-host { background: transparent !important; }
   width: 100%;
 }
 .app-search:focus-within {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-ink);
   outline-offset: 2px;
 }
 
@@ -325,7 +325,7 @@ body.canvas-host { background: transparent !important; }
 }
 .app-side a:hover { background: var(--bg-2); color: var(--fg); }
 .app-side a:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-ink);
   outline-offset: 2px;
 }
 .app-side a.active {
@@ -371,17 +371,31 @@ body.canvas-host { background: transparent !important; }
 .app-main > .chat,
 .app-main > .chat-area,
 .app-main > .ds-file-stage,
+.app-main > .ds-files-stack,
 .app-main > .grow { flex: 1 1 auto; min-height: 0; }
 .app-main.narrow { max-width: var(--measure-narrow); margin: 0 auto; }
 
 @media (min-width: 1400px) {
-  .app { max-width: 1400px; margin-left: auto; margin-right: auto; }
+  /* Fluid ceiling, not a hard stop: scales from 1400px up to 1920px across the
+     1400-2200px viewport band (matches .ws-shell's 1920px ultrawide cap below)
+     instead of freezing at 1400px and leaving >1000px dead margin on a 2560px+
+     display. Row/prose measure caps (--measure-wide etc.) still own line-length
+     readability, so widening the shell itself does not create unreadable rows. */
+  .app { max-width: clamp(1400px, 92vw, 1920px); margin-left: auto; margin-right: auto; }
   .app-main .chat,
   .app-main > .chat-area,
   .app-main > .main-content { max-width: none; margin: 0; width: 100%; }
   /* Status bar inherits the .app max-width cap above and stretches edge-to-edge
      within it; no separate width constraint (which previously narrowed it). */
   .app-status { width: 100%; }
+  /* Cap row text measure inside the wide capped main (ultrawide readability). */
+  .row .title, .row .sub { max-width: var(--measure-wide); }
+}
+/* Beyond 1920px the shell itself stops growing (matches .ws-shell's own cap) —
+   extra space becomes page margin rather than stretching sidebar/content grid
+   tracks to distances a pointer/eye shouldn't have to travel. */
+@media (min-width: 2200px) {
+  .app { max-width: 1920px; }
 }
 
 .app-status {
@@ -434,7 +448,7 @@ body.canvas-host { background: transparent !important; }
 .btn-ghost:hover { background: var(--fg); color: var(--bg); }
 .btn:active, .btn-primary:active, .btn-ghost:active { transform: translateY(2px); }
 .btn:focus-visible, .btn-primary:focus-visible, .btn-ghost:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-ink);
   outline-offset: 2px;
 }
 
@@ -461,7 +475,7 @@ body.canvas-host { background: transparent !important; }
 .ds-icon-btn-danger { background: var(--warn); color: var(--on-color); }
 .ds-icon-btn-danger:hover { filter: brightness(1.1); }
 .ds-icon-btn:active { transform: translateY(1px); }
-.ds-icon-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ds-icon-btn:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 2px; }
 .ds-icon-btn:disabled, .ds-icon-btn.is-disabled {
   opacity: 0.5; cursor: not-allowed; pointer-events: none;
 }
@@ -473,7 +487,7 @@ body.canvas-host { background: transparent !important; }
   display: inline-flex; align-items: center; justify-content: center;
   min-width: 18px; height: 18px; padding: 0 6px;
   font-size: var(--fs-micro); font-weight: 600; line-height: 1;
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   background: var(--bg-3); color: var(--fg-2);
 }
 .ds-badge.tone-green   { background: var(--green-tint);  color: var(--green-deep); }
@@ -692,7 +706,6 @@ a.row { text-decoration: none; }
 .ds-hero-head { grid-area: title; display: grid; gap: var(--space-3); }
 .ds-hero-body  { grid-area: body; }
 .ds-hero-actions { grid-area: actions; }
-.ds-hero-badge { grid-area: actions; }
 .ds-hero-title {
   font-family: var(--ff-display); font-weight: 700;
   font-size: clamp(40px, 9cqi, 116px);
@@ -707,7 +720,10 @@ a.row { text-decoration: none; }
 /* The lead phrase in the title — printed in the electric lead, not glowing. */
 .ds-hero-accent { color: var(--accent-ink); font-weight: 700; }
 .ds-hero-actions { display: flex; gap: var(--space-2, 10px); flex-wrap: wrap; align-self: end; }
-@media (max-width: 900px) {
+/* Container-queried (the whole shell is; a 500px pane on a wide viewport
+   would keep the two-column grid under a width @media). Left-aligned stack —
+   no centering — preserving the asymmetric intent. */
+@container (max-width: 900px) {
   .ds-hero {
     grid-template-columns: minmax(0, 1fr);
     grid-template-areas: 'title' 'body' 'actions';
@@ -778,13 +794,21 @@ a.row { text-decoration: none; }
 }
 .ds-marquee-item { display: inline-flex; align-items: center; gap: var(--space-5); }
 .ds-marquee-sep { color: var(--accent-ink); }
-.ds-marquee:hover .ds-marquee-track { animation-play-state: paused; }
+.ds-marquee:hover .ds-marquee-track,
+.ds-marquee:focus-within .ds-marquee-track,
+.ds-marquee:active .ds-marquee-track { animation-play-state: paused; }
 @keyframes ds-marquee-run {
   from { transform: translateX(0); }
   to   { transform: translateX(-50%); }
 }
+/* Touch has no hover-pause; slow the ticker so it burns less attention. */
+@media (hover: none), (pointer: coarse) {
+  .ds-marquee-track { animation-duration: 40s; }
+}
 @media (prefers-reduced-motion: reduce) {
-  .ds-marquee-track { animation: none; }
+  /* Static: wrap to a readable strip instead of a frozen half-offscreen run. */
+  .ds-marquee-track { animation: none; flex-wrap: wrap; white-space: normal; }
+  .ds-marquee-run-b { display: none; }
 }
 
 /* ============================================================
@@ -792,6 +816,7 @@ a.row { text-decoration: none; }
    ============================================================ */
 .cli {
   display: flex; align-items: center; gap: 14px;
+  overflow-x: auto;
   padding: 20px 24px;
   background: var(--ink); color: var(--paper);
   border-radius: var(--r-3);
@@ -807,22 +832,23 @@ a.row { text-decoration: none; }
 }
 .cli .copy:hover { background: var(--fg-3); }
 
-/* Multi-line CLI block: when .cli holds .cli-line / .cli-cmt children
-   (quickstart scripts, multi-command snippets) it stacks as a column
-   instead of the single-line install row. */
-.cli:has(.cli-line),
-.cli:has(.cli-cmt) {
+/* Multi-line CLI block: when .cli holds .ds-cli-row / .ds-cli-comment children
+   (quickstart scripts, multi-command snippets — see CliBlock in
+   src/components/content.js) it stacks as a column instead of the
+   single-line install row. */
+.cli:has(.ds-cli-row),
+.cli:has(.ds-cli-comment) {
   flex-direction: column; align-items: stretch; gap: 0;
   font-size: var(--fs-sm); line-height: 1.6;
 }
-.cli-line {
+.ds-cli-row {
   display: flex; gap: 10px;
   font-family: var(--ff-mono); font-size: 13px; line-height: 1.6;
   padding: 3px 0;
 }
-.cli-line .prompt { color: var(--green-2); flex: 0 0 auto; user-select: none; }
-.cli-line .cmd { flex: 1 1 auto; white-space: pre-wrap; word-break: break-word; color: var(--paper); }
-.cli-cmt {
+.ds-cli-row .prompt { color: var(--green-2); flex: 0 0 auto; user-select: none; }
+.ds-cli-row .cmd { flex: 1 1 auto; white-space: pre-wrap; word-break: break-word; color: var(--paper); }
+.ds-cli-comment {
   color: var(--fg-3);
   font-family: var(--ff-mono); font-size: var(--fs-tiny); line-height: 1.6;
   padding: 3px 0; white-space: pre-wrap; word-break: break-word;
@@ -845,6 +871,15 @@ table.kv td:first-child {
 }
 table.kv td:last-child {
   font-weight: 600;
+  overflow-wrap: anywhere; min-width: 0;
+}
+/* Tiny screens: stack the key over the value instead of squeezing a 14ch
+   label column beside long unbroken values (URLs, hashes). */
+@media (max-width: 400px) {
+  table.kv td { display: block; width: auto; padding: 4px 0; }
+  table.kv td:first-child { padding-top: 8px; }
+  table.kv tr + tr td { border-top: 0; }
+  table.kv tr + tr td:first-child { border-top: 1px solid var(--rule); }
 }
 
 /* ============================================================
@@ -866,7 +901,7 @@ table td { padding: 14px 16px; border-top: 1px solid var(--rule); }
 table tr.clickable { cursor: pointer; }
 table tr.clickable:hover td { background: var(--bg-2); }
 table tr.clickable:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-ink);
   outline-offset: -2px;
 }
 table tr.clickable:focus-visible td { background: var(--bg-2); }
@@ -1040,6 +1075,10 @@ table tr.clickable:focus-visible td { background: var(--bg-2); }
   }
   .row .sub { grid-column: 1 / -1; order: 3; }
   .row .title { font-size: var(--fs-sm); }
+  /* Changelog carries 3 children: give date+ver line one, message wraps below
+     (the generic 2-col .row override staggers it into an implicit row). */
+  .ds-changelog-row { grid-template-columns: minmax(70px, 10ch) minmax(0, 1fr) !important; }
+  .ds-changelog-row .title { grid-column: 1 / -1; }
 
   /* Buttons */
   .btn, .btn-primary, .btn-ghost {
@@ -1083,7 +1122,9 @@ table tr.clickable:focus-visible td { background: var(--bg-2); }
     gap: var(--space-2);
   }
   .kpi-card { padding: var(--space-3); }
-  .kpi-card .num { font-size: clamp(22px, 5vw, 32px); }
+  /* Container-relative like the base rule (5vw sized against the viewport and
+     jumped across the breakpoint). */
+  .kpi-card .num { font-size: clamp(22px, 8cqi, 32px); }
 
   /* Empty State */
   .empty { padding: var(--space-5); font-size: var(--fs-xs); }
@@ -1117,10 +1158,11 @@ table tr.clickable:focus-visible td { background: var(--bg-2); }
 @container (max-width: 760px) {
   .app-body { grid-template-columns: 1fr !important; }
   .app-side-shell { border-right: 0; border-bottom: 1px solid var(--rule); }
-  .app-topbar { grid-template-columns: 1fr auto; }
   .app-topbar nav { font-size: var(--fs-xs); gap: 14px; }
   .row { grid-template-columns: minmax(0, 1fr) auto !important; row-gap: 4px !important; }
   .row .sub { grid-column: 1 / -1; order: 3; }
+  .ds-changelog-row { grid-template-columns: minmax(70px, 10ch) minmax(0, 1fr) !important; }
+  .ds-changelog-row .title { grid-column: 1 / -1; }
 }
 
 /* --------------------------------------------------------------------
@@ -1135,9 +1177,8 @@ table tr.clickable:focus-visible td { background: var(--bg-2); }
     min-height: 44px;
   }
 
-  /* Topbar Navigation */
+  /* Topbar Navigation (flex container — no grid-template here) */
   .app-topbar {
-    grid-template-columns: auto 1fr auto;
     gap: var(--space-3); padding: 12px var(--space-4);
   }
   .app-topbar nav {
@@ -1216,6 +1257,8 @@ table tr.clickable:focus-visible td { background: var(--bg-2); }
     gap: var(--space-2);
   }
   .row .code { display: none; }
+  /* Changelog's date lives in span.code — hiding it is data loss, not reflow. */
+  .ds-changelog-row .code { display: inline; font-size: var(--fs-micro); }
   .row .sub { grid-column: 1 / -1; }
 }
 
@@ -1256,7 +1299,7 @@ table tr.clickable:focus-visible td { background: var(--bg-2); }
   flex-direction: column;
   gap: 4px;
 }
-.ds-file-grid:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--r-2); }
+.ds-file-grid:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 2px; border-radius: var(--r-2); }
 
 /* Listing wrapper holds the optional filter + sort header above the grid. */
 .ds-file-listing { display: flex; flex-direction: column; gap: var(--space-2); min-height: 0; }
@@ -1278,7 +1321,7 @@ table tr.clickable:focus-visible td { background: var(--bg-2); }
 }
 .ds-file-sort-btn:hover { color: var(--fg-2); background: var(--bg-2); }
 .ds-file-sort-btn.active { color: var(--accent-ink); }
-.ds-file-sort-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.ds-file-sort-btn:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 1px; }
 
 /* Skeleton shimmer rows shown while a directory loads. */
 .ds-file-row-skeleton { cursor: default; pointer-events: none; }
@@ -1326,7 +1369,7 @@ table tr.clickable:focus-visible td { background: var(--bg-2); }
   color: inherit; font: inherit; text-align: left; cursor: pointer;
 }
 .ds-file-open[disabled] { cursor: default; }
-.ds-file-open:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--r-1); }
+.ds-file-open:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 2px; border-radius: var(--r-1); }
 .ds-file-row:hover {
   background: var(--bg-2);
   border-color: var(--rule);
@@ -1399,7 +1442,7 @@ table tr.clickable:focus-visible td { background: var(--bg-2); }
    role=checkbox/aria-checked name+state. */
 .ds-check-box {
   width: 15px; height: 15px; box-sizing: border-box; flex: 0 0 auto; position: relative;
-  border: 1.5px solid var(--fg-3); border-radius: 4px;
+  border: 1.5px solid var(--fg-3); border-radius: var(--r-0);
   transition: background var(--dur-snap) var(--ease), border-color var(--dur-snap) var(--ease);
 }
 .is-marked > .ds-check-box,
@@ -1411,7 +1454,7 @@ table tr.clickable:focus-visible td { background: var(--bg-2); }
 }
 [aria-checked="mixed"] > .ds-check-box { background: var(--accent); border-color: var(--accent); }
 [aria-checked="mixed"] > .ds-check-box::after {
-  content: ""; position: absolute; left: 3px; right: 3px; top: 6px; height: 2px; background: var(--bg); border-radius: 1px;
+  content: ""; position: absolute; left: 3px; right: 3px; top: 6px; height: 2px; background: var(--bg); border-radius: var(--r-hair);
 }
 
 .ds-file-check {
@@ -1424,7 +1467,7 @@ table tr.clickable:focus-visible td { background: var(--bg-2); }
 }
 .ds-file-check:hover { background: var(--bg-3); color: var(--fg); }
 .ds-file-check.is-marked { color: var(--accent-ink); }
-.ds-file-check:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.ds-file-check:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 1px; }
 .ds-file-check[disabled] { opacity: 0.4; cursor: default; }
 .ds-file-row.is-marked { background: var(--accent-tint); border-color: var(--accent); }
 .ds-file-selectall {
@@ -1434,7 +1477,7 @@ table tr.clickable:focus-visible td { background: var(--bg-2); }
   padding: var(--space-1); border-radius: var(--r-1);
 }
 .ds-file-selectall:hover { background: var(--bg-2); color: var(--fg); }
-.ds-file-selectall:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.ds-file-selectall:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 1px; }
 .ds-file-controls { display: flex; align-items: center; gap: var(--space-2); padding: 0 var(--space-2) var(--space-1); flex-wrap: wrap; }
 .ds-file-controls .spread { flex: 1 1 auto; }
 .ds-file-controls .ds-file-sort { padding: 0; }
@@ -1472,7 +1515,7 @@ table tr.clickable:focus-visible td { background: var(--bg-2); }
 }
 .ds-density-btn:hover { color: var(--fg); }
 .ds-density-btn.active { background: var(--accent-tint); color: var(--fg); }
-.ds-density-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.ds-density-btn:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 1px; }
 
 /* Compact density — tighter rows for long listings. */
 .ds-file-grid[data-density="compact"] { gap: 2px; }
@@ -1506,7 +1549,7 @@ table tr.clickable:focus-visible td { background: var(--bg-2); }
   background: none; border: none; cursor: pointer; color: var(--fg);
 }
 .ds-file-cell-open[disabled] { cursor: default; }
-.ds-file-cell-open:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: var(--r-2); }
+.ds-file-cell-open:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: -2px; border-radius: var(--r-2); }
 .ds-file-cell-media {
   display: flex; align-items: center; justify-content: center;
   width: 100%; aspect-ratio: 4 / 3;
@@ -1553,8 +1596,17 @@ table tr.clickable:focus-visible td { background: var(--bg-2); }
 
 /* Full-width files stack: the stage's space-3 vertical beat without its
    920px cap/auto-margins, so the roots / toolbar / bulkbar / uploads / grid
-   bands keep one consistent rhythm instead of touching edge-to-edge. */
-.ds-files-stack { display: flex; flex-direction: column; gap: var(--space-3); min-height: 0; }
+   bands keep one consistent rhythm instead of touching edge-to-edge. Carries
+   the same side/bottom padding as .ds-file-stage (top collapses the same way
+   when mounted directly under .app-main, which already supplies top padding)
+   so switching a consumer from the capped stage to this full-width stack is a
+   pure width change, not a spacing regression. */
+.ds-files-stack {
+  display: flex; flex-direction: column; gap: var(--space-3); min-height: 0;
+  padding: 0 var(--space-3) var(--space-4);
+}
+.app-main > div > .ds-files-stack,
+.app-main .ds-files-stack { padding-top: 0; }
 
 /* Breadcrumb path */
 .ds-crumb-path {
@@ -1566,6 +1618,10 @@ table tr.clickable:focus-visible td { background: var(--bg-2); }
   padding: 4px 8px; border-radius: var(--r-1);
   color: var(--fg-3); font-family: inherit; font-size: var(--fs-sm);
   transition: background var(--dur-snap) var(--ease), color var(--dur-snap) var(--ease);
+  /* A single long unbroken segment (hash-named dir) must never force the
+     whole path past the viewport. */
+  max-width: min(40vw, 220px);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .ds-crumb-seg:hover { background: var(--bg-2); color: var(--fg); }
 .ds-crumb-seg.leaf { color: var(--fg); font-weight: 600; }
@@ -1662,6 +1718,14 @@ table tr.clickable:focus-visible td { background: var(--bg-2); }
   border-radius: var(--r-3);
 }
 .ds-dropzone--wrap.dragover { animation: none; }
+/* Touch devices can never fire dragover — keep the pick-files affordance
+   visible as a compact static row so upload stays reachable in wrap mode. */
+@media (hover: none) and (pointer: coarse) {
+  .ds-dropzone--wrap > .ds-dropzone-inner {
+    display: flex; position: static; padding: var(--space-2);
+    outline: none; background: transparent;
+  }
+}
 
 /* Upload progress */
 .ds-upload-progress { display: flex; flex-direction: column; gap: 6px; }
@@ -1690,7 +1754,12 @@ table tr.clickable:focus-visible td { background: var(--bg-2); }
 .ds-upload-item.error .ds-upload-fill { background: var(--warn); }
 .ds-upload-item.error .ds-upload-pct { color: var(--warn); }
 /* Per-row upload recovery actions (replace / dismiss) — error rows are not dead ends. */
-.ds-upload-item { grid-template-columns: minmax(0, 1fr) 120px 44px auto; }
+.ds-upload-item { grid-template-columns: minmax(0, 1fr) minmax(60px, 120px) 44px auto; }
+@media (max-width: 480px) {
+  .ds-upload-item { grid-template-columns: minmax(0, 1fr) 44px; }
+  .ds-upload-bar { grid-column: 1 / -1; order: 3; }
+  .ds-upload-actions { grid-column: 1 / -1; justify-content: flex-end; }
+}
 .ds-upload-actions { display: inline-flex; gap: var(--space-1); justify-content: flex-end; }
 .ds-upload-act {
   padding: 2px 10px; min-height: 24px; cursor: pointer;
@@ -1698,9 +1767,14 @@ table tr.clickable:focus-visible td { background: var(--bg-2); }
   color: var(--fg-2); font-family: var(--ff-body); font-size: var(--fs-micro);
 }
 .ds-upload-act:hover { background: var(--bg-3); color: var(--fg); }
-.ds-upload-act:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.ds-upload-act:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 1px; }
 @media (hover: none), (pointer: coarse) {
   .ds-upload-act { min-height: 44px; min-width: 44px; }
+  /* 44px floor for file controls on ANY touch device, not only narrow ones
+     (the width-based mobile block misses wide touch tablets). */
+  .ds-file-act, .ds-file-sort-btn, .ds-crumb-seg, .ds-file-filter-input { min-height: 44px; }
+  .ds-file-act { min-width: 44px; }
+  .ds-file-check, .ds-file-selectall, .ds-density-btn { min-height: 44px; min-width: 44px; }
 }
 
 /* Empty state */
@@ -1716,7 +1790,11 @@ table tr.clickable:focus-visible td { background: var(--bg-2); }
 .ds-modal-backdrop {
   position: fixed; inset: 0; z-index: var(--z-modal, 800);
   display: flex; align-items: center; justify-content: center;
-  padding: var(--space-3);
+  /* Notch/home-indicator safe: near-fullscreen modals must not slide under. */
+  padding: max(var(--space-3), env(safe-area-inset-top))
+           max(var(--space-3), env(safe-area-inset-right))
+           max(var(--space-3), env(safe-area-inset-bottom))
+           max(var(--space-3), env(safe-area-inset-left));
   background: color-mix(in oklab, var(--ink) 55%, transparent);
   backdrop-filter: blur(3px);
 }
@@ -1726,7 +1804,9 @@ table tr.clickable:focus-visible td { background: var(--bg-2); }
 @keyframes ds-modal-fade { from { opacity: 0; } to { opacity: 1; } }
 .ds-modal {
   display: flex; flex-direction: column;
-  width: 100%; max-width: 460px; max-height: calc(100vh - 2 * var(--space-4));
+  width: 100%; max-width: 460px;
+  max-height: calc(100vh - 2 * var(--space-4));
+  max-height: calc(100dvh - 2 * var(--space-4));
   background: var(--bg); color: var(--fg);
   border: var(--bw-hair) solid var(--rule);
   border-radius: var(--r-3); box-shadow: var(--shadow-3);
@@ -1758,7 +1838,11 @@ table tr.clickable:focus-visible td { background: var(--bg-2); }
   border-radius: var(--r-2); color: var(--fg);
   font-family: inherit; font-size: var(--fs-sm);
 }
-.ds-modal-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ds-modal-input:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 2px; }
+/* iOS auto-zooms inputs under 16px on focus, breaking the modal layout. */
+@media (hover: none), (pointer: coarse) {
+  .ds-modal-input { font-size: 16px; min-height: 44px; }
+}
 /* In-body modal error (role=alert): mutation failures (409/403) surface INSIDE
    the dialog, not behind the fixed overlay. */
 .ds-modal-error {
@@ -1782,10 +1866,12 @@ table tr.clickable:focus-visible td { background: var(--bg-2); }
 .ds-preview-name {
   font-weight: 600; font-size: var(--fs-body);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+  flex: 1 1 auto;
 }
 .ds-preview-meta {
   font-family: var(--ff-mono); font-size: var(--fs-xs);
   color: var(--fg-3); white-space: nowrap;
+  flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
 }
 .ds-preview-actions { display: inline-flex; gap: 2px; margin-left: auto; }
 .ds-preview-body {
@@ -1794,7 +1880,9 @@ table tr.clickable:focus-visible td { background: var(--bg-2); }
   display: flex; flex-direction: column;
 }
 .ds-preview-media {
-  max-width: 100%; max-height: 70vh; margin: 0 auto;
+  max-width: 100%;
+  max-height: 70vh; max-height: 70dvh;
+  margin: 0 auto;
   border-radius: var(--r-2); object-fit: contain;
 }
 .ds-preview-audio { width: 100%; }
@@ -1840,10 +1928,22 @@ table tr.clickable:focus-visible td { background: var(--bg-2); }
 
 /* Mobile — modals go near-fullscreen, preview media shrinks. */
 @media (max-width: 560px) {
-  .ds-modal { max-width: 100%; max-height: calc(100vh - 2 * var(--space-3)); }
-  .ds-modal-preview { width: 100%; height: calc(100vh - 2 * var(--space-3)); max-height: none; }
-  .ds-preview-media { max-height: 50vh; }
+  .ds-modal {
+    max-width: 100%;
+    max-height: calc(100vh - 2 * var(--space-3));
+    max-height: calc(100dvh - 2 * var(--space-3));
+  }
+  .ds-modal-preview {
+    width: 100%; max-height: none;
+    height: calc(100vh - 2 * var(--space-3));
+    height: calc(100dvh - 2 * var(--space-3));
+  }
+  .ds-preview-media { max-height: 50vh; max-height: 50dvh; }
   .ds-file-stage { padding: var(--space-3) var(--space-2); }
+  /* Preview head: let it wrap and drop the nowrap meta (duplicated in body)
+     so the close button can never be pushed past the modal edge. */
+  .ds-preview-head { flex-wrap: wrap; row-gap: 4px; }
+  .ds-preview-meta { display: none; }
 }
 
 /* -- File browser UX affordances ---------------------------- */
@@ -1902,7 +2002,7 @@ table tr.clickable:focus-visible td { background: var(--bg-2); }
 .ds-kbd-sep { color: var(--fg-3); font-size: var(--fs-micro); padding: 0 2px; }
 .ds-kbd {
   display: inline-block; min-width: 0;
-  padding: 2px 7px; border-radius: 6px;
+  padding: 2px 7px; border-radius: var(--r-0);
   background: var(--bg); border: var(--bw-hair) solid var(--rule);
   border-bottom-width: 2px;
   font-family: var(--ff-mono); font-size: var(--fs-micro); color: var(--fg-2);
@@ -1924,7 +2024,7 @@ table tr.clickable:focus-visible td { background: var(--bg-2); }
   transition: color var(--dur-base) var(--ease), background var(--dur-base) var(--ease);
 }
 .ds-segmented .ds-seg-btn:hover { color: var(--fg); }
-.ds-segmented .ds-seg-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.ds-segmented .ds-seg-btn:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 1px; }
 .ds-segmented .ds-seg-btn.is-on {
   background: var(--bg); color: var(--fg);
   box-shadow: inset 0 0 0 var(--bw-hair, 1px) var(--rule);
@@ -1978,7 +2078,7 @@ table tr.clickable:focus-visible td { background: var(--bg-2); }
   .chat-thread { scroll-behavior: smooth; }
 }
 .chat-thread::-webkit-scrollbar { width: 8px; }
-.chat-thread::-webkit-scrollbar-thumb { background: var(--bg-3); border-radius: 4px; }
+.chat-thread::-webkit-scrollbar-thumb { background: var(--bg-3); border-radius: var(--r-0); }
 .chat-empty {
   margin: auto;
   text-align: center;
@@ -1992,7 +2092,7 @@ table tr.clickable:focus-visible td { background: var(--bg-2); }
 .chat-msg { display: flex; gap: 12px; align-items: flex-start; padding: 6px 0; position: relative; min-width: 0; }
 .chat-msg.you { flex-direction: row-reverse; }
 .chat-msg.you .chat-stack { align-items: flex-end; }
-.chat-msg:hover { background: color-mix(in oklab, var(--fg) 4%, transparent); padding: 6px 0; margin: 0; border-radius: 8px; transition: background var(--dur-base) var(--ease); }
+.chat-msg:hover { background: color-mix(in oklab, var(--fg) 4%, transparent); padding: 6px 0; margin: 0; border-radius: var(--r-0); transition: background var(--dur-base) var(--ease); }
 
 .chat-avatar {
   width: 36px; height: 36px; flex-shrink: 0;
@@ -2038,7 +2138,7 @@ table tr.clickable:focus-visible td { background: var(--bg-2); }
 .chat-bubble code {
   font-family: var(--ff-mono); font-size: 0.92em;
   background: color-mix(in oklab, var(--fg) 10%, transparent);
-  padding: 1px 6px; border-radius: 4px;
+  padding: 1px 6px; border-radius: var(--r-0);
 }
 .chat-msg.you .chat-bubble code { background: color-mix(in oklab, var(--fg) 10%, transparent); }
 .chat-bubble a {
@@ -2149,7 +2249,7 @@ table tr.clickable:focus-visible td { background: var(--bg-2); }
 .chat-msg.you .chat-image,
 .chat-msg .chat-image,
 .chat-image {
-  display: inline-block; border-radius: 12px; overflow: hidden;
+  display: inline-block; border-radius: var(--r-1); overflow: hidden;
   max-width: min(100%, 480px); background: var(--bg-2);
   text-decoration: none; color: var(--fg);
   border: 1px solid color-mix(in oklab, var(--fg) 10%, transparent);
@@ -2168,7 +2268,7 @@ table tr.clickable:focus-visible td { background: var(--bg-2); }
 .chat-file {
   display: flex; align-items: center; gap: 12px; padding: 12px 14px;
   background: var(--bg-2); border: 1px solid color-mix(in oklab, var(--fg) 10%, transparent);
-  border-radius: 12px; text-decoration: none; color: var(--fg);
+  border-radius: var(--r-1); text-decoration: none; color: var(--fg);
   max-width: min(100%, 360px);
   transition: background var(--dur-snap, .15s) var(--ease, ease), border-color var(--dur-snap, .15s) var(--ease, ease);
 }
@@ -2177,7 +2277,7 @@ table tr.clickable:focus-visible td { background: var(--bg-2); }
   font-size: 22px; width: 36px; height: 36px;
   display: inline-flex; align-items: center; justify-content: center;
   background: color-mix(in oklab, var(--accent) 18%, transparent);
-  color: var(--accent-ink); border-radius: 8px; flex-shrink: 0; font-family: var(--ff-mono);
+  color: var(--accent-ink); border-radius: var(--r-0); flex-shrink: 0; font-family: var(--ff-mono);
 }
 .chat-file > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .chat-file .name {
@@ -2195,7 +2295,7 @@ table tr.clickable:focus-visible td { background: var(--bg-2); }
   background: var(--bg-2);
   color: var(--fg);
   border: 1px solid color-mix(in oklab, var(--fg) 10%, transparent);
-  border-radius: 12px; overflow: hidden; max-width: min(100%, 480px);
+  border-radius: var(--r-1); overflow: hidden; max-width: min(100%, 480px);
   transition: box-shadow 0.12s ease, border-color 0.12s ease;
 }
 .chat-msg:hover .chat-pdf { border-color: color-mix(in oklab, var(--accent) 30%, transparent); }
@@ -2218,7 +2318,7 @@ table tr.clickable:focus-visible td { background: var(--bg-2); }
   display: grid; grid-template-columns: 80px 1fr; gap: 12px; padding: 10px;
   background: var(--bg-2);
   border: 1px solid color-mix(in oklab, var(--fg) 10%, transparent);
-  border-radius: 12px; text-decoration: none; color: var(--fg);
+  border-radius: var(--r-1); text-decoration: none; color: var(--fg);
   max-width: min(100%, 480px);
   transition: background var(--dur-snap, .15s) var(--ease, ease), border-color var(--dur-snap, .15s) var(--ease, ease), box-shadow 0.15s ease;
 }
@@ -2229,7 +2329,7 @@ table tr.clickable:focus-visible td { background: var(--bg-2); }
 }
 .chat-link:not(:has(.thumb)):not(:has(img)) { grid-template-columns: 1fr; }
 .chat-link .thumb,
-.chat-link img.thumb { width: 80px; height: 80px; border-radius: 8px; object-fit: cover; background: var(--bg-3) center/cover no-repeat; }
+.chat-link img.thumb { width: 80px; height: 80px; border-radius: var(--r-0); object-fit: cover; background: var(--bg-3) center/cover no-repeat; }
 .chat-link .meta { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .chat-link .host { font-family: var(--ff-mono); font-size: var(--fs-xs); color: var(--fg-3); text-transform: lowercase; }
 .chat-link .title { font-weight: 600; font-size: var(--fs-sm); line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
@@ -2253,7 +2353,7 @@ table tr.clickable:focus-visible td { background: var(--bg-2); }
   display: inline-flex; align-items: center; gap: 4px;
   padding: 2px 8px; background: var(--bg-2);
   border: 1px solid color-mix(in oklab, var(--fg) 10%, transparent);
-  border-radius: 999px; font-size: var(--fs-xs);
+  border-radius: var(--r-pill); font-size: var(--fs-xs);
   cursor: pointer; user-select: none;
   transition: background var(--dur-snap, .12s) var(--ease, ease), border-color var(--dur-snap, .12s) var(--ease, ease), transform 0.12s ease;
   position: relative;
@@ -2374,7 +2474,7 @@ table tr.clickable:focus-visible td { background: var(--bg-2); }
 .chat-composer .send:active { filter: brightness(0.94); }
 .chat-composer .send:focus-visible,
 .composer-btn:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-ink);
   outline-offset: 2px;
 }
 .chat-composer .send:disabled {
@@ -2460,10 +2560,21 @@ table tr.clickable:focus-visible td { background: var(--bg-2); }
     .chat-composer textarea { padding: 10px 12px; }
 }
 
-/* --- landscape orientation: reduce vertical space for composer --- */
+/* --- landscape orientation: reduce vertical space for chrome + composer --- */
 @media (max-height: 500px) and (orientation: landscape) {
-    .chat-composer { padding: 6px 0; }
-    .chat-composer textarea { min-height: 44px; max-height: 120px; }
+    /* Keep horizontal padding: 0 put the textarea/focus ring flush on the edge. */
+    .chat-composer { padding: 6px var(--space-2); }
+    .chat-composer textarea { min-height: 36px; max-height: 96px; }
+    .chat-composer .chat-composer-hint,
+    .chat-composer .chat-composer-context { display: none; }
+    /* Compact the shell chrome: ~114px of topbar+crumb+status is a third of a
+       360px-tall landscape fold. */
+    :root { --app-topbar-h: 40px; --app-crumb-h: 24px; }
+    .app-chrome { padding: 4px var(--pad-x); }
+    .app-status { display: none; }
+    .ws-crumb { min-height: 32px; }
+    .ds-hero { padding: var(--space-4) 0 var(--space-3); }
+    .ds-hero-title { font-size: clamp(28px, 6cqi, 56px); }
 }
 
 /* ============================================================
@@ -2475,8 +2586,13 @@ table tr.clickable:focus-visible td { background: var(--bg-2); }
    Component States — Disabled, Loading, Error, Success
    -------------------------------------------------------------- */
 
-/* Disabled state for all interactive elements */
+/* Disabled state for all interactive elements. The `.is-disabled` class
+   variants cover Btn()'s anchor-rendered case (shell.js) — an <a> has no
+   :disabled pseudo-class, so a disabled link-styled button relies entirely
+   on this class selector for its visual treatment (aria-disabled + tabindex
+   are set in JS; this is the paired CSS half). */
 .btn:disabled, .btn-primary:disabled, .btn-ghost:disabled,
+.btn.is-disabled, .btn-primary.is-disabled, .btn-ghost.is-disabled,
 button:disabled, [disabled] {
   opacity: 0.6;
   cursor: not-allowed;
@@ -2813,7 +2929,7 @@ input[type="password"]:not(:placeholder-shown) + .input-clear {
 
 /* Base focus-visible: 2px ring + 2px offset clears dark bg-3 surfaces (WCAG 1.4.11) */
 :focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-ink);
   outline-offset: 2px;
 }
 
@@ -2823,7 +2939,7 @@ input[type="password"]:not(:placeholder-shown) + .input-clear {
 [role="tab"]:focus-visible,
 .row:focus-visible,
 .row[tabindex]:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-ink);
   outline-offset: 2px;
 }
 
@@ -2894,6 +3010,16 @@ input[type="password"]:not(:placeholder-shown) + .input-clear {
     -webkit-user-select: none;
     -webkit-touch-callout: none;
   }
+}
+
+/* Touch floor also for coarse-pointer devices that report hover (hybrid
+   laptops/tablets with mice) — the block above requires hover:none too. */
+@media (pointer: coarse) {
+  .ds-icon-btn, .ds-icon-btn-xs, .ds-icon-btn-sm, .ds-icon-btn-base {
+    min-width: 44px; min-height: 44px;
+  }
+  .btn, .btn-primary, .btn-ghost,
+  .app-topbar nav a, .app-side a { min-height: 44px; }
 }
 
 /* ------------------------------------------------------------
@@ -3127,16 +3253,24 @@ input[type="password"]:not(:placeholder-shown) + .input-clear {
   .app-body.no-side { grid-template-columns: 1fr !important; }
   .app-side-shell {
     position: absolute;
-    left: 0; top: var(--app-topbar-h);
-    height: calc(100% - var(--app-topbar-h) - var(--app-status-h));
+    /* Full-height overlay drawer: the merged .app-chrome wraps and its real
+       height drifts from --app-topbar-h, so anchoring below it misplaces the
+       drawer. Overlay the chrome instead (z above --z-header), like ws drawers. */
+    left: 0; top: 0;
+    height: 100%;
     width: 280px; max-width: 80%;
     transform: translateX(-100%);
     transition: transform var(--dur-base, 240ms) var(--ease, ease);
-    z-index: 50;
+    /* Above the sticky chrome (z-header): scrim > chrome > content budget. */
+    z-index: calc(var(--z-header, 100) + 2);
     background: var(--bg);
     border-right: 1px solid color-mix(in oklab, var(--fg) 8%, transparent);
     overflow-y: auto;
+    overscroll-behavior: contain;
   }
+  /* Lock the content scroller while the drawer is open so touch pans don't
+     scroll the page behind the scrim. */
+  .app-body.side-open .app-main { overflow: hidden; }
   .app-side-shell.open,
   .app-side.open,
   .app-body.side-open .app-side-shell { transform: translateX(0); }
@@ -3169,7 +3303,8 @@ input[type="password"]:not(:placeholder-shown) + .input-clear {
   display: none;
   position: absolute; inset: 0;
   background: color-mix(in oklab, var(--bg) 60%, transparent);
-  z-index: 49;
+  /* Above the sticky chrome so nav behind an open drawer is not clickable. */
+  z-index: calc(var(--z-header, 100) + 1);
 }
 @container (max-width: 900px) {
   .app-body.side-open .app-side-scrim { display: block; }
@@ -3181,7 +3316,9 @@ input[type="password"]:not(:placeholder-shown) + .input-clear {
 .app-side-toggle {
   display: none;
   position: absolute; top: calc((var(--app-topbar-h) - 44px) / 2); left: 10px;
-  z-index: 51;
+  /* Above the sticky topbar/chrome (z-header) and the drawer/scrim so the
+     translucent blurred chrome never paints over or intercepts the toggle. */
+  z-index: calc(var(--z-header, 100) + 3);
   /* 44x44 minimum hit area (WCAG 2.5.5 / Apple HIG) - 36px is below the
      reliable-tap threshold on touch. */
   width: 44px; height: 44px;
@@ -3192,7 +3329,7 @@ input[type="password"]:not(:placeholder-shown) + .input-clear {
   border-radius: var(--r-1, 6px);
   cursor: pointer;
 }
-.app-side-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.app-side-toggle:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 2px; }
 @container (max-width: 900px) {
   .app-side-toggle { display: inline-flex; }
   .app-topbar .brand { margin-left: 44px; }
@@ -3233,6 +3370,8 @@ input[type="password"]:not(:placeholder-shown) + .input-clear {
   .app-topbar nav,
   .app-topbar > :last-child { display: none; }
   .brand { font-size: var(--fs-tiny); }
+  /* Slightly narrower drawer on tiny phones; max-width:80% remains the guard. */
+  .app-side-shell { width: 260px; }
 }
 
 /* ----------------------------------------------------------------------------
@@ -3280,7 +3419,7 @@ input[type="password"]:not(:placeholder-shown) + .input-clear {
 .ws-resizer { grid-row: 1 / -1; align-self: stretch; justify-self: end; width: 8px; margin-right: -4px; z-index: 5; cursor: col-resize; background: transparent; border: none; padding: 0; touch-action: none; }
 .ws-resizer::after { content: ""; display: block; width: 2px; height: 100%; margin: 0 auto; background: transparent; transition: background var(--dur-snap) var(--ease); }
 .ws-resizer:hover::after, .ws-resizer:focus-visible::after { background: var(--accent); }
-.ws-resizer:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.ws-resizer:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: -2px; }
 .ws-resizer.ws-resizer-rail { grid-column: 1; }
 .ws-resizer.ws-resizer-sessions { grid-column: 2; }
 .ws-resizer.ws-resizer-pane { grid-column: 3; justify-self: end; }
@@ -3306,6 +3445,11 @@ input[type="password"]:not(:placeholder-shown) + .input-clear {
 @media (prefers-reduced-motion: no-preference) {
   .ws-shell { transition: grid-template-columns var(--dur-base) var(--ease); }
 }
+/* Ultrawide: cap the shell so the 1fr content track doesn't stretch to
+   unreadable measures while the fixed side columns pin to their clamps. */
+@media (min-width: 1920px) {
+  .ws-shell { max-width: 1920px; margin-inline: auto; }
+}
 
 /* Rail (left nav) */
 .ws-rail {
@@ -3327,7 +3471,7 @@ input[type="password"]:not(:placeholder-shown) + .input-clear {
   border-radius: var(--r-1); cursor: pointer;
 }
 .ws-rail-toggle:hover { background: var(--bg-3); color: var(--fg); }
-.ws-rail-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ws-rail-toggle:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 2px; }
 .ws-rail-inner { display: flex; flex-direction: column; min-height: 0; flex: 1; padding: var(--space-3) var(--space-2); gap: var(--space-2); }
 .ws-rail-head { display: flex; align-items: center; min-height: 36px; padding: 0 var(--space-2); }
 .ws-rail-brand { font-family: var(--ff-body); font-weight: 600; font-size: var(--fs-body); color: var(--fg); white-space: nowrap; overflow: hidden; }
@@ -3340,8 +3484,8 @@ input[type="password"]:not(:placeholder-shown) + .input-clear {
   min-height: 40px; white-space: nowrap; overflow: hidden;
 }
 .ws-rail-action:hover { filter: brightness(1.08); }
-.ws-rail-action:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.ws-rail-nav { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; flex: 1; min-height: 0; overflow-y: auto; }
+.ws-rail-action:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 2px; }
+.ws-rail-nav { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
 .ws-rail-item {
   display: flex; align-items: center; gap: var(--space-2);
   width: 100%; padding: var(--space-2); min-height: 44px;
@@ -3350,7 +3494,7 @@ input[type="password"]:not(:placeholder-shown) + .input-clear {
   font-family: var(--ff-body); font-size: var(--fs-sm); white-space: nowrap; overflow: hidden;
 }
 .ws-rail-item:hover { background: var(--bg-3); color: var(--fg); }
-.ws-rail-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.ws-rail-item:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: -2px; }
 .ws-rail-item.active { background: var(--accent-tint); color: var(--fg); box-shadow: inset 2px 0 0 var(--accent); }
 .ws-rail-item-label { flex: 1; overflow: hidden; text-overflow: ellipsis; }
 .ws-rail-item-count { font-family: var(--ff-mono); font-size: var(--fs-tiny); color: var(--fg-3); }
@@ -3404,6 +3548,7 @@ input[type="password"]:not(:placeholder-shown) + .input-clear {
   min-height: 0; display: flex; flex-direction: column;
   background: var(--bg-2); border-left: var(--bw-hair) solid var(--bg-3);
   overflow: hidden; transition: width var(--dur-base) var(--ease);
+  overscroll-behavior: contain;
 }
 .ws-pane-collapsed .ws-pane { width: 0; border-left: none; }
 .ws-pane-collapsed .ws-pane > * { display: none; }
@@ -3422,7 +3567,7 @@ input[type="password"]:not(:placeholder-shown) + .input-clear {
 /* Desktop-only chrome toggle (sessions collapse): inverse of the mobile drawer-toggle. */
 .ws-desktop-toggle { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border: none; background: none; color: var(--fg-2); cursor: pointer; border-radius: var(--r-1); }
 .ws-desktop-toggle:hover { background: var(--bg-2); color: var(--fg); }
-.ws-desktop-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ws-desktop-toggle:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 2px; }
 @media (max-width: 900px) { .ws-desktop-toggle { display: none; } }
 /* The pane collapse toggle is meaningless once the pane TRACK is dropped (the
    pane becomes a mobile overlay drawer at <=1480px, reached via its own
@@ -3488,12 +3633,19 @@ input[type="password"]:not(:placeholder-shown) + .input-clear {
   }
   .ws-sessions {
     position: fixed; inset: 0 auto 0 0;
-    width: min(var(--ws-sessions-w), 80vw);
+    /* Immune to the desktop collapse var (--ws-sessions-w:0px persisted from
+       a desktop session would open an invisible 0-width drawer). */
+    width: min(max(var(--ws-sessions-w), 280px), 80vw);
     z-index: 42; transform: translateX(-110%);
     transition: transform var(--dur-base) var(--ease);
     border-right: var(--bw-hair) solid var(--bg-3);
+    overscroll-behavior: contain;
   }
   .ws-shell.ws-sessions-open .ws-sessions { transform: translateX(0); }
+  /* Drawer mode ignores the desktop collapsed state: children stay rendered
+     and the border returns, so a persisted collapse can't blank the drawer. */
+  .ws-shell.ws-sessions-collapsed .ws-sessions > * { display: revert; }
+  .ws-shell.ws-sessions-collapsed .ws-sessions { border-right: var(--bw-hair) solid var(--bg-3); }
   .ws-sessions-drawer-toggle { display: inline-flex; }
 }
 
@@ -3539,7 +3691,7 @@ input[type="password"]:not(:placeholder-shown) + .input-clear {
   .ws-crumb .app-crumb .crumb-right { margin-left: 0; flex-wrap: wrap; min-width: 0; display: inline-flex; }
 }
 .ws-drawer-toggle:hover { background: var(--bg-2); color: var(--fg); }
-.ws-drawer-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ws-drawer-toggle:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 2px; }
 
 @media (prefers-reduced-motion: reduce) {
   .ws-shell, .ws-rail, .ws-pane, .ws-sessions, .ws-scrim { transition: none; }
@@ -3551,7 +3703,7 @@ input[type="password"]:not(:placeholder-shown) + .input-clear {
    ============================================================ */
 
 /* Highlighted match inside a Row title (Row `highlight` prop). */
-.ds-hl { background: color-mix(in oklab, var(--accent) 25%, transparent); color: inherit; border-radius: 2px; }
+.ds-hl { background: color-mix(in oklab, var(--accent) 25%, transparent); color: inherit; border-radius: var(--r-hair); }
 
 /* Action strip rendered inside an EXPANDED Row (Row `actions` prop). The
    buttons stop propagation so they never fire the row onClick. */
@@ -3564,20 +3716,20 @@ input[type="password"]:not(:placeholder-shown) + .input-clear {
   transition: background var(--dur-snap) var(--ease), color var(--dur-snap) var(--ease);
 }
 .row-act:hover { background: var(--bg-3); color: var(--fg); }
-.row-act:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.row-act:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 1px; }
 
 /* FilterPills - a group of pill toggle buttons (aria-pressed). */
 .ds-filter-pills { display: flex; flex-wrap: wrap; gap: var(--space-2); }
 .ds-filter-pill {
   display: inline-flex; align-items: center; justify-content: center;
   padding: 4px 12px; min-height: 28px;
-  background: var(--bg-2); border: var(--bw-hair) solid var(--bg-3); border-radius: 999px;
+  background: var(--bg-2); border: var(--bw-hair) solid var(--bg-3); border-radius: var(--r-pill);
   color: var(--fg-2); font-family: var(--ff-body); font-size: var(--fs-tiny); cursor: pointer;
   transition: background var(--dur-snap) var(--ease), color var(--dur-snap) var(--ease);
 }
 .ds-filter-pill:hover { background: var(--bg-3); color: var(--fg); }
 .ds-filter-pill.active { background: var(--accent-tint); color: var(--fg); border-color: var(--accent); }
-.ds-filter-pill:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.ds-filter-pill:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 1px; }
 
 /* Touch floor for the new small controls. */
 @media (pointer: coarse) {
@@ -3587,7 +3739,7 @@ input[type="password"]:not(:placeholder-shown) + .input-clear {
 /* Disabled file actions (read-only row / in-flight mutation) stay visible but inert. */
 .ds-file-act:disabled { opacity: .45; cursor: default; }
 .ds-file-act:disabled:hover { background: transparent; color: var(--fg-3); }
-.ds-file-act:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.ds-file-act:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 1px; }
 
 /* ============================================================
    Print — linearize WorkspaceShell so main content prints in full.
@@ -3603,6 +3755,22 @@ input[type="password"]:not(:placeholder-shown) + .input-clear {
   .ws-crumb,
   .app-status { display: none; }
   .ws-main { overflow: visible; height: auto; }
+  /* AppShell: unpin the viewport-height frame so content flows across pages,
+     and drop all chrome (it prints as page furniture otherwise). */
+  .app { height: auto; min-height: 0; overflow: visible; display: block; }
+  .app-body { display: block; }
+  .app-main { overflow: visible; height: auto; display: block; max-width: 100%; }
+  .app-topbar, .app-chrome, .app-crumb, .app-side-shell, .app-side-scrim,
+  .app-side-toggle, .btn-fab, .skip-link, .ds-marquee { display: none; }
+  /* Modals/preview: print the content, not a blurred overlay clipped to one page. */
+  .ds-modal-backdrop { position: static; background: none; backdrop-filter: none; padding: 0; }
+  .ds-modal, .ds-modal-preview { max-width: 100%; max-height: none; box-shadow: none; }
+  .ds-modal-body, .ds-preview-body, .ds-preview-code, .ds-preview-text { overflow: visible; }
+  .ds-modal-actions, .ds-preview-actions { display: none; }
+  /* Data-density: fixed-height log clips; bg-only tiles lose their boundary. */
+  .ds-live-log { height: auto; max-height: none; overflow: visible; }
+  .ds-stat, .kpi-card { border: 1px solid var(--rule); }
+  .ds-session-row { break-inside: avoid; }
 }
 
 /* ============================================================
@@ -3622,20 +3790,31 @@ input[type="password"]:not(:placeholder-shown) + .input-clear {
 /* PhaseWalk */
 .ds-phasewalk { display: inline-flex; gap: 2px; vertical-align: middle; }
 .ds-phasewalk-seg {
-  width: 18px; height: 10px; border-radius: 2px;
+  width: 18px; height: 10px; border-radius: var(--r-hair);
   background: var(--bg-3); position: relative;
 }
 .ds-phasewalk-seg.is-reached { background: var(--success); }
 .ds-phasewalk-seg.is-gap { background: var(--warn); }
+/* Standalone PhaseWalk reserves headroom for the labels instead of letting
+   them escape upward and overlap the element above. */
+.ds-phasewalk { padding-top: 15px; }
 .ds-phasewalk-lbl {
   position: absolute; top: -15px; left: 0;
   font-size: var(--fs-micro); color: var(--fg-3); white-space: nowrap;
 }
+/* Inline in a single-line SessionRow the labels would overlap the row above —
+   segments already carry title tooltips. */
+.ds-session-row .ds-phasewalk { padding-top: 0; }
+.ds-session-row .ds-phasewalk-lbl { display: none; }
 
 /* TreeNode */
 .ds-tree-node {
   padding: 5px 10px; border-left: var(--bw-rule) solid var(--bg-3);
   margin: 2px 0 2px 16px; font-size: var(--fs-tiny);
+  min-width: 0; overflow-wrap: anywhere;
+}
+@media (max-width: 400px) {
+  .ds-tree-node { margin-left: 8px; padding-left: 8px; }
 }
 .ds-tree-node.is-phase { border-color: var(--accent); background: var(--bg-3); font-weight: 600; }
 .ds-tree-node.is-deviation { border-color: var(--warn); background: var(--danger-surface); color: var(--warn); }
@@ -3650,17 +3829,26 @@ input[type="password"]:not(:placeholder-shown) + .input-clear {
 /* BarRow */
 .ds-bar-row { display: flex; align-items: center; gap: 8px; margin: 3px 0; font-size: var(--fs-tiny); }
 .ds-bar-row-label { width: 100px; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ds-bar-bg { flex: 1; background: var(--bg-3); border-radius: 2px; height: 6px; overflow: hidden; }
-.ds-bar-fill { background: var(--accent); height: 100%; border-radius: 2px; }
-.ds-bar-row-value { flex-shrink: 0; color: var(--fg-2); }
+.ds-bar-bg { flex: 1; min-width: 60px; background: var(--bg-3); border-radius: var(--r-hair); height: 6px; overflow: hidden; }
+.ds-bar-fill { background: var(--accent); height: 100%; border-radius: var(--r-hair); }
+.ds-bar-row-value { flex-shrink: 0; color: var(--fg-2); max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 400px) {
+  .ds-bar-row-label { width: 72px; }
+}
 
 /* StatTile / StatsGrid */
-.ds-stats-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: var(--space-2); }
+/* min(140px, 100%) keeps the grid from collapsing to 1 column early inside
+   padded panels; the wrapper div stretches its tile to equal row height. */
+.ds-stats-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(140px, 100%), 1fr)); gap: var(--space-2); }
+.ds-stats-grid > div { display: grid; }
+@media (max-width: 360px) {
+  .ds-stats-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-1); }
+}
 .ds-stats-grid-empty { padding: var(--space-3); color: var(--fg-3); font-size: var(--fs-tiny); }
-.ds-stat { background: var(--bg-3); border-radius: 4px; padding: 10px 12px; }
-.ds-stat-val { font-size: 22px; font-weight: 700; color: var(--accent-ink); }
-.ds-stat-val.rate-big { font-size: 32px; color: var(--success); }
-.ds-stat-val.err-rate { font-size: 32px; color: var(--warn); }
+.ds-stat { min-width: 0; background: var(--bg-3); border-radius: var(--r-0); padding: 10px 12px; }
+.ds-stat-val { font-size: clamp(18px, 5cqi, 22px); font-weight: 700; color: var(--accent-ink); overflow-wrap: anywhere; }
+.ds-stat-val.rate-big { font-size: clamp(24px, 7cqi, 32px); color: var(--success); }
+.ds-stat-val.err-rate { font-size: clamp(24px, 7cqi, 32px); color: var(--warn); }
 .ds-stat-lbl { font-size: var(--fs-micro); color: var(--fg-3); margin-top: 2px; }
 
 /* SubGrid */
@@ -3668,7 +3856,7 @@ input[type="password"]:not(:placeholder-shown) + .input-clear {
 .ds-sub-grid-empty { padding: var(--space-3); color: var(--fg-3); font-size: var(--fs-tiny); }
 .ds-sub-btn {
   padding: 6px 10px; background: var(--bg-3); border: var(--bw-hair) solid var(--bg-3);
-  border-radius: 4px; font-size: var(--fs-tiny); cursor: pointer; color: var(--fg);
+  border-radius: var(--r-0); font-size: var(--fs-tiny); cursor: pointer; color: var(--fg);
   text-align: left; font-family: var(--ff-body);
 }
 .ds-sub-btn:hover { border-color: var(--accent); color: var(--accent-ink); }
@@ -3677,32 +3865,398 @@ input[type="password"]:not(:placeholder-shown) + .input-clear {
 /* SessionRow */
 .ds-session-row {
   display: flex; align-items: center; gap: 8px; padding: 6px 10px;
+  flex-wrap: wrap; min-width: 0;
   border-bottom: var(--bw-hair) solid var(--bg-3); cursor: pointer;
 }
 .ds-session-row:hover { background: var(--bg-3); }
 .ds-session-row-id {
   font-family: var(--ff-mono); font-size: var(--fs-micro); color: var(--accent-ink);
-  width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  flex: 0 1 160px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.ds-session-row-counts { font-size: var(--fs-micro); color: var(--fg-3); width: 280px; }
+.ds-session-row-counts {
+  font-size: var(--fs-micro); color: var(--fg-3);
+  flex: 1 1 200px; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+@media (max-width: 640px) {
+  .ds-session-row-span { flex-basis: 100%; }
+}
 .ds-session-row-devcnt { color: var(--warn); font-weight: 600; }
 .ds-session-row-span { font-size: var(--fs-micro); color: var(--fg-3); }
 
 /* DevRow */
 .ds-dev-row {
   background: var(--danger-surface); border-left: var(--bw-chunk) solid var(--warn);
-  padding: 8px 12px; margin: 4px 0; border-radius: 3px; font-size: var(--fs-tiny);
+  padding: 8px 12px; margin: 4px 0; border-radius: var(--r-hair); font-size: var(--fs-tiny);
 }
 .ds-dev-row strong { color: var(--warn); }
 
-/* LiveLog */
+/* LiveLog — natural height with a viewport-tracking cap (dvh follows mobile
+   URL-bar chrome; min-height keeps short-landscape from going near-zero). */
 .ds-live-log {
-  height: calc(100vh - 200px); overflow-y: auto;
+  height: auto;
+  max-height: calc(100vh - 200px);
+  max-height: calc(100dvh - 200px);
+  min-height: 160px;
+  overflow-y: auto; overflow-x: hidden;
   font-family: var(--ff-mono); font-size: var(--fs-micro); line-height: 1.5;
 }
-.ds-live-log-empty { height: auto; padding: var(--space-3); color: var(--fg-3); }
-.ds-live-log-entry { padding: 2px 8px; border-bottom: var(--bw-hair) solid var(--bg-3); }
+/* Embedded in a WM window the viewport calc is meaningless — fill the container. */
+.fd-root .ds-live-log { height: 100%; max-height: none; min-height: 0; flex: 1 1 auto; }
+.ds-live-log-empty { height: auto; min-height: 0; padding: var(--space-3); color: var(--fg-3); }
+.ds-live-log-entry { padding: 2px 8px; border-bottom: var(--bw-hair) solid var(--bg-3); overflow-wrap: anywhere; }
 .ds-live-log-entry:hover { background: var(--bg-3); }
 .ds-live-log-ts { margin-right: 6px; color: var(--fg-3); }
-.ds-live-log-subtag { margin-right: 6px; padding: 0 5px; border-radius: 2px; font-size: var(--fs-micro); }
-.ds-live-log-preview { margin-left: 6px; color: var(--fg-3); }
+.ds-live-log-subtag { margin-right: 6px; padding: 0 5px; border-radius: var(--r-hair); font-size: var(--fs-micro); }
+.ds-live-log-preview { margin-left: 6px; color: var(--fg-3); word-break: break-word; }
+
+/* Touch floors for the dense controls (not covered by the mobile width blocks). */
+@media (pointer: coarse) {
+  .ds-sub-btn { min-height: 44px; }
+  .ds-session-row { min-height: 44px; }
+  .ds-live-log-entry { padding-block: 6px; }
+}
+
+
+/* == appended: popovers-files == */
+/* FilePreviewMedia controls row — spacing + coarse-pointer tap floor */
+.ds-preview-media-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+@media (hover: none), (pointer: coarse) {
+  .ds-preview-media-controls .chat-code-copy,
+  .chat-code-copy-head {
+    min-height: 44px;
+    min-width: 44px;
+  }
+}
+
+/* == appended: ui-kits == */
+/* ============================================================
+   ui_kit responsive helpers (kits-grids sweep) */
+.ds-section-pad { padding: clamp(6px, 1.2vw, 16px); }
+.ds-panel-gap { margin: var(--space-2) 0; }
+.ds-panel-duo { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-2); margin: var(--space-2) 0; }
+@media (max-width: 760px) {
+  .ds-panel-duo { grid-template-columns: 1fr; }
+}
+/* Wide-viewport density: auto-fit grid so panel COUNT tracks actual children
+   instead of a hardcoded column number — 2 children sit 2-up, 5 wrap to a
+   third row, never an arbitrary 3-card reflex (same auto-fit/minmax pattern
+   as .ds-tile-grid). Panels floor at 280px before wrapping, so ultra-wide
+   screens still get more columns than a fixed repeat(3, ...) ever allowed. */
+.ds-panel-trio { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr)); gap: var(--space-2); margin: var(--space-2) 0; }
+.ds-panel-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: var(--space-2); margin: var(--space-2) 0; }
+/* wide dense rows/tables scroll inside their panel, never the page */
+.ds-scroll-x { overflow-x: auto; -webkit-overflow-scrolling: touch; max-width: 100%; }
+
+/* --- slide deck ------------------------------------------- */
+.ds-deck-stage {
+  aspect-ratio: 16 / 9;
+  width: 100%;
+  max-width: min(1100px, 100%);
+  margin: var(--space-3) auto;
+  background: var(--bg-2);
+  border-radius: var(--r-2);
+  padding: clamp(16px, 5vw, 64px);
+  box-sizing: border-box;
+  display: flex;
+  overflow: hidden;
+  container-type: inline-size; /* cqw units track the stage, not the viewport */
+}
+@media (max-height: 500px) and (orientation: landscape) {
+  .ds-deck-stage {
+    max-height: calc(100vh - 140px);
+    max-height: calc(100dvh - 140px);
+    aspect-ratio: auto;
+  }
+}
+.ds-deck-slide { flex: 1; display: flex; min-width: 0; }
+.ds-deck-controls {
+  display: flex; align-items: center; justify-content: center; gap: 14px;
+  padding: 8px; font-family: var(--ff-mono); font-size: var(--fs-sm);
+}
+.ds-deck-count { color: var(--fg-3); }
+@media (pointer: coarse) {
+  .ds-deck-controls .btn { min-height: 44px; min-width: 44px; }
+}
+.ds-slide-eyebrow {
+  font-family: var(--ff-mono); font-size: 11px; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--fg-3); margin-bottom: clamp(12px, 2.5cqw, 24px);
+}
+.ds-slide-col { display: flex; flex-direction: column; justify-content: center; gap: clamp(12px, 2.5cqw, 24px); min-width: 0; }
+.ds-slide-col--start { align-items: flex-start; }
+.ds-slide-col--narrow { max-width: 38ch; }
+.ds-slide-col--quote { max-width: 42ch; }
+.ds-slide-hero {
+  font-size: clamp(var(--fs-h2), 6cqw, var(--fs-hero));
+  line-height: var(--lh-tight); letter-spacing: var(--tr-tight); font-weight: 600;
+  color: var(--slide-accent, var(--accent-ink));
+  overflow-wrap: anywhere;
+}
+.ds-slide-h1 {
+  font-size: clamp(var(--fs-h3), 4.5cqw, var(--fs-h1));
+  line-height: var(--lh-snug); color: var(--fg); font-weight: 500; min-width: 0;
+}
+.ds-slide-h1--lead { margin-bottom: 12px; }
+.ds-slide-quote-body {
+  font-size: clamp(var(--fs-lg), 3.5cqw, var(--fs-h2));
+  line-height: var(--lh-snug); color: var(--fg); font-weight: 400; font-style: italic;
+}
+.ds-slide-cite { font-family: var(--ff-mono); font-size: var(--fs-sm); color: var(--fg-3); }
+.ds-slide-bullet {
+  display: flex; gap: clamp(8px, 2vw, 18px); align-items: baseline;
+  border-bottom: 1px solid var(--rule); padding: 12px 0; flex-wrap: wrap;
+}
+.ds-slide-bullet-key {
+  flex: 0 1 clamp(56px, 18%, 100px); min-width: 0;
+  font-family: var(--ff-mono); font-size: var(--fs-sm);
+  color: var(--slide-accent, var(--accent-ink));
+}
+.ds-slide-bullet-val { color: var(--fg-2); font-size: var(--fs-lg); min-width: 0; }
+.ds-slide-split { display: grid; grid-template-columns: 1fr 1fr; gap: clamp(12px, 3vw, 32px); margin-top: 12px; }
+@media (max-width: 760px) {
+  .ds-slide-split { grid-template-columns: 1fr; }
+}
+.ds-slide-split-cell {
+  padding: 18px; background: var(--bg-2); border-radius: var(--r-2);
+  color: var(--fg-2); font-size: var(--fs-lg); line-height: var(--lh-base); min-width: 0;
+}
+.ds-slide-split-cell--accent { border-left: 3px solid var(--slide-accent, var(--accent)); }
+
+/* --- error 404 --------------------------------------------- */
+.ds-err-hero {
+  padding: clamp(16px, 5vw, 36px) clamp(12px, 4vw, 22px);
+  text-align: center; display: flex; flex-direction: column; gap: 14px; align-items: center;
+}
+.ds-err-numeral {
+  font-family: var(--ff-mono); font-size: clamp(56px, 20vw, 120px);
+  line-height: 1; color: var(--panel-text-3); letter-spacing: -0.03em;
+}
+.ds-err-path {
+  display: inline-flex; gap: 6px; align-items: baseline; flex-wrap: wrap; max-width: 100%;
+  font-family: var(--ff-mono); font-size: 13px; color: var(--panel-text-2);
+  background: var(--panel-1); padding: 6px 12px; border-radius: var(--r-0);
+  overflow-wrap: anywhere; word-break: break-all;
+}
+
+/* --- gallery ------------------------------------------------ */
+.ds-tile-grid {
+  padding: clamp(8px, 2.5vw, 16px);
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(min(180px, 100%), 1fr)); gap: 8px;
+}
+.ds-tile-grid--tight { grid-template-columns: repeat(auto-fill, minmax(min(140px, 100%), 1fr)); }
+.ds-swatch-grid {
+  padding: clamp(8px, 2.5vw, 16px);
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(min(160px, 100%), 1fr)); gap: 12px;
+}
+.ds-gallery-tile {
+  cursor: pointer; display: flex; flex-direction: column; gap: 6px;
+  padding: 12px; border-radius: var(--r-1); min-height: clamp(120px, 18vw, 160px);
+  border: 0; text-align: left; font: inherit; color: inherit;
+  background: var(--tile-tone, var(--panel-1));
+  transition: transform var(--dur-base) var(--ease), box-shadow var(--dur-base) var(--ease);
+}
+/* Flat tonal fill only (house style: no bespoke tile chrome, no borders — see
+   .ds-feature above), so the hover affordance is a lift, matching the same
+   translateY + shadow idiom .chat-msg:hover .chat-bubble already uses. */
+.ds-gallery-tile:hover { transform: translateY(-2px); box-shadow: 0 2px 8px color-mix(in oklab, var(--fg) 10%, transparent); }
+.ds-gallery-tile:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 2px; }
+.ds-gallery-tile--tight { min-height: clamp(96px, 14vw, 120px); }
+.ds-lightbox {
+  position: fixed; inset: 0; background: var(--scrim);
+  display: flex; align-items: center; justify-content: center;
+  padding: clamp(12px, 4vw, 32px);
+  padding-bottom: max(clamp(12px, 4vw, 32px), env(safe-area-inset-bottom));
+  z-index: 50;
+}
+.ds-lightbox-card {
+  background: var(--panel-0); border-radius: var(--r-2); padding: clamp(16px, 4vw, 28px);
+  width: min(520px, 100%); min-width: 0;
+  max-height: calc(100vh - 24px);
+  max-height: calc(100dvh - 24px);
+  overflow: auto;
+  display: flex; flex-direction: column; gap: 14px;
+}
+.ds-lightbox-preview {
+  padding: clamp(16px, 6vw, 36px); border-radius: var(--r-1); text-align: center;
+  font-family: var(--ff-mono); white-space: pre-line; font-size: clamp(16px, 5vw, 24px);
+  background: var(--tile-tone, var(--panel-1));
+}
+
+/* --- search ------------------------------------------------- */
+.ds-topbar-search { width: min(280px, 100%); min-width: 0; flex: 1 1 clamp(140px, 30vw, 280px); }
+@media (max-width: 480px) {
+  .ds-topbar-search { flex-basis: 100%; }
+}
+.ds-empty-state { padding: clamp(16px, 5vw, 24px); text-align: center; color: var(--panel-text-3); }
+.ds-empty-state-glyph { font-size: clamp(24px, 6vw, 32px); }
+.ds-empty-state-msg { margin: 6px 0; }
+.ds-empty-state-hint { margin: 0; font-size: var(--fs-sm); }
+
+/* --- system primer ------------------------------------------ */
+.ds-swatch-grid-sm {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(min(110px, 100%), 1fr));
+  gap: 12px; padding: clamp(10px, 2.5vw, 14px) clamp(10px, 3vw, 18px);
+}
+.ds-swatch-grid-lg { grid-template-columns: repeat(auto-fill, minmax(min(150px, 100%), 1fr)); }
+.ds-swatch-col { display: flex; flex-direction: column; gap: 6px; }
+.ds-swatch-chip { height: 48px; border-radius: var(--r-1); border: 1px solid var(--rule); background: var(--swatch, var(--panel-1)); }
+.ds-swatch-chip--big { height: 64px; }
+.ds-swatch-name { font-family: var(--ff-mono); font-size: 11px; color: var(--fg-3); }
+.ds-type-panel { padding: clamp(10px, 2.5vw, 14px) clamp(10px, 3vw, 18px); display: flex; flex-direction: column; gap: 14px; }
+.ds-type-row {
+  display: flex; align-items: baseline; gap: 14px;
+  border-bottom: 1px solid var(--rule); padding-bottom: 8px; flex-wrap: wrap;
+}
+.ds-type-row-label { flex: 0 0 64px; font-family: var(--ff-mono); font-size: 11px; color: var(--fg-3); }
+.ds-type-sample {
+  min-width: 0; overflow-wrap: anywhere; line-height: var(--lh-tight); color: var(--fg);
+  font-size: var(--sample-size, var(--fs-body));
+}
+.ds-prim-panel { padding: clamp(10px, 2.5vw, 14px) clamp(10px, 3vw, 18px); display: flex; flex-direction: column; gap: 18px; }
+.ds-prim-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.ds-prim-label { flex: 0 0 64px; font-family: var(--ff-mono); font-size: 11px; color: var(--fg-3); }
+
+/* == appended: content-site == */
+/* Home landing wrappers (site/theme.mjs) — replace banned inline styles. */
+.ds-home-hero-wrap { padding: 0 var(--space-2, 8px); }
+.ds-home-panel { margin: var(--space-2, 8px); }
+@media (max-width: 480px) {
+  .ds-home-panel { margin: var(--space-1, 4px) 0; }
+}
+.ds-quickstart {
+  padding: var(--space-3, 16px) var(--space-4, 22px);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+/* Table() scroll containment — wide tables scroll inside their own box,
+   never the page body. */
+.ds-table-wrap {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  max-width: 100%;
+}
+.ds-table-wrap > table { min-width: 100%; }
+
+
+/* == appended: settings kit cleanup == */
+/* == appended: settings kit == */
+.ds-settings-main { padding: 8px; }
+.ds-settings-body { padding: 14px 18px; }
+.ds-settings-body-stack { display: flex; flex-direction: column; gap: 10px; }
+.ds-field-block { margin: 10px 0; }
+.ds-field-eyebrow {
+  font-family: var(--ff-mono); font-size: 11px; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--panel-text-3);
+}
+.ds-hint-sm { font-size: 12px; color: var(--panel-text-2); }
+.ds-note-quiet { margin: 0; color: var(--panel-text-2); }
+.ds-btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.ds-btn-row-tight { gap: 6px; }
+.ds-key-input { flex: 1 1 160px; min-width: 0; font-family: var(--ff-mono); }
+.ds-toggle-btn { min-width: 78px; }
+.ds-toggle-label { margin-left: 8px; color: inherit; opacity: 0.7; }
+.ds-btn-warn { color: var(--warn); }
+.ds-btn-mascot { color: var(--mascot); }
+.ds-savebar {
+  position: sticky; bottom: 8px; display: flex; align-items: center;
+  justify-content: flex-end; gap: 8px; flex-wrap: wrap; padding: 10px;
+  background: var(--panel-2); border-radius: var(--r-1); margin: 8px 0;
+}
+.ds-savebar-note { flex: 1 1 160px; min-width: 0; color: var(--panel-text-2); }
+.ds-settings-modal { min-width: min(320px, calc(100vw - 32px)); max-width: 480px; }
+.ds-modal-body-form { padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.ds-modal-note { margin: 0 0 8px; color: var(--panel-text-2); font-size: 14px; }
+.ds-draft-preview {
+  background: var(--panel-1); padding: 12px; border-radius: var(--r-0);
+  font-size: 13px; color: var(--panel-text-2); max-height: 120px;
+  overflow-y: auto; font-family: var(--ff-mono); overflow-wrap: anywhere;
+}
+.ds-modal-actions { display: flex; gap: 8px; margin-top: 12px; justify-content: space-between; flex-wrap: wrap; }
+
+/* == appended: signin kit cleanup == */
+/* -- signin kit (ui_kits/signin) -- */
+.ds-auth-wrap { padding: var(--space-2, 8px); display: flex; flex-direction: column; align-items: center; }
+.ds-auth-col { width: 100%; max-width: 440px; display: flex; flex-direction: column; gap: 8px; margin: clamp(12px, 4vw, 24px) 0; min-width: 0; }
+.ds-auth-form { padding: clamp(12px, 3vw, 18px); display: flex; flex-direction: column; gap: 10px; }
+.ds-auth-sent { align-items: center; text-align: center; }
+.ds-auth-sent-glyph { font-size: 32px; color: var(--panel-accent); }
+.ds-auth-sent-title { margin: 0; font-weight: 600; }
+.ds-auth-sent-sub { margin: 0; color: var(--panel-text-2); overflow-wrap: anywhere; }
+.ds-auth-field { display: flex; flex-direction: column; gap: 4px; }
+.ds-auth-field-label { font-family: var(--ff-mono); font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--panel-text-3); }
+.ds-auth-row-between { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.ds-auth-remember { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+.ds-auth-remember-text { color: var(--panel-text-2); font-size: 13px; }
+.ds-auth-forgot { font-size: 13px; }
+.ds-auth-error { padding: 8px 10px; background: var(--panel-1); border-radius: var(--r-0); color: var(--danger); font-size: 13px; overflow-wrap: anywhere; }
+.ds-auth-divider { display: flex; align-items: center; gap: 10px; margin: 6px 0; color: var(--panel-text-3); font-size: 12px; }
+.ds-auth-divider-line { flex: 1; height: 1px; background: var(--panel-2); }
+.ds-auth-providers { display: flex; gap: 8px; flex-wrap: wrap; }
+.ds-auth-provider-btn { flex: 1 1 100px; min-width: 0; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 10px; }
+.ds-auth-provider-btn--loading { opacity: 0.7; pointer-events: none; }
+.ds-auth-provider-glyph { font-family: var(--ff-mono); color: var(--panel-text-3); display: inline-flex; }
+.ds-auth-modes { display: flex; justify-content: center; gap: 14px; margin-top: 8px; font-size: 13px; flex-wrap: wrap; }
+.ds-auth-mode-link { color: var(--panel-text-3); text-decoration: none; }
+.ds-auth-mode-link--active { color: var(--panel-text); text-decoration: underline; }
+.ds-auth-fineprint { text-align: center; font-size: 12px; color: var(--panel-text-3); margin: 6px 0; }
+
+/* == appended: gallery-misc kit cleanup == */
+/* --- shared helpers (converted from inline styles) --- */
+.ds-m0 { margin: 0; }
+.ds-text-2 { color: var(--panel-text-2); }
+.ds-text-3 { color: var(--panel-text-3); }
+.ds-kit-head { display: flex; align-items: center; justify-content: space-between; gap: clamp(8px, 2vw, 16px); flex-wrap: wrap; }
+
+/* --- gallery kit --- */
+.ds-tile-cap { flex: 1; display: flex; align-items: center; justify-content: center; font-family: var(--ff-mono); white-space: pre-line; color: var(--panel-text-2); font-size: 18px; min-width: 0; text-align: center; }
+.ds-tile-meta { display: flex; align-items: center; justify-content: space-between; gap: 6px; font-size: 12px; flex-wrap: wrap; min-width: 0; }
+.ds-tile-glyph { font-family: var(--ff-mono); color: var(--panel-text-3); }
+.ds-tile-label { color: var(--panel-text); overflow-wrap: anywhere; }
+.ds-gal-swatch { height: 64px; border-radius: var(--r-0); background: var(--swatch, var(--panel-1)); }
+.ds-gal-swatch-meta { display: flex; justify-content: space-between; gap: 6px; flex-wrap: wrap; font-family: var(--ff-mono); font-size: 11px; min-width: 0; }
+.ds-gal-swatch-name { color: var(--panel-text); }
+.ds-gal-swatch-hint { color: var(--panel-text-3); overflow-wrap: anywhere; }
+.ds-lightbox-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ds-lightbox-tag { font-family: var(--ff-mono); font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--panel-text-3); }
+
+/* --- error_404 kit --- */
+.ds-err-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; margin-top: 6px; }
+.ds-err-chips { display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; margin-top: 4px; }
+
+/* == appended: terminal-capp kit cleanup == */
+/* --- terminal kit ------------------------------------------ */
+.ds-section-pad-sm { padding: 8px; }
+.ds-kit-head-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.ds-cli-cmt .cmd { color: var(--fg-3); }
+.ds-cli-out .cmd { color: var(--fg-2); }
+.ds-cli-ok .prompt, .ds-cli-ok .cmd { color: var(--accent-ink); }
+.ds-cli-warn .prompt, .ds-cli-warn .cmd { color: var(--mascot); }
+.ds-cli-log .prompt { color: var(--fg-3); }
+.ds-cli-log .cmd { color: var(--fg-2); font-family: var(--ff-mono); }
+.ds-term-body { padding: 14px 18px; display: flex; flex-direction: column; gap: 4px; background: var(--bg-2); border-radius: var(--r-1); }
+.ds-term-body--tall { min-height: 280px; }
+.ds-term-input-row { margin-top: 6px; }
+.ds-term-input { flex: 1; min-width: 0; background: transparent; border: 0; outline: 0; font-family: var(--ff-mono); font-size: 13px; color: var(--fg); }
+/* full-viewport render root (community-app) */
+.ds-root-viewport { height: 100vh; height: 100dvh; }
+
+/* --- chat kit: widescreen detail pane -----------------------
+   .chat itself stays single-column (shared component, untouched) and
+   stretches full-width on ultrawide via the existing .app-main > .chat
+   max-width:none rule above (~L380) — that's fine for a bare thread, but
+   it leaves a lone thread column growing to 1400px+ with no other use of
+   the extra width. This wrapper adds a persistent "thread info" rail once
+   there is room to spare, instead of just widening the message column. */
+.ds-chat-layout { display: flex; flex-direction: column; flex: 1; min-height: 0; gap: var(--space-3); }
+.ds-chat-layout > .chat { min-width: 0; }
+.ds-chat-detail { display: none; }
+@media (min-width: 1100px) {
+  .ds-chat-layout { display: grid; grid-template-columns: minmax(0, 1fr) 280px; align-items: start; gap: var(--space-4); }
+  .ds-chat-detail { display: block; position: sticky; top: 0; }
+}

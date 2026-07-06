@@ -13,7 +13,9 @@
   ],
   "scripts": {
     "start": "node src/cli.js",
-    "test": "node test.js"
+    "test": "node test.js",
+    "sync:ds": "node scripts/sync-ds.mjs",
+    "sync:ds:check": "node scripts/sync-ds.mjs --check"
   },
   "author": "lanmower",
   "license": "MIT",

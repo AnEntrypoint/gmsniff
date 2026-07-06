@@ -5,19 +5,9 @@
    Source-of-truth tokens. Component sheet lives in app-shell.css.
    ============================================================ */
 
-@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:ital,wght@0,400;0,500;0,600;0,700;1,400;1,700&display=swap');
-
-/* Metric-matched fallback for the display face. While Space Grotesk loads,
-   text falls back to Arial with size-adjust tuned to its cap-height so the
-   oversized hero does not reflow on swap. Referenced first in --ff-display via
-   the 'Space Grotesk' family; this only kicks in for the fallback glyphs. */
-@font-face {
-  font-family: 'Space Grotesk Fallback';
-  src: local('Arial');
-  size-adjust: 96%;
-  ascent-override: 95%;
-  descent-override: 24%;
-}
+/* System-font stack only — no web-font @import/@font-face. Every --ff-*
+   token below is the same fallback chain that used to sit after the custom
+   family names; removing the custom names just exposes it directly. */
 
 :root {
   /* Tree view indentation tokens */
@@ -129,14 +119,11 @@
   --panel-accent-2: var(--accent-bright, var(--accent));
   --panel-shadow: 0 1px 0 color-mix(in oklab, var(--fg) 6%, transparent), 0 4px 14px color-mix(in oklab, var(--fg) 8%, transparent);
 
-  /* Type — Space Grotesk carries display/headings (editorial grotesk with real
-     character), Inter carries body and UI, JetBrains carries code. The narrow
-     alias tracks the display face. size-adjust on the fallback keeps the
-     oversized hero from shifting while Space Grotesk loads. */
-  --ff-display:  'Space Grotesk', 'Space Grotesk Fallback', 'Inter', system-ui, sans-serif;
-  --ff-narrow:   'Space Grotesk', 'Space Grotesk Fallback', 'Inter', system-ui, sans-serif;
-  --ff-body:     'Inter', system-ui, sans-serif;
-  --ff-mono:     'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace;
+  /* Type — system-font stack, no custom web fonts loaded. */
+  --ff-display:  system-ui, sans-serif;
+  --ff-narrow:   system-ui, sans-serif;
+  --ff-body:     system-ui, sans-serif;
+  --ff-mono:     ui-monospace, Menlo, Consolas, monospace;
 
   --fs-micro:    12px;
   --fs-tiny:     13px;
@@ -198,10 +185,14 @@
   --rule:        color-mix(in oklab, currentColor 14%, transparent);
   --rule-strong: color-mix(in oklab, currentColor 28%, transparent);
 
+  /* Micro rungs below --r-1 — chips, badges, scrollbar thumbs, tick marks
+     genuinely want a tighter corner than 10px; without these two tokens the
+     component sheets fell back to raw px literals bypassing the scale. */
+  --r-hair:      2px;
+  --r-0:         4px;
   --r-1:         10px;
   --r-2:         14px;
   --r-3:         22px;
-  --r-4:         32px;
   --r-pill:      999px;
 
   --dur-snap:    80ms;
@@ -231,6 +222,10 @@
   --measure:     68ch;
   --measure-wide:   940px;
   --measure-narrow: 760px;
+  /* Page-stage ceiling — independent of --measure-wide (which stays the
+     narrower editorial hero/prose measure). Fluid so ultra-wide viewports
+     actually gain real estate instead of flat-lining at a fixed px cap. */
+  --stage-wide:  min(96vw, 1440px);
 
   --sidebar-width:           220px;
   --sidebar-width-collapsed: 64px;
@@ -245,8 +240,11 @@
   /* Unified focus-ring tokens (single source for the design system). Outset
      rings (the default) tokenize colour+width+offset; bordered text fields use
      the inset variant. Deliberate negative offsets on edge-flush/clipping
-     containers stay literal. */
-  --focus-color:       var(--accent);
+     containers stay literal. --focus-color uses --accent-ink (the readable
+     text/UI-boundary tone), never bare --accent (the lime FILL token, which
+     measures ~1.07:1 against --paper and is nearly invisible as an outline —
+     see AGENTS.md token-split rule). */
+  --focus-color:       var(--accent-ink);
   --focus-w:           2px;
   --focus-offset:      2px;
   --focus-ring-inset:  inset 0 0 0 var(--focus-w) var(--focus-color);
@@ -271,7 +269,7 @@
 /* Link focus-visible */
 a:focus-visible,
 [role="link"]:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-ink);
   outline-offset: 2px;
 }
 
@@ -279,13 +277,13 @@ a:focus-visible,
 input:focus-visible,
 textarea:focus-visible,
 select:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-ink);
   outline-offset: 2px;
 }
 
 /* Interactive element focus-visible */
 [tabindex]:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-ink);
   outline-offset: 2px;
 }
 

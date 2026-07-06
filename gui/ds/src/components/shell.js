@@ -87,7 +87,7 @@ export function Glyph({ children, color, size = 'base', label } = {}) {
 
 // Monochrome inline-SVG icons (stroke=currentColor) so chrome reads as one
 // coherent line-icon set instead of multicolor OS emoji. 16px box, 1.6 stroke.
-const ICON_PATHS = {
+export const ICON_PATHS = {
     mic: '<path d="M12 3a3 3 0 0 0-3 3v5a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3z"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>',
     'mic-off': '<path d="M9 9v2a3 3 0 0 0 4.5 2.6M15 11V6a3 3 0 0 0-5.9-.8"/><path d="M5 11a7 7 0 0 0 11.5 5.4M12 18v3"/><path d="m4 4 16 16"/>',
     speaker: '<path d="M11 5 6 9H3v6h3l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/>',
@@ -283,6 +283,40 @@ function toggleSide(open, fromEl) {
     body.classList.toggle('side-open', next);
     const btn = shell.querySelector('.app-side-toggle');
     if (btn) btn.setAttribute('aria-expanded', next ? 'true' : 'false');
+    // Keyboard parity with toggleWsDrawer: Esc dismisses the drawer and Tab is
+    // trapped inside it while it overlays the content behind the scrim.
+    if (body._dsSideKey) { document.removeEventListener('keydown', body._dsSideKey); body._dsSideKey = null; }
+    if (next) {
+        const drawer = shell.querySelector('.app-side-shell');
+        const focusable = drawer && drawer.querySelector('button, a, input, [tabindex]');
+        if (focusable) try { focusable.focus(); } catch (_) {}
+        const onKey = (e) => {
+            if (e.key === 'Escape') { toggleSide(false, btn || body); if (btn) try { btn.focus(); } catch (_) {} return; }
+            if (drawer) trapTab(drawer, e);
+        };
+        body._dsSideKey = onKey;
+        document.addEventListener('keydown', onKey);
+    }
+}
+
+// Ref on the .app root: re-sync the toggle's aria-expanded from the live
+// .side-open class (applyDiff re-renders reset the attribute to 'false'), and
+// arm a ResizeObserver that closes a stuck-open drawer when the shell grows
+// past the 900px container breakpoint (the drawer CSS stops applying there,
+// but the class would otherwise persist and reappear on the next shrink).
+function syncAppSide(el) {
+    if (!el) return;
+    const body = el.querySelector('.app-body');
+    const btn = el.querySelector('.app-side-toggle');
+    if (btn && body) btn.setAttribute('aria-expanded', body.classList.contains('side-open') ? 'true' : 'false');
+    if (!el._dsSideRO && typeof ResizeObserver !== 'undefined') {
+        el._dsSideRO = new ResizeObserver((entries) => {
+            const w = entries[0] && entries[0].contentRect.width;
+            const b = el.querySelector('.app-body');
+            if (w > 900 && b && b.classList.contains('side-open')) toggleSide(false, el);
+        });
+        el._dsSideRO.observe(el);
+    }
 }
 
 export function AppShell({ topbar, crumb, side, main, status, narrow } = {}) {
@@ -296,17 +330,17 @@ export function AppShell({ topbar, crumb, side, main, status, narrow } = {}) {
     const chrome = (topbar && crumb)
         ? h('div', { class: 'app-chrome' }, topbar, crumb)
         : (topbar || crumb || null);
-    return h('div', { class: 'app' },
+    return h('div', { class: 'app', ref: syncAppSide },
         h('a', { href: '#app-main', class: 'skip-link' }, 'skip to main content'),
         hasSide ? h('button', {
             class: 'app-side-toggle', type: 'button',
-            'aria-label': 'toggle navigation', 'aria-expanded': 'false', 'aria-controls': 'app-main',
+            'aria-label': 'toggle navigation', 'aria-expanded': 'false', 'aria-controls': 'app-side-shell',
             onclick: (e) => toggleSide(null, e.currentTarget),
         }, Icon('menu')) : null,
         chrome,
         h('div', { class: 'app-body' + (hasSide ? '' : ' no-side') },
             h('div', { class: 'app-side-scrim', 'aria-hidden': 'true', onclick: (e) => toggleSide(false, e.currentTarget) }),
-            h('div', { class: 'app-side-shell', onclick: (e) => { if (e.target.closest('a')) toggleSide(false, e.currentTarget); } }, sideNode),
+            h('div', { class: 'app-side-shell', id: 'app-side-shell', onclick: (e) => { if (e.target.closest('a')) toggleSide(false, e.currentTarget); } }, sideNode),
             // tabindex=-1 so the skip-link (href="#app-main") actually moves
             // keyboard focus into the main region, not just scroll to it.
             h('main', { class: 'app-main' + (narrow ? ' narrow' : ''), id: 'app-main', tabindex: '-1' }, ...(Array.isArray(main) ? main : [main]))
@@ -318,14 +352,19 @@ export function AppShell({ topbar, crumb, side, main, status, narrow } = {}) {
 // Toggle a named WorkspaceShell column (left rail or right pane). Pure-DOM like
 // toggleSide: WorkspaceShell is stateless chrome, the collapsed class lives on
 // .ws-shell and is read by both CSS and the toggle buttons' aria-expanded.
-function toggleWs(which) {
-    const shell = document.querySelector('.ws-shell');
+function toggleWs(which, fromEl) {
+    // Scope to the shell owning the clicked control, like toggleSide — the
+    // first-on-page querySelector toggles the WRONG shell with two instances.
+    const shell = (fromEl && fromEl.closest && fromEl.closest('.ws-shell')) || document.querySelector('.ws-shell');
     if (!shell) return;
     const cls = which === 'pane' ? 'ws-pane-collapsed'
         : which === 'sessions' ? 'ws-sessions-collapsed'
         : 'ws-rail-collapsed';
     const nowCollapsed = shell.classList.toggle(cls);
-    document.querySelectorAll('.ws-' + which + '-toggle').forEach((btn) => {
+    // Inline --ws-*-w beats the collapsed-class rule in the cascade, so a
+    // persisted width would render a "collapsed" column 200-640px wide.
+    if (nowCollapsed) shell.style.removeProperty('--ws-' + which + '-w');
+    shell.querySelectorAll('.ws-' + which + '-toggle').forEach((btn) => {
         btn.setAttribute('aria-expanded', nowCollapsed ? 'false' : 'true');
         const nextLabel = nowCollapsed ? 'expand ' + which : 'collapse ' + which;
         btn.setAttribute('aria-label', nextLabel);
@@ -334,6 +373,9 @@ function toggleWs(which) {
     try {
         localStorage.setItem('ds.ws.' + which, nowCollapsed ? 'collapsed' : 'open');
     } catch (_) {}
+    // Expanding restores the persisted width (seed skips collapsed columns, so
+    // it must run after the open flag is written).
+    if (!nowCollapsed) seedWsWidths(shell);
 }
 
 // Column resize: read the current rendered track width and write a clamped inline
@@ -349,8 +391,8 @@ function toggleWs(which) {
 // auto-fluid width (the inline --ws-<col>-w override pins the chosen width past
 // the clamp base).
 const WS_RESIZE_CLAMP = { rail: [200, 320], sessions: [248, 520], pane: [288, 640] };
-function wsResize(col, dx, persist = true) {
-    const shell = document.querySelector('.ws-shell');
+function wsResize(col, dx, persist = true, fromEl) {
+    const shell = (fromEl && fromEl.closest && fromEl.closest('.ws-shell')) || document.querySelector('.ws-shell');
     if (!shell) return;
     const track = shell.querySelector('.ws-' + col);
     const cur = track ? track.getBoundingClientRect().width : 0;
@@ -363,29 +405,37 @@ function wsResize(col, dx, persist = true) {
     // every pointermove frame (that fired dozens of synchronous writes per drag).
     if (persist) { try { localStorage.setItem('ds.ws.w.' + col, String(next)); } catch (_) {} }
 }
+// Per-column viewport caps for persisted widths: a width dragged on a wide
+// monitor must not crush the content column when the page reloads on a
+// narrower screen (rail 320 + sessions 520 would leave ~180px of content).
+const WS_VW_CAP = { rail: '20vw', sessions: '30vw', pane: '32vw' };
 function seedWsWidths(el) {
     if (!el) return;
     ['rail', 'sessions', 'pane'].forEach((col) => {
         try {
+            // A persisted-collapsed column must stay collapsed: the inline var
+            // would beat the .ws-*-collapsed class rule in the cascade.
+            if (wsCollapsed(col, false)) return;
             const v = localStorage.getItem('ds.ws.w.' + col);
-            if (v && /^\d+$/.test(v)) el.style.setProperty('--ws-' + col + '-w', v + 'px');
+            if (v && /^\d+$/.test(v)) el.style.setProperty('--ws-' + col + '-w', `min(${v}px, ${WS_VW_CAP[col]})`);
         } catch (_) {}
     });
 }
 function WsResizer(col) {
     const onKey = (e) => {
-        if (e.key === 'ArrowLeft') { e.preventDefault(); wsResize(col, -16, true); }
-        else if (e.key === 'ArrowRight') { e.preventDefault(); wsResize(col, 16, true); }
+        if (e.key === 'ArrowLeft') { e.preventDefault(); wsResize(col, -16, true, e.currentTarget); }
+        else if (e.key === 'ArrowRight') { e.preventDefault(); wsResize(col, 16, true, e.currentTarget); }
     };
     const onDown = (e) => {
         e.preventDefault();
+        const handleEl = e.currentTarget;
         let lastX = e.clientX;
-        const move = (ev) => { const dx = ev.clientX - lastX; lastX = ev.clientX; wsResize(col, dx, false); };
+        const move = (ev) => { const dx = ev.clientX - lastX; lastX = ev.clientX; wsResize(col, dx, false, handleEl); };
         const up = () => {
             document.removeEventListener('pointermove', move);
             document.removeEventListener('pointerup', up);
             document.body.style.cursor = '';
-            wsResize(col, 0, true); // commit the settled width once
+            wsResize(col, 0, true, handleEl); // commit the settled width once
         };
         document.addEventListener('pointermove', move);
         document.addEventListener('pointerup', up);
@@ -411,39 +461,51 @@ function WsResizer(col) {
 // revealed by .ws-sessions-open / .ws-pane-open. Opening one closes the other
 // (only one drawer at a time over the content). Esc + scrim dismiss call this
 // with open=false. Pure-DOM, matching the AppShell toggleSide pattern.
-function toggleWsDrawer(which, open) {
-    const shell = document.querySelector('.ws-shell');
+function toggleWsDrawer(which, open, fromEl) {
+    const shell = (fromEl && fromEl.closest && fromEl.closest('.ws-shell')) || document.querySelector('.ws-shell');
     if (!shell) return;
     const cls = which === 'pane' ? 'ws-pane-open' : 'ws-sessions-open';
     const other = which === 'pane' ? 'ws-sessions-open' : 'ws-pane-open';
     const next = open != null ? open : !shell.classList.contains(cls);
     shell.classList.toggle(cls, next);
     if (next) shell.classList.remove(other);
-    const btn = document.querySelector('.ws-' + which + '-drawer-toggle');
+    const btn = shell.querySelector('.ws-' + which + '-drawer-toggle');
     if (btn) btn.setAttribute('aria-expanded', next ? 'true' : 'false');
+    if (!next) { removeWsDrawerHandlers(shell); return; }
     // When opening, move focus into the drawer, arm an Esc-to-close, and trap
     // Tab/Shift+Tab inside the drawer (a real focus trap, matching the kit's
     // own dialogs - Tab from inside an open drawer previously walked focus out
     // into the scrim/background content behind it).
-    if (next) {
-        const drawer = shell.querySelector(which === 'pane' ? '.ws-pane' : '.ws-sessions');
-        const focusable = drawer && drawer.querySelector('button, a, input, [tabindex]');
-        if (focusable) try { focusable.focus(); } catch (_) {}
-        const onKey = (e) => {
-            if (e.key === 'Escape') { toggleWsDrawer(which, false); document.removeEventListener('keydown', onKey); if (btn) try { btn.focus(); } catch (_) {} return; }
-            if (drawer) trapTab(drawer, e);
-        };
-        shell._wsEscHandler = onKey;
-        document.addEventListener('keydown', onKey);
-    }
+    const drawer = shell.querySelector(which === 'pane' ? '.ws-pane' : '.ws-sessions');
+    const focusable = drawer && drawer.querySelector('button, a, input, [tabindex]');
+    if (focusable) try { focusable.focus(); } catch (_) {}
+    removeWsDrawerHandlers(shell); // replace, never stack (opening one drawer over the other)
+    const onKey = (e) => {
+        if (e.key === 'Escape') { toggleWsDrawer(which, false, shell); if (btn) try { btn.focus(); } catch (_) {} return; }
+        if (drawer) trapTab(drawer, e);
+    };
+    shell._wsEscHandler = onKey;
+    document.addEventListener('keydown', onKey);
+    // The drawer CSS stops applying above its breakpoint; auto-close when the
+    // viewport grows past it so the open class and armed Esc/focus-trap
+    // handlers do not linger invisibly in desktop layout.
+    const mq = window.matchMedia('(max-width: 1480px)');
+    const onMq = () => { if (!mq.matches) closeWsDrawers(shell); };
+    shell._wsDrawerMq = { mq, onMq };
+    mq.addEventListener('change', onMq);
 }
-function closeWsDrawers() {
-    const shell = document.querySelector('.ws-shell');
+function removeWsDrawerHandlers(shell) {
+    // Remove Esc/focus-trap handler armed by toggleWsDrawer (prevents ghost
+    // close on next Esc) and the viewport-growth auto-close listener.
+    if (shell._wsEscHandler) { document.removeEventListener('keydown', shell._wsEscHandler); shell._wsEscHandler = null; }
+    if (shell._wsDrawerMq) { shell._wsDrawerMq.mq.removeEventListener('change', shell._wsDrawerMq.onMq); shell._wsDrawerMq = null; }
+}
+function closeWsDrawers(fromEl) {
+    const shell = (fromEl && fromEl.closest && fromEl.closest('.ws-shell')) || document.querySelector('.ws-shell');
     if (!shell) return;
     shell.classList.remove('ws-sessions-open', 'ws-pane-open');
-    document.querySelectorAll('.ws-sessions-drawer-toggle, .ws-pane-drawer-toggle').forEach((b) => b.setAttribute('aria-expanded', 'false'));
-    // Remove Esc handler armed by toggleWsDrawer to prevent ghost close on next Esc.
-    if (shell._wsEscHandler) { document.removeEventListener('keydown', shell._wsEscHandler); shell._wsEscHandler = null; }
+    shell.querySelectorAll('.ws-sessions-drawer-toggle, .ws-pane-drawer-toggle').forEach((b) => b.setAttribute('aria-expanded', 'false'));
+    removeWsDrawerHandlers(shell);
 }
 
 // Read persisted collapse state for a WorkspaceShell column so the layout is
@@ -513,16 +575,22 @@ export function WorkspaceShell({ rail, sessions, main, pane, crumb, status, narr
                 'aria-label': railIsCollapsed ? 'expand navigation' : 'collapse navigation',
                 title: railIsCollapsed ? 'expand navigation' : 'collapse navigation',
                 'aria-expanded': railIsCollapsed ? 'false' : 'true',
-                onclick: () => toggleWs('rail'),
+                onclick: (e) => toggleWs('rail', e.currentTarget),
             }, Icon('menu')),
             rail || null),
         // Tap-scrim behind an open mobile drawer; click anywhere dismisses.
-        h('div', { class: 'ws-scrim', 'aria-hidden': 'true', onclick: () => closeWsDrawers() }),
+        h('div', { class: 'ws-scrim', 'aria-hidden': 'true', onclick: (e) => closeWsDrawers(e.currentTarget) }),
         // Optional sessions column. On mobile it is a drawer; selecting a row
         // (any button click inside) auto-closes it, mirroring AppShell.
         hasSessions
             ? h('div', { id: 'ws-sessions-col', class: 'ws-sessions', role: 'complementary', 'aria-label': 'conversations',
-                onclick: (e) => { if (window.innerWidth <= 1100 && e.target.closest('button, a, [role="button"]')) closeWsDrawers(); } }, sessions)
+                // Drawer mode is detected by geometry (position:fixed only holds
+                // in drawer mode), not window.innerWidth - the shell may live in
+                // an embedded window narrower than the viewport.
+                onclick: (e) => {
+                    const col = e.currentTarget;
+                    if (getComputedStyle(col).position === 'fixed' && e.target.closest('button, a, [role="button"]')) closeWsDrawers(col);
+                } }, sessions)
             : null,
         // Primary content column, with an optional thin crumb bar on top. On
         // mobile the crumb hosts the drawer toggles (sessions on the left, pane
@@ -535,7 +603,7 @@ export function WorkspaceShell({ rail, sessions, main, pane, crumb, status, narr
                         class: 'ws-drawer-toggle ws-sessions-drawer-toggle', type: 'button',
                         'aria-label': 'toggle conversations', 'aria-expanded': 'false',
                         'aria-controls': 'ws-sessions-col',
-                        onclick: () => toggleWsDrawer('sessions'),
+                        onclick: (e) => toggleWsDrawer('sessions', null, e.currentTarget),
                     }, Icon('thread')) : null,
                     // Desktop-only sessions collapse (reclaims its width for a
                     // full-width thread/grid). Hidden on mobile via CSS.
@@ -543,7 +611,7 @@ export function WorkspaceShell({ rail, sessions, main, pane, crumb, status, narr
                         class: 'ws-desktop-toggle ws-sessions-toggle', type: 'button',
                         'aria-label': sessionsIsCollapsed ? 'expand conversations' : 'collapse conversations',
                         title: sessionsIsCollapsed ? 'expand conversations' : 'collapse conversations',
-                        'aria-expanded': sessionsIsCollapsed ? 'false' : 'true', onclick: () => toggleWs('sessions'),
+                        'aria-expanded': sessionsIsCollapsed ? 'false' : 'true', onclick: (e) => toggleWs('sessions', e.currentTarget),
                     }, Icon(sessionsIsCollapsed ? 'chevron-right' : 'chevron-left')) : null,
                     h('div', { class: 'ws-crumb-main' }, crumb),
                     // Desktop-only context-pane collapse, on the same crumb-level
@@ -553,13 +621,13 @@ export function WorkspaceShell({ rail, sessions, main, pane, crumb, status, narr
                         'aria-label': paneIsCollapsed ? 'show context pane' : 'hide context pane',
                         title: paneIsCollapsed ? 'show context pane' : 'hide context pane',
                         'aria-expanded': paneIsCollapsed ? 'false' : 'true',
-                        onclick: () => toggleWs('pane'),
+                        onclick: (e) => toggleWs('pane', e.currentTarget),
                     }, Icon(paneIsCollapsed ? 'chevron-left' : 'chevron-right')) : null,
                     hasPane ? h('button', {
                         class: 'ws-drawer-toggle ws-pane-drawer-toggle', type: 'button',
                         'aria-label': 'toggle context pane', 'aria-expanded': 'false',
                         'aria-controls': 'ws-pane-col',
-                        onclick: () => toggleWsDrawer('pane'),
+                        onclick: (e) => toggleWsDrawer('pane', null, e.currentTarget),
                     }, Icon('page')) : null)
                 : null,
             h('main', { class: 'ws-main' + (narrow ? ' narrow' : '') + (mainFlush ? ' ws-main--flush' : ''), id: 'ws-main', tabindex: '-1' },

@@ -50,9 +50,13 @@ export function useFloating(anchorEl, contentEl, { placement = 'bottom-start', o
     const cb = () => compute();
     window.addEventListener('resize', cb);
     window.addEventListener('scroll', cb, true);
+    // Reposition when the content box itself resizes (async-loaded content
+    // grows the popover after initial positioning, pushing it off-viewport).
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(cb) : null;
+    if (ro) ro.observe(contentEl);
     return {
         update: compute,
-        dispose() { window.removeEventListener('resize', cb); window.removeEventListener('scroll', cb, true); },
+        dispose() { window.removeEventListener('resize', cb); window.removeEventListener('scroll', cb, true); if (ro) ro.disconnect(); },
         get finalPlacement() { return finalPlacement; }
     };
 }

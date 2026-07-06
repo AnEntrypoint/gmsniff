@@ -108,7 +108,13 @@ export function SessionRow({ sessId, phaseWalkProps, events, verbs, prd, muts, r
         muts != null ? muts + ' mut' : null,
         resid != null ? resid + ' resid' : null,
     ].filter(Boolean).join(' · ');
-    return h('div', { class: 'ds-session-row', onclick: onClick || null, role: onClick ? 'button' : null, tabindex: onClick ? '0' : null },
+    // Keyboard activation parity: role=button + tabindex without onkeydown is
+    // announced as a button but inert to Enter/Space (mirrors Table()).
+    return h('div', {
+        class: 'ds-session-row', onclick: onClick || null,
+        role: onClick ? 'button' : null, tabindex: onClick ? '0' : null,
+        onkeydown: onClick ? (e) => { if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); onClick(e); } } : null,
+    },
         h('span', { class: 'ds-session-row-id' }, sessId),
         h('span', { class: 'ds-session-row-counts' }, counts),
         (deviations != null && deviations !== 0) ? h('span', { class: 'ds-session-row-devcnt' }, String(deviations) + ' dev') : null,

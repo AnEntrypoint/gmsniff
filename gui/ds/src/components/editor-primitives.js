@@ -333,7 +333,12 @@ export function ContextMenu({ items = [], anchor = { x: 0, y: 0 }, onClose } = {
             tabindex: '-1',
             onkeydown: onKey,
             ref: (el) => {
-                if (!el) return;
+                if (!el) {
+                    // Unmount: unhook the resize re-clamp bound on mount.
+                    if (rootEl && rootEl._dsCtxClampOff) { rootEl._dsCtxClampOff(); }
+                    rootEl = null;
+                    return;
+                }
                 rootEl = el;
                 // Position at the anchor immediately, then clamp once layout has
                 // settled — measuring synchronously in ref reads a zero-size box
@@ -341,16 +346,28 @@ export function ContextMenu({ items = [], anchor = { x: 0, y: 0 }, onClose } = {
                 const ax = anchor.x || 0, ay = anchor.y || 0;
                 el.style.left = ax + 'px';
                 el.style.top = ay + 'px';
+                const coarse = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
                 const clamp = () => {
                     const vw = window.innerWidth, vh = window.innerHeight;
                     const r = el.getBoundingClientRect();
                     let x = ax, y = ay;
+                    // Touch: keep the menu clear of the lifting finger — nudge
+                    // below the touch point, or open above when it fits and the
+                    // anchor sits in the lower half (lift-off would otherwise
+                    // activate the first item).
+                    if (coarse) {
+                        y = ay + 10;
+                        if (ay > vh / 2 && ay - r.height >= 4) y = ay - r.height;
+                    }
                     if (x + r.width > vw) x = Math.max(4, vw - r.width - 4);
                     if (y + r.height > vh) y = Math.max(4, vh - r.height - 4);
                     el.style.left = x + 'px';
                     el.style.top = y + 'px';
                 };
                 requestAnimationFrame(clamp);
+                // Re-clamp on resize/orientation change for the menu's lifetime.
+                window.addEventListener('resize', clamp);
+                el._dsCtxClampOff = () => { window.removeEventListener('resize', clamp); el._dsCtxClampOff = null; };
                 queueMicrotask(() => { el.querySelector('button[data-ix]')?.focus(); });
             }
         },
@@ -373,12 +390,18 @@ export function ContextMenu({ items = [], anchor = { x: 0, y: 0 }, onClose } = {
 // Helper: wires right-click + long-press to a target ref. Caller manages state.
 export function useContextMenu(targetEl, items, openCb) {
     if (!targetEl) return () => {};
-    let touchTimer = null;
-    const open = (x, y) => { if (openCb) openCb({ x, y, items }); };
+    let touchTimer = null, lastOpen = 0;
+    // Android fires the native contextmenu event on long-press AND our 500ms
+    // touch timer — dedupe so the menu opens once, not twice (open/flicker).
+    const open = (x, y) => {
+        if (Date.now() - lastOpen < 700) return;
+        lastOpen = Date.now();
+        if (openCb) openCb({ x, y, items });
+    };
     const onCtx = (e) => { e.preventDefault(); open(e.clientX, e.clientY); };
     const onTouchStart = (e) => {
         const t = e.touches && e.touches[0]; if (!t) return;
-        touchTimer = setTimeout(() => { open(t.clientX, t.clientY); }, 500);
+        touchTimer = setTimeout(() => { touchTimer = null; open(t.clientX, t.clientY); }, 500);
     };
     const cancel = () => { if (touchTimer) { clearTimeout(touchTimer); touchTimer = null; } };
     targetEl.addEventListener('contextmenu', onCtx);
