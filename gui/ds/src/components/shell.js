@@ -245,6 +245,33 @@ export function Crumb({ trail = [], leaf = '', right } = {}) {
     return h('div', { class: 'app-crumb' }, ...parts);
 }
 
+// ArrowUp/ArrowDown/Home/End move focus between sidebar links without
+// altering tabindex -- every link stays naturally Tab-reachable (a plain
+// link list, not a role=tablist), arrows are a same-list quick-nav shortcut
+// layered on top, mirroring the roving-nav affordance Tabs already has
+// (editor-primitives.js) but without roving-tabindex's activate-on-move
+// semantics, since a nav link's "activation" is a real navigation the user
+// should still choose deliberately with Enter/click.
+function onSideLinkKeyDown(e) {
+    let dir = 0;
+    if (e.key === 'ArrowDown') dir = 1;
+    else if (e.key === 'ArrowUp') dir = -1;
+    else if (e.key === 'Home' || e.key === 'End') dir = e.key === 'Home' ? 'first' : 'last';
+    else return;
+    const side = e.currentTarget.closest('.app-side');
+    if (!side) return;
+    const links = Array.from(side.querySelectorAll('a'));
+    const curIdx = links.indexOf(e.currentTarget);
+    if (curIdx === -1) return;
+    e.preventDefault();
+    let nextIdx;
+    if (dir === 'first') nextIdx = 0;
+    else if (dir === 'last') nextIdx = links.length - 1;
+    else nextIdx = (curIdx + dir + links.length) % links.length;
+    const next = links[nextIdx];
+    if (next) next.focus();
+}
+
 export function Side({ sections = [] } = {}) {
     return h('aside', { class: 'app-side', role: 'navigation', 'aria-label': 'sidebar navigation' }, ...sections.map(sec => {
         const groupId = 'side-group-' + String(sec.group).replace(/\W+/g, '-').toLowerCase();
@@ -261,7 +288,8 @@ export function Side({ sections = [] } = {}) {
                     class: active ? 'active' : '',
                     'aria-current': active ? 'page' : null,
                     'aria-label': label + countLabel,
-                    onclick: onClick
+                    onclick: onClick,
+                    onkeydown: onSideLinkKeyDown
                 },
                     glyph != null ? Glyph({ children: glyph, color }) : h('span', { class: 'glyph', 'aria-hidden': 'true' }),
                     h('span', {}, label),
