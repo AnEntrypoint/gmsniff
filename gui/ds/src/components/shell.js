@@ -71,6 +71,16 @@ export function Badge({ children, variant = 'default', tone = 'neutral' }) {
     return h('span', { class: 'ds-badge ds-badge-' + variant + ' tone-' + tone }, children);
 }
 
+// Pill — plain non-interactive label chip for tag-like annotations (a phase
+// name, an id, a subsystem tag). Distinct from Chip (status-tone indicator),
+// Badge (count/variant marker), and FilterPills (interactive toggle-group):
+// Pill renders no button, carries no pressed/active state, just a small
+// rounded label. tone is a semantic keyword ('' | 'accent' | 'muted'),
+// never a raw color — every visual rides colors_and_type.css tokens.
+export function Pill({ tone = '', children, key } = {}) {
+    return h('span', { key, class: 'ds-pill' + (tone ? ' tone-' + tone : '') }, children);
+}
+
 export function Glyph({ children, color, size = 'base', label } = {}) {
     // Font-size is var-driven per size class (--glyph-size-{size}) so themes can
     // retune glyph scale; inline fallback keeps sizing if the SDK CSS hasn't

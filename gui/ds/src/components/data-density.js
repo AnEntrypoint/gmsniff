@@ -7,6 +7,7 @@
 // keeps scripts/lint-classes.mjs passing without a PREFIXES change).
 
 import * as webjsx from '../../vendor/webjsx/index.js';
+import { Pill } from './shell.js';
 const h = webjsx.createElement;
 
 // ---------------------------------------------------------------------------
@@ -38,9 +39,9 @@ export function PhaseWalk({ phases = DEFAULT_PHASES, reached = [], gapKinds = []
 export function TreeNode({ ts, kind, variant = '', phase, id, keyLabel, reason, deviationLabel, residuals } = {}) {
     const cls = 'ds-tree-node' + (variant ? ' is-' + variant : '');
     const pills = [
-        phase ? h('span', { key: 'phase', class: 'ds-pill' }, phase) : null,
-        id ? h('span', { key: 'id', class: 'ds-pill' }, id) : null,
-        keyLabel ? h('span', { key: 'key', class: 'ds-pill' }, keyLabel) : null,
+        phase ? Pill({ key: 'phase', children: phase }) : null,
+        id ? Pill({ key: 'id', children: id }) : null,
+        keyLabel ? Pill({ key: 'key', children: keyLabel }) : null,
     ].filter(Boolean);
     return h('div', { class: cls },
         ts != null ? h('span', { class: 'ds-tree-node-ts' }, ts) : null,
@@ -128,8 +129,8 @@ export function SessionRow({ sessId, phaseWalkProps, events, verbs, prd, muts, r
 // ---------------------------------------------------------------------------
 export function DevRow({ ts, event, sess, operation, residuals } = {}) {
     const pills = [
-        sess ? h('span', { key: 'sess', class: 'ds-pill' }, sess) : null,
-        operation ? h('span', { key: 'op', class: 'ds-pill' }, operation) : null,
+        sess ? Pill({ key: 'sess', children: sess }) : null,
+        operation ? Pill({ key: 'op', children: operation }) : null,
     ].filter(Boolean);
     return h('div', { class: 'ds-dev-row' },
         ts != null ? h('span', { class: 'ds-tree-node-ts' }, ts) : null,

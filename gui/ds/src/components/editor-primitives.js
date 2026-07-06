@@ -538,6 +538,48 @@ export function toast({ message, kind = 'info', duration = 3000 } = {}) {
     return dismiss;
 }
 
+// ---------------------------------------------------------------------------
+// Pager — prev/next paginator with a page label. Generalizes gmsniff's
+// gm-pager. page is 1-indexed; pageCount<=1 disables both buttons (no
+// divide-by-zero, no dead-end enabled control). total (optional) renders an
+// item-count suffix ("42 items") alongside the page label.
+// ---------------------------------------------------------------------------
+export function Pager({ page = 1, pageCount = 1, onPage, total, itemLabel = 'items' } = {}) {
+    const safeCount = Math.max(1, pageCount || 1);
+    const safePage = Math.min(Math.max(1, page || 1), safeCount);
+    const atStart = safePage <= 1;
+    const atEnd = safePage >= safeCount;
+    return h('div', { class: 'ds-ep-pager', role: 'group', 'aria-label': 'pagination' },
+        h('button', {
+            type: 'button', class: 'ds-ep-pager-btn', disabled: atStart ? 'disabled' : null,
+            'aria-label': 'previous page',
+            onclick: () => { if (!atStart && onPage) onPage(safePage - 1); },
+        }, '<-'),
+        h('span', { class: 'ds-ep-pager-label' },
+            'page ' + safePage + ' / ' + safeCount + (total != null ? ' (' + total + ' ' + itemLabel + ')' : '')),
+        h('button', {
+            type: 'button', class: 'ds-ep-pager-btn', disabled: atEnd ? 'disabled' : null,
+            'aria-label': 'next page',
+            onclick: () => { if (!atEnd && onPage) onPage(safePage + 1); },
+        }, '->')
+    );
+}
+
+// ---------------------------------------------------------------------------
+// JsonViewer — pre-formatted monospace data preview (max-height + scroll),
+// generalizing gmsniff's gm-json. Accepts a pre-stringified string OR any
+// value (objects/arrays get JSON.stringify(v, null, 2); null/undefined render
+// the empty-state text rather than the literal string "undefined"/"null").
+// ---------------------------------------------------------------------------
+export function JsonViewer({ value, emptyText = 'no data', maxHeight } = {}) {
+    let text;
+    if (value == null) text = null;
+    else if (typeof value === 'string') text = value;
+    else { try { text = JSON.stringify(value, null, 2); } catch { text = String(value); } }
+    if (!text) return h('div', { class: 'ds-ep-json ds-ep-json-empty' }, emptyText);
+    return h('pre', { class: 'ds-ep-json', style: maxHeight ? ('max-height:' + maxHeight) : null }, text);
+}
+
 export function IconButtonGroup({ items = [], value, onChange, dense = false } = {}) {
     return h('div', { class: 'ds-ep-btngrp' + (dense ? ' dense' : ''), role: 'group' },
         ...items.map((it) => h('button', {
