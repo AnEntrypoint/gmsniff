@@ -159,9 +159,17 @@
   --tr-tighter:  -0.03em;
 
   /* Spacing (8pt) */
+  /* Micro rungs below --space-1 — dense editor/inspector chrome (table cell
+     padding, pill gaps, tight toolbar gutters) needs finer steps than the 8pt
+     scale offers; same reasoning as --r-hair/--r-0 sitting below --r-1. */
+  --space-hair:  2px;
+  --space-half:  3px;
   --space-0:     0;
   --space-1:     4px;
+  --space-1-5:   5px;
+  --space-1-75:  6px;
   --space-2:     8px;
+  --space-2-5:   10px;
   --space-3:     16px;
   --space-4:     24px;
   --space-5:     32px;

@@ -84,6 +84,29 @@
 .ds-ep-toolbar-trailing { margin-left: auto; }
 .ds-ep-toolbar-center { flex: 1; min-width: 0; }
 
+/* ToolbarRow — flat wrapping action row, no slot structure. */
+.ds-ep-toolbar-row {
+    display: flex; gap: var(--space-2, 8px); align-items: center; flex-wrap: wrap;
+    margin-bottom: var(--space-2-5, 10px);
+}
+.ds-ep-toolbar-row input,
+.ds-ep-toolbar-row select,
+.ds-ep-toolbar-row textarea {
+    background: var(--panel-2, var(--bg-2));
+    border: 1px solid var(--rule);
+    color: var(--panel-text, var(--fg));
+    padding: var(--space-1-5, 5px) var(--space-2-5, 10px);
+    border-radius: var(--r-1, 4px);
+    font-size: var(--fs-tiny, 12px);
+    font-family: inherit;
+}
+.ds-ep-toolbar-row input { flex: 1; min-width: 140px; }
+.ds-ep-toolbar-row input:focus-visible,
+.ds-ep-toolbar-row select:focus-visible,
+.ds-ep-toolbar-row textarea:focus-visible {
+    outline: none; border-color: var(--accent);
+}
+
 /* Tabs */
 .ds-ep-tabs { display: flex; flex-direction: column; min-height: 0; height: 100%; }
 .ds-ep-tabs-head {
@@ -259,6 +282,45 @@
 .ds-ep-propfield.block .ds-ep-btngrp { width: 100%; }
 .ds-ep-propfield.block .ds-ep-btngrp-btn { flex: 1 1 0; text-align: center; }
 
+/* PropertyGridRow — bordered-row variant for a list of independently-editable
+   records (each record its own bottom-divided block, last one flush). */
+.ds-ep-propgrid-row {
+    border-bottom: 1px solid var(--rule);
+    padding: var(--space-2, 8px) 0;
+}
+.ds-ep-propgrid-row:last-child { border-bottom: none; }
+
+/* InlineEditableField — transparent-until-focus input, error state exposed
+   both visually (danger border) and semantically (aria-invalid, read by the
+   caller's own error text via aria-describedby if wired).
+   Specificity note: `.ds-ep-propfield-value input` (descendant combinator,
+   2 classes + 1 tag = (0,2,1) specificity) sets a visible border on every
+   input nested in a PropertyField -- the exact idiom InlineEditableField is
+   meant to be dropped into. A bare `input.ds-ep-inline-input` is only
+   (0,1,1) and loses; `:where(.ds-ep-propfield-value, .ds-ep-inline-standalone)`
+   is intentionally NOT used here because :where() has zero specificity and
+   would still lose. Instead the selector repeats .ds-ep-inline-input twice
+   (a valid, standard way to bump specificity by one class without adding an
+   ambient wrapper dependency) to reliably out-rank the PropertyField rule
+   regardless of nesting context. */
+.ds-ep-inline-input.ds-ep-inline-input {
+    background: transparent;
+    border: 1px solid transparent;
+    color: inherit; font: inherit;
+    width: 100%;
+    border-radius: var(--r-1, 4px);
+    padding: var(--space-hair, 2px) var(--space-1, 4px);
+}
+.ds-ep-inline-input.ds-ep-inline-input:focus-visible {
+    outline: none;
+    border-color: var(--accent);
+    background: var(--panel-2, var(--bg-2));
+}
+.ds-ep-inline-input.ds-ep-inline-input.has-error,
+.ds-ep-inline-input.ds-ep-inline-input[aria-invalid="true"] {
+    border-color: var(--danger);
+}
+
 /* Flush dense action bar docked at a panel bottom (inspector Edit/Delete etc.).
    Compact buttons, square-ish, bordered top — not big floating pills. */
 .ds-ep-actionbar {
@@ -288,6 +350,45 @@
 @media (pointer: coarse) {
     .ds-ep-tree-row button:not(.ds-ep-btngrp-btn),
     .ds-ep-toolbar button:not(.ds-ep-btngrp-btn) { min-height: 36px; height: 36px; }
+}
+
+/* Pager */
+.ds-ep-pager {
+    display: flex; align-items: center; gap: var(--space-1-75, 6px);
+    margin-top: var(--space-2, 8px);
+    font: var(--fs-tiny, 12px)/1 var(--ff-mono, monospace);
+    color: var(--panel-text-3, var(--fg-3));
+}
+.ds-ep-pager-btn {
+    appearance: none; cursor: pointer;
+    background: var(--panel-2, var(--bg-2));
+    border: 1px solid var(--rule);
+    color: var(--panel-text, var(--fg));
+    padding: var(--space-half, 3px) var(--space-2-5, 10px);
+    border-radius: var(--r-1, 4px);
+    font: inherit;
+}
+.ds-ep-pager-btn:hover:not([disabled]) { background: color-mix(in oklab, var(--accent) 10%, transparent); }
+.ds-ep-pager-btn:disabled { opacity: 0.4; cursor: default; }
+.ds-ep-pager-label { white-space: nowrap; }
+
+/* JsonViewer */
+.ds-ep-json {
+    font-size: var(--fs-tiny, 12px);
+    font-family: var(--ff-mono, ui-monospace, Consolas, monospace);
+    white-space: pre-wrap; word-break: break-all;
+    background: var(--panel-2, var(--bg-2));
+    color: var(--panel-text, var(--fg));
+    padding: var(--space-2, 8px);
+    border-radius: var(--r-1, var(--r-2, 4px));
+    max-height: 300px;
+    overflow-y: auto;
+    margin: 0;
+}
+.ds-ep-json-empty {
+    color: var(--panel-text-3, var(--fg-3));
+    white-space: normal;
+    text-align: center;
 }
 
 /* Dock — 3x3 grid for in-engine overlay (canvas pass-through center) */
@@ -539,7 +640,8 @@
 .ds-ep-btngrp-btn:focus-visible,
 .ds-ep-ctxmenu-item:focus-visible,
 .ds-ep-resize:focus-visible,
-.ds-ep-dialog-btn:focus-visible {
+.ds-ep-dialog-btn:focus-visible,
+.ds-ep-pager-btn:focus-visible {
     outline: 2px solid var(--accent-ink);
     outline-offset: 2px;
 }
@@ -552,7 +654,8 @@
     .ds-ep-btngrp-btn,
     .ds-ep-ctxmenu-item,
     .ds-ep-dialog-btn,
-    .ds-ep-tree-row {
+    .ds-ep-tree-row,
+    .ds-ep-pager-btn {
         min-height: 44px;
         padding-top: 10px;
         padding-bottom: 10px;

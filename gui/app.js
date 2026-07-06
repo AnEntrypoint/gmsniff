@@ -1,5 +1,6 @@
 import * as webjsx from 'webjsx';
-import { AppShell, Topbar, Side, Status, Chip } from 'ds/components/shell.js';
+import { AppShell, Topbar, Side, Status, Chip, Btn } from 'ds/components/shell.js';
+import { Alert, Spinner } from 'ds/components/content.js';
 import { ThemeToggle } from 'ds/components/theme-toggle.js';
 import { CommandPalette } from 'ds/components/overlay-primitives.js';
 import { state, loadProjects, api, toast } from './data.js';
@@ -36,6 +37,56 @@ const ui = {
   paletteOpen: false,
 };
 
+// ---------------------------------------------------------------------------
+// HASH ROUTING -- the URL is a derived view of {panel, treeSess, convSess},
+// never the source of truth (ui.* stays authoritative in memory); read on
+// boot, written on every navigation, re-read on popstate/hashchange so browser
+// back/forward restores the exact prior panel+sub-state without a page reload.
+// Shape: #panel=<id>[&tree=<sess>][&conv=<sess>] -- query-string-in-hash so it
+// stays a single flat segment, no nested router needed for this app's depth.
+// ---------------------------------------------------------------------------
+function parseHash(hash) {
+  const raw = (hash || '').replace(/^#/, '');
+  const params = new URLSearchParams(raw);
+  const panel = params.get('panel');
+  return {
+    panel: panel && NAV[panel] !== undefined ? panel : (panel && panel.startsWith('sub-') ? panel : null),
+    treeSess: params.get('tree') || '',
+    convSess: params.get('conv') || '',
+  };
+}
+
+function hashForState() {
+  const params = new URLSearchParams();
+  params.set('panel', ui.panel);
+  if (ui.panel === 'tree' && ui.treeSess) params.set('tree', ui.treeSess);
+  if (ui.panel === 'conversations' && ui.convSess) params.set('conv', ui.convSess);
+  return '#' + params.toString();
+}
+
+// Pushes a new history entry only when the target state actually differs from
+// the current hash -- prevents duplicate history entries on re-renders that
+// don't change panel/sub-state (e.g. periodic refreshes), which would
+// otherwise make a single Back press feel like it does nothing.
+function syncHash() {
+  const next = hashForState();
+  if (location.hash !== next) history.pushState(null, '', next);
+}
+
+// Applies a parsed hash to ui.* without re-pushing history -- used by the
+// popstate/hashchange handler so navigating back/forward doesn't itself
+// generate a new forward-history entry (that would break Back).
+function applyHashState(parsed) {
+  if (parsed.panel) ui.panel = parsed.panel;
+  ui.treeSess = parsed.treeSess;
+  ui.convSess = parsed.convSess;
+}
+
+window.addEventListener('popstate', () => {
+  applyHashState(parseHash(location.hash));
+  renderBody(true).then(focusMain);
+});
+
 // Health-banner thresholds: named constants so amber/red logic is auditable and
 // adjustable, never magic numbers inline in the render path.
 const HEALTH_DEV_RATE_AMBER_PER_MIN = 1; // deviations/min at or above this = amber
@@ -43,7 +94,7 @@ const HEALTH_WATCHER_DEAD_MIN = 5; // watcher considered dead-for-N-min at this 
 const HEALTH_STALE_FULL_SEC = 5 * 60; // no events for this long = fully stale
 
 function navItem(id, label, extra) {
-  return { label, href: '#' + id, active: ui.panel === id, onClick: (e) => { e.preventDefault(); go(id); }, count: extra };
+  return { label, href: '#panel=' + id, active: ui.panel === id, onClick: (e) => { e.preventDefault(); go(id); }, count: extra };
 }
 
 // ---------------------------------------------------------------------------
@@ -175,7 +226,7 @@ function renderShell() {
   });
 
   const projectSelect = h('select', {
-    'aria-label': 'project switcher', style: 'margin-left:10px',
+    'aria-label': 'project switcher', class: 'gm-ml-10',
     onchange: (e) => { state.cwd = e.target.value || null; renderBody(); },
   },
     h('option', { value: '' }, 'default (own root)'),
@@ -186,8 +237,8 @@ function renderShell() {
   const bodyContainer = h('main', { id: 'panel-body', class: 'gm-panel-body' }, ui.bodyNode || h('p', { class: 'gm-empty' }, 'Loading...'));
 
   const app = AppShell({
-    topbar: h('div', { style: 'display:flex;align-items:center;width:100%' }, topbar, projectSelect,
-      h('span', { style: 'margin-left:auto;display:flex;align-items:center;gap:10px' },
+    topbar: h('div', { class: 'gm-row-full' }, topbar, projectSelect,
+      h('span', { class: 'gm-row-auto-gap-10' },
         Chip({ tone: ui.connState === 'live' ? 'positive' : (ui.connState === 'reconnecting' ? 'warn' : 'neutral'), children: ui.connState }),
         ThemeToggle({ compact: true }))),
     side,
@@ -213,8 +264,40 @@ function renderShell() {
   }));
 }
 
+// force=true means an actual panel switch or explicit refresh (go(), the
+// "refresh" affordance in ProcessTree, project-select onchange) -- those are
+// the moments the PRD names ("between panel-switch and data arrival") where
+// the previous panel's stale content would otherwise linger with zero
+// affordance a switch is in flight. force=false/undefined covers ambient
+// SSE-driven re-renders (live tick, deviation badge, session-list poll)
+// which resolve near-instantly against already-fetched/cached data and must
+// stay flicker-free -- gating the spinner on `force` keeps those silent.
 async function renderBody(force) {
-  ui.bodyNode = await computeBody(force);
+  if (force) {
+    ui.bodyNode = h('div', { class: 'ds-panel gm-panel-loading' }, Spinner({ label: 'loading ' + (NAV[ui.panel] || ui.panel) }));
+    renderShell();
+  }
+  try {
+    ui.bodyNode = await computeBody(force);
+  } catch (err) {
+    // A thrown exception inside a panel's render logic (as opposed to a
+    // failed api() fetch, which each panel already surfaces via Empty(...))
+    // previously left computeBody's rejection unhandled -- the panel body
+    // froze on its last-rendered content with no visible recovery. Surface
+    // it as a real error panel (message + stack, one-click back to Dashboard)
+    // instead of a silent blank/frozen app.
+    const message = err && err.message ? err.message : String(err);
+    ui.bodyNode = h('div', { class: 'ds-panel' },
+      Alert({
+        kind: 'error',
+        title: `Panel "${ui.panel}" failed to render`,
+        children: [
+          h('p', {}, message),
+          err && err.stack ? h('pre', { class: 'gm-json' }, err.stack) : null,
+          h('div', { class: 'gm-mt-8' }, Btn({ children: 'Back to Dashboard', onClick: () => go('overview') })),
+        ],
+      }));
+  }
   renderShell();
 }
 
@@ -229,16 +312,16 @@ async function computeBody(force) {
   if (p === 'search-panel') return Search(setBody);
   if (p.startsWith('sub-')) return SubsystemPanel(p.slice(4), setBody);
   if (p === 'deviations') return Deviations(setBody);
-  if (p === 'sessions') return Sessions((sess) => { ui.treeSess = sess; ui.panel = 'tree'; renderBody(); }, setBody);
+  if (p === 'sessions') return Sessions((sess) => { ui.treeSess = sess; ui.panel = 'tree'; syncHash(); renderBody(true).then(focusMain); }, setBody);
   if (p === 'tree') {
     if (!ui.sessListCache.length || force) { const r = await api('/api/sessions?limit=200'); ui.sessListCache = r.rows || []; }
-    return ProcessTree(ui.treeSess, ui.sessListCache, (sess) => { ui.treeSess = sess; renderBody(); },
-      (sess) => { ui.convSess = sess; ui.panel = 'conversations'; renderBody(); },
+    return ProcessTree(ui.treeSess, ui.sessListCache, (sess) => { ui.treeSess = sess; syncHash(); renderBody(); },
+      (sess) => { ui.convSess = sess; ui.panel = 'conversations'; syncHash(); renderBody(true).then(focusMain); },
       () => renderBody(true)); // refresh: force=true re-fetches sessListCache + process-tree via this same computeBody path
   }
   if (p === 'conversations') {
     if (!ui.sessListCache.length || force) { const r = await api('/api/sessions?limit=200'); ui.sessListCache = r.rows || []; }
-    return ConversationHistory(ui.convSess, ui.sessListCache, (sess) => { ui.convSess = sess; renderBody(); });
+    return ConversationHistory(ui.convSess, ui.sessListCache, (sess) => { ui.convSess = sess; syncHash(); renderBody(); });
   }
   if (p === 'query') return QueryPanel(setBody);
   if (p === 'recall-panel') return RecallStats();
@@ -256,9 +339,25 @@ async function computeBody(force) {
   return h('p', { class: 'gm-empty' }, 'Unknown panel: ' + p);
 }
 
+// Keyboard-only nav: webjsx reuses the sidebar <a> DOM node across the
+// re-diff (same key/position), so without this the browser keeps native
+// focus parked on the sidebar link the user just activated -- the new
+// panel renders but focus never moves into it, silent for AT users.
+// #app-main already carries tabindex="-1" for the skip-link (shell.js);
+// reuse it as the programmatic landing target on every panel-identity
+// change (nav click, palette nav, browser back/forward), but never on a
+// same-panel refresh (SSE push, poll) -- that would steal focus from
+// whatever the user is doing mid-panel for no navigational reason.
+function focusMain() {
+  const main = document.getElementById('app-main');
+  if (main) main.focus();
+}
+
 async function go(id) {
   ui.panel = id;
+  syncHash();
   await renderBody(true);
+  focusMain();
 }
 
 // Single shared poller for both the deviation-count badge and the cross-project health
@@ -298,13 +397,20 @@ function connectSSE() {
 }
 
 async function boot() {
+  applyHashState(parseHash(location.hash));
+  // Canonicalize the hash immediately (covers both a bare load with no hash,
+  // where this establishes #panel=overview, and a hash naming an unknown
+  // panel, where applyHashState already fell back to the default and this
+  // writes that corrected value back) -- replaceState so boot never adds an
+  // extra history entry a single Back press would need to skip past.
+  history.replaceState(null, '', hashForState());
   await loadProjects();
   renderShell();
   await renderBody();
   refreshDeviationBadge();
   setInterval(refreshDeviationBadge, 10000);
   connectSSE();
-  window.gmsniff = { state, ui, go, renderBody, renderShell, openPalette, closePalette, buildCommandRegistry };
+  window.gmsniff = { state, ui, go, renderBody, renderShell, openPalette, closePalette, buildCommandRegistry, parseHash, hashForState, syncHash };
 }
 
 boot();

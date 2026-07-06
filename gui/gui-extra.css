@@ -13,6 +13,10 @@
 .gm-table th { text-align:left; padding:6px 10px; border-bottom:1px solid var(--border); color: var(--muted); font-weight:500; position:sticky; top:0; background: var(--panel-bg); }
 .gm-table td { padding:5px 10px; border-bottom:1px solid var(--border); vertical-align:top; word-break:break-all; max-width:320px; }
 .gm-table tr:hover td { background: var(--surface-2, var(--panel-bg)); }
+.gm-table th.gm-th-sortable { cursor:pointer; user-select:none; white-space:nowrap; }
+.gm-table th.gm-th-sortable:hover { color: var(--text); }
+.gm-table th.gm-th-sortable:focus-visible { outline:2px solid var(--accent, var(--panel-accent)); outline-offset:-2px; }
+.gm-table th.gm-th-sorted { color: var(--accent, var(--panel-accent)); }
 
 .gm-pager { display:flex; gap:6px; align-items:center; margin-top:8px; font-size:12px; color: var(--muted); }
 .gm-pager button { background: var(--surface-2, var(--panel-bg)); border:1px solid var(--border); color: var(--text); padding:3px 10px; border-radius:3px; font-size:12px; cursor:pointer; }
@@ -25,8 +29,10 @@
 .gm-flex-row > .ds-panel, .gm-flex-row > div { flex:1; min-width:260px; }
 .gm-textarea { width:100%; height:160px; font-family: ui-monospace, Consolas, monospace; font-size:11px; }
 .gm-conflict { color: var(--danger, var(--flame, #c0392b)); font-size:12px; margin-top:6px; }
-.gm-toast { position:fixed; bottom:16px; right:16px; background: var(--surface-2, var(--panel-bg)); border:1px solid var(--border); padding:8px 14px; border-radius:6px; font-size:12px; z-index:999; }
-.gm-toast.err { border-color: var(--danger, #c0392b); color: var(--danger, #c0392b); }
+/* gm-toast/.err retired: toast() in data.js now delegates to the design SDK's
+   ds/components/editor-primitives.js toast(), which owns its own .ds-ep-toast /
+   .ds-ep-toast-host styling (editor-primitives.css) -- stacking host, kind-based
+   tone classes, leave transition. See toast-stacking-and-lifecycle-audit PRD row. */
 .gm-inline-input { background:transparent; border:1px solid transparent; color:inherit; font:inherit; width:100%; }
 .gm-inline-input:focus { outline:none; border-color: var(--accent, var(--panel-accent)); background: var(--surface-2, var(--panel-bg)); }
 .gm-inline-input.gm-field-error, select.gm-field-error { border-color: var(--danger, var(--flame, #c0392b)); }
@@ -58,3 +64,66 @@
 .gm-force-node.dragging circle { cursor:grabbing; }
 .gm-force-node text { fill: var(--text); font-size:9px; pointer-events:none; user-select:none; }
 .gm-force-node.dim text { opacity:.15; }
+
+/* ---------------------------------------------------------------------------
+   Inline-style sweep (inline-style-to-css-sweep): every gui/app.js + gui/
+   panels.js `style:'...'` string moved here as a named class, byte-identical
+   CSS declarations to what was inline -- visual output unchanged, only the
+   attachment point moved from inline attribute to stylesheet rule. Dynamic
+   per-item values (colorFor(sub), treemap rect x/y/w/h/color) stay as CSS
+   custom properties set via style (the one inline-style use that is
+   irreducibly per-instance data, not layout) consumed by a static class.
+   --------------------------------------------------------------------------- */
+.gm-text-danger { color: var(--flame, #f85149); }
+.gm-hint-text { color: var(--muted); font-size:11px; margin-bottom:8px; }
+.gm-mt-8 { margin-top:8px; }
+.gm-mt-10 { margin-top:10px; }
+.gm-mt-12 { margin-top:12px; }
+.gm-mb-12 { margin-bottom:12px; }
+.gm-m-0 { margin:0; }
+.gm-my-4 { margin:4px 0; }
+.gm-cursor-pointer { cursor:pointer; }
+.gm-flex-2 { flex:2; }
+.gm-h-80 { height:80px; }
+.gm-opacity-70 { opacity:.7; }
+.gm-p-8 { padding:8px; }
+.gm-row-end { display:flex; justify-content:flex-end; margin-bottom:8px; }
+.gm-row-between { display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; }
+.gm-row-gap-8 { display:flex; align-items:center; gap:8px; }
+.gm-row-full { display:flex; align-items:center; width:100%; }
+.gm-row-auto-gap-10 { margin-left:auto; display:flex; align-items:center; gap:10px; }
+.gm-ml-6 { margin-left:6px; }
+.gm-ml-10 { margin-left:10px; }
+.gm-mr-8 { margin-right:8px; }
+.gm-list-row { padding:6px 0; border-bottom:1px solid var(--border); }
+.gm-center-mt-14 { margin-top:14px; text-align:center; }
+.gm-panel-danger { border-color: var(--flame, #f85149); }
+.gm-row-danger-tint { background: color-mix(in oklab, var(--flame, #f85149) 12%, transparent); }
+
+/* panel-loading-states: shown by renderBody() in the window between a
+   panel switch (force=true) and computeBody()'s data arriving -- replaces
+   whatever the previous panel's stale content was so a switch always reads
+   as "in progress", not as nothing having happened. */
+.gm-panel-loading { display:flex; align-items:center; justify-content:center; min-height:160px; }
+
+/* colorFor(sub) is per-subsystem data (a hash-derived hsl or a named palette
+   entry), not a fixed layout value -- kept as a custom property so the class
+   stays static while the color remains dynamic. */
+.gm-muted-12 { color: var(--muted); font-size:12px; }
+.gm-muted-11 { color: var(--muted); font-size:11px; }
+.gm-sub-color { color: var(--sub-color); }
+
+/* CodeInsight treemap: outer container size and every rect's position/size/
+   color are computed per-render from real .codeinsight data (W/H constants
+   plus per-item x/y/w/h/complexity) -- irreducibly dynamic, expressed as
+   custom properties consumed by these two static classes. */
+.gm-treemap-container {
+  position:relative; width:100%; overflow:hidden; border:1px solid var(--border);
+  max-width: var(--tm-w); height: var(--tm-h);
+}
+.gm-treemap-rect {
+  position:absolute; box-sizing:border-box; cursor:pointer; overflow:hidden;
+  font-size:10px; color:#0a0a0a; padding:2px;
+  left: var(--rx); top: var(--ry); width: var(--rw); height: var(--rh);
+  background: var(--rect-bg); border: 1px solid var(--rect-border);
+}

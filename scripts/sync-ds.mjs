@@ -42,6 +42,7 @@ const SOURCE_ROOT = sourceFlagIdx !== -1 && args[sourceFlagIdx + 1]
 
 // [sourceRelPath, destRelPath] -- destRelPath relative to gui/ds/
 const FILES = [
+  ['src/components/content.js', 'src/components/content.js'],
   ['src/components/data-density.js', 'src/components/data-density.js'],
   ['src/components/editor-primitives.js', 'src/components/editor-primitives.js'],
   ['src/components/overlay-primitives.js', 'src/components/overlay-primitives.js'],

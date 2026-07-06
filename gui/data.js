@@ -2,6 +2,8 @@
 // project cwd" the switcher controls; every API call routes through here so
 // changing project re-scopes every panel uniformly.
 
+import { toast as dsToast } from 'ds/components/editor-primitives.js';
+
 export const state = {
   cwd: null,           // null = server default (own root)
   projects: [],
@@ -48,10 +50,14 @@ export async function loadProjects() {
   return state.projects;
 }
 
+// Thin adapter over the design SDK's toast() (ds/components/editor-primitives.js):
+// callers here keep the existing toast(msg, isErr) shape (17 call sites across
+// panels.js/app.js), but the actual DOM/lifecycle work -- a single fixed-position
+// flex-column host (.ds-ep-toast-host) that concurrent toasts append into and
+// leave from independently -- comes from the SDK, so multiple concurrent toasts
+// stack visibly instead of every gm-toast rendering at the same fixed
+// bottom-right coordinate and clobbering each other. isErr maps to kind:'error'
+// (SDK also distinguishes 'warn'/'success'/'info', unused via this legacy shape).
 export function toast(msg, isErr) {
-  const el = document.createElement('div');
-  el.className = 'gm-toast' + (isErr ? ' err' : '');
-  el.textContent = msg;
-  document.body.appendChild(el);
-  setTimeout(() => el.remove(), 4000);
+  return dsToast({ message: msg, kind: isErr ? 'error' : 'info', duration: 4000 });
 }
