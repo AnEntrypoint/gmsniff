@@ -159,9 +159,18 @@ function canon(p) {
   return p && path.resolve(p).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
 }
 
-// Discovers project cwds from observed gm-log events (same heuristic as cli.js's watchers())
-// plus a scan of common dev roots for .gm/exec-spool/.status.json markers.
-export function discoverProjects(events, { extraRoots = [] } = {}) {
+// discoverProjects re-derives its cwd SET from two O(events)/O(fs) sources every call: a full
+// scan of the events array plus a readdirSync walk of every dev root. events only ever grows
+// (append-only store), so the cwd set itself is safe to cache keyed on events.length -- a real
+// measured burst of 60k+ events showed this repeated full-array scan as a dominant cost behind
+// /api/health-summary latency (itself called every 10s per connected client). Only the cwd-SET
+// half is cached; per-project alive/prd_pending/prd_total live status is re-read fresh below on
+// every call (those change independent of events.length and must never go stale).
+let _cwdSetCache = { eventsLength: -1, cwds: null };
+function discoverCwdSet(events, extraRoots) {
+  const len = (events || []).length;
+  if (_cwdSetCache.eventsLength === len && _cwdSetCache.cwds) return _cwdSetCache.cwds;
+
   const cwds = new Set();
   const norm = new Map();
   const addCwd = (p) => { if (!p) return; const k = canon(p); if (!k) return; if (!norm.has(k)) { norm.set(k, p); cwds.add(p); } };
@@ -189,6 +198,15 @@ export function discoverProjects(events, { extraRoots = [] } = {}) {
       }
     } catch (_) {}
   }
+
+  _cwdSetCache = { eventsLength: len, cwds };
+  return cwds;
+}
+
+// Discovers project cwds from observed gm-log events (same heuristic as cli.js's watchers())
+// plus a scan of common dev roots for .gm/exec-spool/.status.json markers.
+export function discoverProjects(events, { extraRoots = [] } = {}) {
+  const cwds = discoverCwdSet(events, extraRoots);
 
   const rows = [];
   for (const cwd of cwds) {

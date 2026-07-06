@@ -805,25 +805,34 @@ function sanitizeProjectName(cwd) {
 function healthSummary(store) {
   const projects = discoverProjects(store.events);
   const now = Date.now();
+  // Single O(events) pass building a per-cwd {lastTs, devCountInWindow} accumulator, instead
+  // of the prior O(events * projects) shape (store.events.filter(e => e.cwd === cwd) run once
+  // per discovered project) -- at real scale (60k+ events, multiple discovered projects) the
+  // filter-per-project loop measured as the dominant cost behind observed GUI jank under a
+  // real event backlog (health-summary request latency and knock-on main-thread stalls),
+  // since this same aggregation re-runs on every refreshDeviationBadge poll (10s interval,
+  // gui/app.js:365) for every connected client.
+  const byCwd = new Map();
+  for (const proj of projects) byCwd.set(proj.cwd, { lastTs: 0, devCountInWindow: 0 });
+  for (const e of store.events) {
+    const acc = byCwd.get(e.cwd);
+    if (!acc) continue;
+    const t = typeof e.ts === 'number' ? e.ts : (e.ts ? Date.parse(e.ts) : 0);
+    if (!t) continue;
+    if (t > acc.lastTs) acc.lastTs = t;
+    if (typeof e.event === 'string' && e.event.startsWith('deviation.') && (now - t) <= HEALTH_WINDOW_MS) {
+      acc.devCountInWindow++;
+    }
+  }
+  const windowMinutes = HEALTH_WINDOW_MS / 60000;
   const out = [];
   for (const proj of projects) {
     const cwd = proj.cwd;
-    const projEvents = store.events.filter(e => e.cwd === cwd);
-    let lastTs = 0;
-    let devCountInWindow = 0;
-    for (const e of projEvents) {
-      const t = typeof e.ts === 'number' ? e.ts : (e.ts ? Date.parse(e.ts) : 0);
-      if (!t) continue;
-      if (t > lastTs) lastTs = t;
-      if (typeof e.event === 'string' && e.event.startsWith('deviation.') && (now - t) <= HEALTH_WINDOW_MS) {
-        devCountInWindow++;
-      }
-    }
-    const windowMinutes = HEALTH_WINDOW_MS / 60000;
-    const deviationRate = devCountInWindow / windowMinutes;
+    const acc = byCwd.get(cwd);
+    const deviationRate = acc.devCountInWindow / windowMinutes;
     const status = readWatcherStatus(cwd);
     const watcherAlive = !!(status && status.alive);
-    const staleSeconds = lastTs ? Math.max(0, Math.floor((now - lastTs) / 1000)) : null;
+    const staleSeconds = acc.lastTs ? Math.max(0, Math.floor((now - acc.lastTs) / 1000)) : null;
     out.push({
       cwd,
       name: path.basename(cwd),
