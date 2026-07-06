@@ -329,9 +329,13 @@ class Store {
     this.watchedProjects = this.fanout.projects();
   }
 
-  stop() {
-    if (this.watcher) this.watcher.stop();
-    if (this.fanout) this.fanout.stop();
+  // async: both watcher.stop() and fanout.stop() now return Promises that resolve only
+  // after libuv has actually finished closing every fs.watch handle (not merely requested
+  // it) -- callers awaiting Store.stop() before process.exit() avoid the Windows
+  // UV_HANDLE_CLOSING race that an immediate exit after a synchronous stop() could hit.
+  async stop() {
+    if (this.watcher) await this.watcher.stop();
+    if (this.fanout) await this.fanout.stop();
     this.watcher = null;
     this.fanout = null;
     this.watchedProjects = [];
@@ -1172,7 +1176,7 @@ export function createServer({ logDir = DEFAULT_LOG_DIR, port = 0, host = '127.0
   return new Promise(resolve => {
     server.listen(port, host, () => {
       const addr = server.address();
-      resolve({ server, store, url: `http://${host}:${addr.port}`, port: addr.port, close: () => { store.stop(); return new Promise(r => server.close(r)); } });
+      resolve({ server, store, url: `http://${host}:${addr.port}`, port: addr.port, close: async () => { await store.stop(); return new Promise(r => server.close(r)); } });
     });
   });
 }

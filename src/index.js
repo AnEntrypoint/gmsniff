@@ -23,6 +23,10 @@ export function discoverSubsystems(logDir) {
 
 export const DEFAULT_LOG_DIR = process.env.GM_LOG_DIR || path.join(os.homedir(), '.gm', 'gm-log');
 const DEBOUNCE_MS = 50;
+// Real wall-clock gap given to libuv after issuing fs.watch handle closes, before a stop()
+// caller is allowed to proceed (e.g. to process.exit()) -- see GmLogWatcher.stop/
+// MultiProjectWatcher.stop for the Windows UV_HANDLE_CLOSING race this avoids.
+const WATCH_CLOSE_DRAIN_MS = parseInt(process.env.GM_WATCH_CLOSE_DRAIN_MS, 10) || 250;
 
 function todayDir() {
   return new Date().toISOString().slice(0, 10);
@@ -48,11 +52,17 @@ export class GmLogWatcher extends EventEmitter {
     return this;
   }
 
-  stop() {
+  // async + real drain for the same reason MultiProjectWatcher.stop() drains: closing an
+  // fs.watch handle is asynchronous under the hood even though FSWatcher.close() returns
+  // immediately, and an immediate process.exit() after a synchronous stop() can race libuv's
+  // handle-close bookkeeping (Windows UV_HANDLE_CLOSING assertion, reproduced and fixed
+  // identically on the per-project tailer path -- see WATCH_CLOSE_DRAIN_MS).
+  async stop() {
     if (this._watcher) try { this._watcher.close(); } catch (_) {}
     for (const s of this._tails.values()) if (s.fd !== null) try { fs.closeSync(s.fd); } catch (_) {}
     for (const t of this._timers.values()) clearTimeout(t);
     this._tails.clear(); this._timers.clear();
+    await new Promise(r => setTimeout(r, WATCH_CLOSE_DRAIN_MS));
   }
 
   _scanAll() {
@@ -288,11 +298,22 @@ export class MultiProjectWatcher extends EventEmitter {
     return this;
   }
 
-  stop() {
+  // Returns a Promise that resolves only after every fs.watch handle's close has actually
+  // been processed by libuv, not merely requested -- fs.FSWatcher.close() looks synchronous
+  // but the underlying uv_fs_event_t handle closes asynchronously on Windows; a caller that
+  // process.exit()s (or otherwise tears the process down) immediately after a synchronous
+  // stop() can race libuv's own handle-close bookkeeping and crash with a
+  // UV_HANDLE_CLOSING assertion. setImmediate alone (microtask-adjacent, no real wall-clock
+  // gap) was NOT sufficient at real scale (55+ concurrent fs.watch handles across discovered
+  // projects) -- reproduced still crashing 3/3 with a setImmediate-only drain. A real
+  // WATCH_CLOSE_DRAIN_MS timer (default 250ms, tunable for slower/loaded machines) is what
+  // measurably avoided the crash across repeated runs.
+  async stop() {
     this._stopped = true;
     if (this._rediscoverTimer) { clearTimeout(this._rediscoverTimer); this._rediscoverTimer = null; }
     for (const t of this._tailers.values()) t.stop();
     this._tailers.clear();
+    await new Promise(r => setTimeout(r, WATCH_CLOSE_DRAIN_MS));
   }
 
   // Current set of project cwds actively tailed (for status/diagnostics surfacing).

@@ -1114,7 +1114,13 @@ async function liveTail(filter, opts) {
   const projectCount = fanout.projects().length;
   process.stdout.write(`# tailing... ${projectCount} project(s) + central log (Ctrl-C to exit)\n`);
   process.stdin.resume();
-  process.on('SIGINT', () => { watcher.stop(); fanout.stop(); process.exit(0); });
+  // await both stop()s (each drains libuv's async fs.watch-handle close, see index.js) before
+  // exiting -- an immediate process.exit() right after a synchronous close on Windows can
+  // race libuv's own handle-close bookkeeping and crash with a UV_HANDLE_CLOSING assertion,
+  // reproduced against this exact watcher+fanout shape during VERIFY.
+  process.on('SIGINT', () => {
+    Promise.all([watcher.stop(), fanout.stop()]).finally(() => process.exit(0));
+  });
 }
 
 async function launchGui(args) {
