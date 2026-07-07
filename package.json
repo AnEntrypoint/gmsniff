@@ -1,6 +1,6 @@
 {
   "name": "gmsniff",
-  "version": "1.0.39",
+  "version": "1.0.40",
   "description": "Observability GUI for gm — explores every gm-log subsystem in real time",
   "type": "module",
   "main": "./src/index.js",
