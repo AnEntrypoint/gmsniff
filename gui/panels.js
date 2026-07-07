@@ -7,7 +7,7 @@
 import * as webjsx from 'webjsx';
 import { Chip, Badge, Pill, Btn, Glyph } from 'ds/components/shell.js';
 import { PhaseWalk, TreeNode, BarRow, StatTile, StatsGrid, SubGrid, SessionRow, DevRow, LiveLog } from 'ds/components/data-density.js';
-import { TreeView, TreeItem, PropertyGrid, PropertyField, Dialog } from 'ds/components/editor-primitives.js';
+import { TreeView, TreeItem, PropertyGrid, PropertyField, Dialog, JsonViewer } from 'ds/components/editor-primitives.js';
 import { api, apiPost, esc, fmtTs, state, toast } from './data.js';
 import { runForceLayout } from './forcegraph.js';
 
@@ -40,6 +40,25 @@ function colorFor(sub) {
 }
 
 function Empty(msg) { return h('p', { class: 'gm-empty' }, msg); }
+
+// Human-readable single-line sugar for an event payload: key=value pairs
+// instead of raw JSON punctuation. Used for table-cell summaries and the
+// live-stream preview (LiveLogEntry renders preview as plain text); expanded
+// views render full highlighted JSON via the ds JsonViewer.
+function kvPreview(obj, maxLen = 200) {
+  const parts = [];
+  for (const [k, v] of Object.entries(obj)) {
+    let sv;
+    if (v == null) sv = String(v);
+    else if (typeof v === 'object') { try { sv = JSON.stringify(v); } catch { sv = String(v); } }
+    else sv = String(v);
+    if (sv.length > 60) sv = sv.slice(0, 57) + '...';
+    parts.push(k + '=' + sv);
+    if (parts.join('  ').length >= maxLen) break;
+  }
+  const s = parts.join('  ');
+  return s.length > maxLen ? s.slice(0, maxLen - 3) + '...' : s;
+}
 
 // ---------------------------------------------------------------------------
 // DASHBOARD
@@ -144,7 +163,7 @@ export function liveStreamDebugSnapshot() {
 export function pushLiveEntry(ev) {
   const payload = { ...ev };
   delete payload._sub; delete payload._day; delete payload._fp;
-  liveEntries.push({ key: liveEntrySeq++, ts: fmtTs(ev.ts), sub: ev._sub, tone: colorFor(ev._sub || ''), event: ev.event || '?', preview: JSON.stringify(payload).slice(0, 200), cwd: ev.cwd || null });
+  liveEntries.push({ key: liveEntrySeq++, ts: fmtTs(ev.ts), sub: ev._sub, tone: colorFor(ev._sub || ''), event: ev.event || '?', preview: kvPreview(payload, 200), cwd: ev.cwd || null });
   if (liveEntries.length > 2000) liveEntries.shift();
   if (livePaused) liveNewCount++;
 }
@@ -233,10 +252,10 @@ export function renderEventTable(rows, tableId, setBody) {
         if (k === 'event') return h('td', {}, h('strong', {}, String(v)));
         if (typeof v === 'boolean') return h('td', {}, v ? Badge({ children: '[x]', tone: 'positive' }) : Badge({ children: '[ ]', tone: 'danger' }));
         if (typeof v === 'object') {
-          const s = JSON.stringify(v);
-          return h('td', {}, s.length > 80
-            ? h('details', {}, h('summary', {}, s.slice(0, 40) + '...'), h('pre', { class: 'gm-json' }, s))
-            : s);
+          const full = JSON.stringify(v);
+          return h('td', {}, full.length > 80
+            ? h('details', {}, h('summary', {}, kvPreview(v, 40) + '...'), JsonViewer({ value: v, mode: 'highlight', maxHeight: '260px' }))
+            : kvPreview(v, 80));
         }
         const sv = String(v);
         return h('td', { title: sv.length > 120 ? sv : null }, sv.length > 120 ? sv.slice(0, 80) + '...' : sv);
@@ -657,7 +676,7 @@ async function runQuery(setBody) {
     queryState.result = h('div', {},
       h('p', { class: 'gm-hint-text' }, `grouped by ${r.groupBy.join(', ')} -- ${r.groups.length} groups -- ${total} rows (total: ${r.total})`),
       h('table', { class: 'gm-table' }, h('tr', {}, h('th', {}, 'group'), h('th', {}, 'count'), h('th', {}, 'sample')),
-        ...r.groups.map((g, i) => h('tr', { key: i }, h('td', {}, h('strong', {}, g.key)), h('td', {}, String(g.count)), h('td', {}, h('pre', { class: 'gm-json' }, JSON.stringify(g.sample[0] || {}, null, 2).slice(0, 400)))))));
+        ...r.groups.map((g, i) => h('tr', { key: i }, h('td', {}, h('strong', {}, g.key)), h('td', {}, String(g.count)), h('td', {}, JsonViewer({ value: g.sample[0] || {}, mode: 'highlight', maxHeight: '180px' }))))));
   } else {
     const rows = r.rows || [];
     queryState.result = rows.length ? h('div', {},
@@ -889,7 +908,7 @@ export function Codesearch(setBody) {
       (!codesearchState.hits.length ? Empty('No hits.') :
         h('div', {}, ...codesearchState.hits.map((hit, i) => h('details', { key: i, class: 'ds-panel gm-my-4' },
           h('summary', { class: 'gm-cursor-pointer' }, `${hit.file || '?'}:${hit.line || '?'}:${hit.name || ''} (score ${hit.score != null ? hit.score.toFixed?.(3) ?? hit.score : '?'})`),
-          h('pre', { class: 'gm-json' }, hit.snippet || JSON.stringify(hit, null, 2))))))
+          hit.snippet ? h('pre', { class: 'gm-json' }, hit.snippet) : JsonViewer({ value: hit, mode: 'highlight', maxHeight: '260px' })))))
   );
 }
 // Exported so the Ctrl+K command palette can trigger the exact same search
@@ -928,7 +947,7 @@ export function GmCallConsole(setBody) {
       Btn({ children: 'Dispatch', onClick: () => dispatchConsole(setBody) })),
     h('textarea', { class: 'gm-textarea gm-h-80', oninput: (e) => { consoleState.payload = e.target.value; } }, consoleState.payload),
     consoleState.dispatched ? h('p', { class: 'gm-muted-11' }, `Dispatched: ${consoleState.dispatched.verb} -> ${consoleState.dispatched.file || ''} ${consoleState.polling ? '(polling for response...)' : ''}`) : null,
-    consoleState.result ? h('pre', { class: 'gm-json' }, JSON.stringify(consoleState.result, null, 2)) : Empty('No dispatch yet.'));
+    consoleState.result ? JsonViewer({ value: consoleState.result, mode: 'tree', copyable: true, maxHeight: '420px' }) : Empty('No dispatch yet.'));
 }
 // Exported so the Ctrl+K command palette can fire the exact same dispatch
 // as the GM Call Console's "Dispatch" button (same consoleState, same poll).
@@ -1108,7 +1127,7 @@ export async function CodeInsightPanel(setBody) {
         }))),
     selected ? h('div', { class: 'ds-panel gm-mt-12' },
       h('h2', {}, `Detail: ${selected.name}`),
-      h('pre', { class: 'gm-json' }, JSON.stringify(selected, null, 2)))
+      JsonViewer({ value: selected, mode: 'highlight', copyable: true }))
       : null,
     h('div', { class: 'gm-mt-12' },
       ...((r.entries || []).length ? r.entries.map((entry, i) => h('details', { key: i, class: 'ds-panel gm-my-4' },

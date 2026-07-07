@@ -390,6 +390,64 @@
     white-space: normal;
     text-align: center;
 }
+/* JsonViewer syntax tokens (mode:'highlight'/'tree') — semantic theme tokens
+   only (retuned per-theme in colors_and_type.css); fallbacks chain to
+   coarser tokens, never a raw literal, so standalone kits stay themed. */
+.ds-ep-json-k { color: var(--sky, var(--accent)); }
+.ds-ep-json-s { color: var(--green-2, var(--green)); }
+.ds-ep-json-n { color: var(--flame, var(--warn)); }
+.ds-ep-json-b { color: var(--purple-2, var(--purple)); }
+.ds-ep-json-z { color: var(--panel-text-3, var(--fg-3)); font-style: italic; }
+/* Collapsible tree mode — native details/summary, indent guides on children. */
+.ds-ep-json-tree { white-space: normal; }
+.ds-ep-json-kids {
+    padding-left: var(--space-3-5, 14px);
+    margin-left: var(--space-1, 4px);
+    border-left: 1px solid var(--rule);
+}
+.ds-ep-json-sum {
+    cursor: pointer; user-select: none;
+    list-style: none;
+    border-radius: var(--r-1, 4px);
+}
+.ds-ep-json-sum::-webkit-details-marker { display: none; }
+.ds-ep-json-sum::before {
+    content: '+';
+    display: inline-block; width: var(--space-3, 12px);
+    color: var(--panel-text-3, var(--fg-3));
+}
+.ds-ep-json-node[open] > .ds-ep-json-sum::before { content: '-'; }
+.ds-ep-json-sum:hover { background: color-mix(in oklab, var(--accent) 8%, transparent); }
+.ds-ep-json-sum:focus-visible {
+    outline: 2px solid var(--accent-ink);
+    outline-offset: -2px;
+}
+.ds-ep-json-tag {
+    margin-left: var(--space-1, 4px);
+    font-size: var(--fs-micro, 11px);
+    color: var(--panel-text-3, var(--fg-3));
+}
+.ds-ep-json-leaf { padding-left: var(--space-3, 12px); word-break: break-all; }
+/* Copy affordance (copyable:true) — floats over the viewer's top-right. */
+.ds-ep-json-wrap { position: relative; }
+.ds-ep-json-copy {
+    position: absolute; top: var(--space-1-75, 6px); right: var(--space-1-75, 6px); z-index: 1;
+    appearance: none; cursor: pointer;
+    background: var(--panel-1, var(--bg-1));
+    border: 1px solid var(--rule);
+    color: var(--panel-text-2, var(--fg-2));
+    font: var(--fs-micro, 11px)/1 var(--ff-mono, monospace);
+    padding: var(--space-half, 3px) var(--space-2, 8px);
+    border-radius: var(--r-1, 4px);
+    opacity: 0.75;
+}
+.ds-ep-json-copy:hover { opacity: 1; border-color: var(--accent); }
+.ds-ep-json-copy.copied { color: var(--green-2, var(--green)); border-color: var(--green-2, var(--green)); opacity: 1; }
+.ds-ep-json-copy:focus-visible {
+    outline: 2px solid var(--accent-ink);
+    outline-offset: 2px;
+    opacity: 1;
+}
 
 /* Dock — 3x3 grid for in-engine overlay (canvas pass-through center) */
 .ds-ep-dock {

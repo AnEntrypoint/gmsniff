@@ -108,7 +108,10 @@ function schemaObject() {
 }
 
 function printSchema() {
-  process.stdout.write(JSON.stringify(schemaObject(), null, 2) + '\n');
+  const text = JSON.stringify(schemaObject(), null, 2) + '\n';
+  // Colorize only on an interactive terminal: piped/machine consumers get
+  // byte-identical output to the pre-sugar contract.
+  process.stdout.write(process.stdout.isTTY && !process.env.NO_COLOR ? colorJson(text) : text);
 }
 
 function parseArgs(argv) {
@@ -300,26 +303,88 @@ function color(s, code) {
   return `\x1b[${code}m${s}\x1b[0m`;
 }
 
+// ANSI JSON sugar for human-mode output: keys cyan, strings green, numbers
+// yellow, booleans magenta, null dim. Single-pass scan (no regex, no
+// backtracking) gated by the exact same NO_COLOR/TTY rules as color(); every
+// escape it emits is self-terminated, so a payload truncated mid-string can
+// never leak an unclosed color state into the terminal. Raw control bytes in
+// event data are escaped in both color and no-color paths so hostile log
+// content cannot inject terminal sequences. --json/--ndjson output never
+// routes through here.
+const JSON_TOKEN_COLORS = { k: 36, s: 32, n: 33, b: 35, z: 90 };
+const JSON_NUM_CHARS = '0123456789eE+.-';
+function escapeControlChars(text) {
+  let out = '';
+  for (const ch of text) {
+    const c = ch.codePointAt(0);
+    out += ((c < 0x20 && ch !== '\n' && ch !== '\t') || c === 0x7f)
+      ? '\\u' + c.toString(16).padStart(4, '0')
+      : ch;
+  }
+  return out;
+}
+function colorJson(text) {
+  text = escapeControlChars(text);
+  if (process.env.NO_COLOR || !process.stdout.isTTY) return text;
+  let out = '', i = 0, plain = '';
+  const flush = () => { if (plain) { out += plain; plain = ''; } };
+  const paint = (t, s) => { out += `\x1b[${JSON_TOKEN_COLORS[t]}m${s}\x1b[0m`; };
+  while (i < text.length) {
+    const c = text[i];
+    if (c === '"') {
+      const start = i;
+      i++;
+      while (i < text.length && text[i] !== '"') { if (text[i] === '\\') i++; i++; }
+      i = Math.min(i + 1, text.length);
+      let j = i;
+      while (j < text.length && (text[j] === ' ' || text[j] === '\t' || text[j] === '\n')) j++;
+      flush();
+      paint(text[j] === ':' ? 'k' : 's', text.slice(start, i));
+      continue;
+    }
+    if (c === '-' || (c >= '0' && c <= '9')) {
+      const start = i;
+      i++;
+      while (i < text.length && JSON_NUM_CHARS.includes(text[i])) i++;
+      flush();
+      paint('n', text.slice(start, i));
+      continue;
+    }
+    if (text.startsWith('true', i)) { flush(); paint('b', 'true'); i += 4; continue; }
+    if (text.startsWith('false', i)) { flush(); paint('b', 'false'); i += 5; continue; }
+    if (text.startsWith('null', i)) { flush(); paint('z', 'null'); i += 4; continue; }
+    plain += c; i++;
+  }
+  flush();
+  return out;
+}
+
 function formatRow(e, opts) {
   const truncN = opts.full ? Infinity : (opts.truncate || (opts.json ? 2000 : 200));
   if (opts.json) {
     return JSON.stringify(e) + '\n';
   }
-  const t = e.ts ? e.ts.slice(0, 19).replace('T', ' ') : '?'.padEnd(19);
-  const sub = (e._sub || '?').padEnd(16).slice(0, 16);
-  const ev = (e.event || '?').padEnd(28).slice(0, 28);
+  // Envelope fields are interpolated raw into the terminal line -- escape
+  // control bytes here too, or a crafted event ("[..." in ts/sub/event/
+  // sess) injects terminal sequences around the color() calls.
+  const t = escapeControlChars(e.ts ? e.ts.slice(0, 19).replace('T', ' ') : '?'.padEnd(19));
+  const sub = escapeControlChars((e._sub || '?').padEnd(16).slice(0, 16));
+  const ev = escapeControlChars((e.event || '?').padEnd(28).slice(0, 28));
   const subC = SUB_COLORS[e._sub] || 0;
   const realSess = e.sess && e.sess !== '(no-session)' ? e.sess : '';
   const cwdTag = !realSess && e.cwd ? '~' + e.cwd.replace(/[\\/]+$/, '').split(/[\\/]/).pop().slice(0, 7) : '';
-  const sessShort = (realSess ? realSess.slice(0, 8) : (cwdTag || '--------')).padEnd(8).slice(0, 8);
+  const sessShort = escapeControlChars((realSess ? realSess.slice(0, 8) : (cwdTag || '--------')).padEnd(8).slice(0, 8));
   const payload = { ...e };
-  delete payload._sub; delete payload._day; delete payload._fp;
+  // Underscore-prefixed keys are internal attribution metadata (_sub, _day,
+  // _fp, _src from the watcher.log fallback tailer, ...) -- all stripped from
+  // the human body uniformly; --json mode above keeps every field.
+  for (const k of Object.keys(payload)) if (k.startsWith('_')) delete payload[k];
   delete payload.ts; delete payload.event; delete payload.sub; delete payload.pid; delete payload.sess; delete payload.cwd;
   let body = JSON.stringify(payload);
   if (body === '{}') body = '';
-  if (body.length > truncN) body = body.slice(0, truncN) + '…';
+  if (body.length > truncN) body = body.slice(0, truncN) + '...';
   const evC = e.event && e.event.startsWith('deviation.') ? 31 : (e.event && e.event.endsWith('.error') ? 31 : 0);
-  return `${t}  ${color(sub, subC)}  ${color(ev, evC)}  ${sessShort}  ${body}\n`;
+  return `${t}  ${color(sub, subC)}  ${color(ev, evC)}  ${sessShort}  ${colorJson(body)}\n`;
 }
 
 function applyContext(matchedIdxs, all, ctx) {
@@ -508,7 +573,7 @@ function dispatchVerb(cwd, verb, jsonPayload) {
   fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, `${Date.now()}.txt`);
   fs.writeFileSync(file, payload, 'utf-8');
-  process.stdout.write(`# dispatched verb=${verb} -> ${file}\n${payload}\n`);
+  process.stdout.write(`# dispatched verb=${verb} -> ${file}\n${colorJson(payload)}\n`);
 }
 
 function listSessions(all) {
