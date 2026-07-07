@@ -90,10 +90,10 @@ function schemaObject() {
     exitCodes: EXIT_CODES,
     flags: FLAG_DEFS.map(f => ({ flag: `--${f.name}`, alias: f.alias ? `--${f.alias}` : undefined, type: f.type, default: f.default, description: f.desc })),
     subcommands: [
-      { name: 'gui', usage: 'gmsniff gui [--port N] [--open]', desc: 'launch the browser GUI server' },
-      { name: '--prd-edit', usage: 'gmsniff --prd-edit <cwd> <id> [--status <s>] [--text <t>]', desc: 'rewrite a PRD row\'s status/text in <cwd>/.gm/prd.yml, atomic write' },
-      { name: '--mutable-edit', usage: 'gmsniff --mutable-edit <cwd> <id> [--status <s>] [--witness <w>]', desc: 'rewrite a mutable row\'s status/witness in <cwd>/.gm/mutables.yml, atomic write' },
-      { name: '--dispatch', usage: 'gmsniff --dispatch <cwd> <verb> [--json <payload>]', desc: 'write payload (default {}) to <cwd>/.gm/exec-spool/in/<verb>/<ts>.txt' },
+      { name: 'gui', tier: 'daily', usage: 'gmsniff gui [--port N] [--open]', desc: 'launch the browser GUI server' },
+      { name: '--prd-edit', tier: 'agent', usage: 'gmsniff --prd-edit <cwd> <id> [--status <s>] [--text <t>]', desc: 'rewrite a PRD row\'s status/text in <cwd>/.gm/prd.yml, atomic write' },
+      { name: '--mutable-edit', tier: 'agent', usage: 'gmsniff --mutable-edit <cwd> <id> [--status <s>] [--witness <w>]', desc: 'rewrite a mutable row\'s status/witness in <cwd>/.gm/mutables.yml, atomic write' },
+      { name: '--dispatch', tier: 'agent', usage: 'gmsniff --dispatch <cwd> <verb> [--json <payload>]', desc: 'write payload (default {}) to <cwd>/.gm/exec-spool/in/<verb>/<ts>.txt' },
     ],
     outputModes: {
       human: 'default: fixed-width columns, ANSI color unless --no-color/NO_COLOR/non-TTY, truncated to --truncate (default 200 chars)',
@@ -147,26 +147,36 @@ function parseArgs(argv) {
 function printHelp() {
   process.stdout.write(`gmsniff — query, search, and tail gm-log events
 
-USAGE
-  gmsniff [filters] [output]            dump matching events (requires ≥1 flag)
+QUICK START (daily)
+  gmsniff gui --open                    browser dashboard: project health, phases, deviations at a glance
+  gmsniff -f                            live tail, fanned out across every discovered project
+  gmsniff --list-deviations             what went wrong recently, grouped by kind
+  gmsniff --list-sessions --since 24h   per-session summary with phase walk
+  gmsniff --tree <sess>                 drill into one session chronologically
+
+DAILY
+  gmsniff [filters] [output]            dump matching events (requires >=1 flag)
   gmsniff -f [filters]                  live tail, fanned out across every discovered project
   gmsniff --list-sessions [filters]     per-session summary with phase walk
   gmsniff --list-deviations             recent deviations grouped by kind, with own/foreign split,
                                         severity, recovery verb, and per-hour rate
   gmsniff --list-deviations --own-only  only own-session deviations (real defects, not foreign gate-positives)
   gmsniff --list-deviations --foreign-only  only foreign-session deviations (predictability-regardless-of-LLM)
-  gmsniff --list-events [--sub <s>]     event-type histogram
   gmsniff --stats [filters]             breakdown by sub / event / sess / day
   gmsniff --tree <sess>                 chronological process tree for one session
+  gmsniff --tree <sess> [--all-dispatch] drops dispatch.start unless --all-dispatch
+  gmsniff gui [--port N] [--open]       launch browser GUI
+
+INVESTIGATION
+  gmsniff --list-events [--sub <s>]     event-type histogram
   gmsniff --efficiency <sess>           turn count, dispatch ratio, time-to-COMPLETE
   gmsniff --rollup <out.ndjson>         dump filtered events to file
   gmsniff --updates                     live drift state + update.* event history
   gmsniff --watchers                    one-line liveness + version per project cwd
   gmsniff --conformance                 paper §14 metrics: ε (unresolved mutables) + PRD-pending per project
   gmsniff --projects                    alias for --conformance: alive/dead, version, PRD-pending, mutable-unknown per discovered project
-  gmsniff --prd-edit <cwd> <id> [--status <s>] [--text <t>]      rewrite a PRD row's status/text in <cwd>/.gm/prd.yml, atomic write
-  gmsniff --mutable-edit <cwd> <id> [--status <s>] [--witness <w>]  rewrite a mutable row's status/witness in <cwd>/.gm/mutables.yml, atomic write
-  gmsniff --dispatch <cwd> <verb> [--json <payload>]  write payload (default {}) to <cwd>/.gm/exec-spool/in/<verb>/<ts>.txt
+
+DIAGNOSTICS (rare: memory/learning forensics)
   gmsniff --embed-failures [--stats]    rs-learn embed_text step failures (structured + watcher.log fallback)
   gmsniff --recall-misses [--top N]     recall events with hit=false grouped by query
   gmsniff --recall-scores [--bucket B]  histogram of top-hit recall scores (B default 0.1)
@@ -175,10 +185,13 @@ USAGE
   gmsniff --recall-modes [--stats]      distribution of recall.mode (vector_top_k|fallback_like|kv_query)
   gmsniff --table-drops                 catastrophic table_dropped events with dim deltas
   gmsniff --discipline-sigil-ignored    discipline_sigil_ignored events (doc-vs-code drift)
-  gmsniff --tree <sess> [--all-dispatch] drops dispatch.start unless --all-dispatch
-  gmsniff gui [--port N] [--open]       launch browser GUI
+
+AGENT-FACING (machine callers and gm state edits)
   gmsniff --schema                      machine-readable JSON: every flag, type, default, exit codes,
                                         output-mode contract -- for agentic/programmatic callers
+  gmsniff --prd-edit <cwd> <id> [--status <s>] [--text <t>]      rewrite a PRD row's status/text in <cwd>/.gm/prd.yml, atomic write
+  gmsniff --mutable-edit <cwd> <id> [--status <s>] [--witness <w>]  rewrite a mutable row's status/witness in <cwd>/.gm/mutables.yml, atomic write
+  gmsniff --dispatch <cwd> <verb> [--json <payload>]  write payload (default {}) to <cwd>/.gm/exec-spool/in/<verb>/<ts>.txt
 
 EXIT CODES
   0                      success (includes zero-match/empty-result queries -- absence of

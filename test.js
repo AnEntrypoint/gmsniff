@@ -5,6 +5,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import http from 'http';
+import { spawnSync } from 'child_process';
 
 const logDir = DEFAULT_LOG_DIR;
 const { url, close } = await createServer({ logDir, port: 0 });
@@ -218,4 +219,11 @@ delete process.env.GM_FANOUT_REDISCOVER_MS;
 fs.rmSync(fanoutRoot, { recursive: true, force: true });
 
 await close();
+
+// CLI information tiering: --help leads QUICK START -> DAILY -> DIAGNOSTICS; --schema carries tier fields.
+const helpOut = spawnSync(process.execPath, ['src/cli.js', '--help'], { encoding: 'utf8' }).stdout;
+assert(helpOut.indexOf('QUICK START') > -1 && helpOut.indexOf('QUICK START') < helpOut.indexOf('DAILY') && helpOut.indexOf('DAILY') < helpOut.indexOf('DIAGNOSTICS'), 'help tier order');
+const schemaOut = JSON.parse(spawnSync(process.execPath, ['src/cli.js', '--schema'], { encoding: 'utf8' }).stdout);
+assert(schemaOut.subcommands.every(s => typeof s.tier === 'string'), 'schema subcommand tier');
+
 console.log(`gmsniff OK — ${snap.total} events across ${days.length} days · live-feedback verified · multi-project fanout verified`);

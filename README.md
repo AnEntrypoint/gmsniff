@@ -1,0 +1,64 @@
+# gmsniff
+
+Observability for gm agent sessions: query, search, and tail gm-log events from every gm project on the machine, through a terminal CLI and a browser GUI.
+
+gmsniff is read-mostly tooling for the observer. It consumes the central `~/.claude/gm-log` jsonl store (override with `GM_LOG_DIR`), each discovered project's `.gm/prd.yml` and `.gm/mutables.yml`, and `.gm/exec-spool/` watcher state.
+
+## Install
+
+```
+npm install -g gmsniff
+```
+
+## Daily use
+
+The handful of commands that answer "what is happening right now":
+
+```
+gmsniff gui --open                   # browser dashboard: project health, phases, deviations at a glance
+gmsniff -f                           # live tail across every discovered project
+gmsniff --list-deviations            # what went wrong recently, grouped by kind
+gmsniff --list-sessions --since 24h  # per-session summary with phase walk
+gmsniff --tree <sess>                # drill into one session chronologically
+```
+
+The GUI opens on a Dashboard that leads with a "Projects now" glance (watcher liveness, PRD pending, unresolved mutables, deviation rate per project) and quick links into Live Stream, Deviations, and Sessions. The sidebar is tiered daily-first: Daily and Investigate groups always show; Subsystems, Analytics, and Control panels sit behind a collapsed "Show advanced" toggle. Every panel stays reachable via the Ctrl+K command palette and `#panel=` deep links regardless of the toggle.
+
+## Investigation
+
+When the glance shows something worth chasing:
+
+```
+gmsniff --stats --since 24h          # breakdown by sub / event / sess / day
+gmsniff --list-events --sub plugkit  # event-type histogram
+gmsniff --efficiency <sess>          # turn count, dispatch ratio, time-to-COMPLETE
+gmsniff --updates                    # live drift state + update.* history
+gmsniff --watchers                   # liveness + version per project
+gmsniff --projects                   # PRD-pending + unresolved mutables per project
+gmsniff --rollup out.ndjson --since 7d
+```
+
+Filters compose across all of these: `--since/--until`, `--sub`, `--event`, `--sess`, `--grep`, `--cwd`, and more; output shaping via `--json`, `--limit`, `--ctx`, `--reverse`. Run `gmsniff --help` for the full reference.
+
+## Diagnostics (rare)
+
+Deep memory/learning forensics, not daily reading: `--embed-failures`, `--recall-misses`, `--recall-scores`, `--classifier-rejects`, `--memory-leverage`, `--recall-modes`, `--table-drops`, `--discipline-sigil-ignored`.
+
+## Agent-facing
+
+Machine callers get a self-describing contract and write surfaces:
+
+```
+gmsniff --schema                                  # machine-readable JSON: flags, types, exit codes
+gmsniff --prd-edit <cwd> <id> --status done       # atomic PRD row rewrite
+gmsniff --mutable-edit <cwd> <id> --witness "..." # atomic mutable row rewrite
+gmsniff --dispatch <cwd> <verb> --json '{...}'    # write a spool request
+```
+
+Exit codes: 0 = success (zero-match queries included), 2 = usage error; uncaught exceptions keep Node's non-zero default.
+
+## Development
+
+- `node test.js` runs the single mock-free, real-services integration test (real temp log dirs, real watchers, real SSE). Extend this file for new coverage; there is no test framework and no parallel suite by design.
+- `gui/ds/` is vendored byte-for-byte from the sibling `../anentrypoint-design` repo via `npm run sync:ds`; never hand-edit files under it.
+- Pushing to `main` auto-bumps the patch version and publishes to npm via GitHub Actions; do not hand-bump `package.json`.

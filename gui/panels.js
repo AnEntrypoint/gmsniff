@@ -63,12 +63,51 @@ function kvPreview(obj, maxLen = 200) {
 // ---------------------------------------------------------------------------
 // DASHBOARD
 // ---------------------------------------------------------------------------
-export async function Dashboard() {
+export async function Dashboard({ onNav, devTotal, health } = {}) {
   const snap = await api('/api/snapshot');
   if (snap.error) return Empty('Failed to load snapshot: ' + snap.error);
   if (Array.isArray(snap.observedSubsystems) && snap.observedSubsystems.length) {
     SUB_LIST = [...new Set([...SUB_LIST, ...snap.observedSubsystems])];
   }
+  // Daily-first glance: what is happening right now, before any histogram.
+  // Everything here is client-held already (state.projects from boot,
+  // devTotal/health from app.js's shared 10s poller) -- no new endpoints.
+  const healthByCwd = new Map((health || []).map(r => [r.cwd, r]));
+  // Glance stays glanceable: alive projects always show (they ARE the daily
+  // signal); dead-watcher dirs fill remaining slots up to the cap. The cut is
+  // stated explicitly below -- never a silent truncation. /api/projects
+  // already sorts alive-first, so slice() preserves that priority.
+  const GLANCE_MAX = 15;
+  const aliveCount = state.projects.filter(p => p.alive).length;
+  const glanceProjects = state.projects.slice(0, Math.max(GLANCE_MAX, aliveCount));
+  const glanceHidden = state.projects.length - glanceProjects.length;
+  const projRows = glanceProjects.map(p => {
+    const hr = healthByCwd.get(p.cwd);
+    const name = String(p.cwd).split(/[\\/]/).filter(Boolean).pop() || p.cwd;
+    return h('tr', {
+      key: p.cwd, style: 'cursor:pointer', title: p.cwd,
+      onclick: () => { state.cwd = p.cwd; if (onNav) onNav('overview'); },
+    },
+      h('td', {}, name),
+      h('td', {}, Chip({ tone: p.alive ? 'positive' : 'neutral', children: p.alive ? 'alive' : 'dead' })),
+      h('td', {}, `${p.prd_pending}/${p.prd_total}`),
+      h('td', {}, String(p.mut_unknown)),
+      h('td', {}, hr && hr.deviationRate ? hr.deviationRate.toFixed(2) + '/min' : ''));
+  });
+  const projPanel = h('div', { class: 'ds-panel' }, h('h2', {}, 'Projects now'),
+    projRows.length
+      ? h('table', { class: 'gm-table' },
+          h('tr', {}, h('th', {}, 'project'), h('th', {}, 'watcher'), h('th', {}, 'prd pending'), h('th', {}, 'mut unknown'), h('th', {}, 'dev rate')),
+          ...projRows)
+      : Empty('No projects discovered yet.'),
+    glanceHidden > 0
+      ? h('p', { class: 'gm-empty' }, `${glanceHidden} more discovered projects (dead watchers) not shown -- project switcher or gmsniff --projects lists all ${state.projects.length}.`)
+      : null);
+  const quickLinks = Toolbar(
+    Btn({ children: 'Live Stream', onClick: () => onNav && onNav('live') }),
+    Btn({ children: devTotal ? `Deviations (${devTotal})` : 'Deviations', onClick: () => onNav && onNav('deviations') }),
+    Btn({ children: 'Sessions', onClick: () => onNav && onNav('sessions') }),
+  );
   const stats = StatsGrid({
     items: [
       { val: snap.total ?? 0, lbl: 'total events' },
@@ -96,6 +135,8 @@ export async function Dashboard() {
   });
   return h('div', {},
     h('div', { class: 'gm-row-end' }, Toolbar(exportBtn)),
+    h('div', { class: 'gm-mb-12' }, quickLinks),
+    h('div', { class: 'gm-mb-12' }, projPanel),
     h('div', { class: 'gm-mb-12' }, stats),
     h('div', { class: 'gm-flex-row' },
       h('div', { class: 'ds-panel' }, h('h2', {}, 'Subsystems'), ...(snap.total ? subRows : [Empty('No data.')])),

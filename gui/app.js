@@ -84,6 +84,7 @@ function applyHashState(parsed) {
 
 window.addEventListener('popstate', () => {
   applyHashState(parseHash(location.hash));
+  expandAdvancedFor(ui.panel);
   renderBody(true).then(focusMain);
 });
 
@@ -214,14 +215,61 @@ function HealthBanner() {
     }, r.name + (i < offending.length - 1 ? ', ' : '')))));
 }
 
+// ---------------------------------------------------------------------------
+// NAV TIERING -- daily-first sidebar. Daily/Investigate groups always render;
+// Subsystems/Analytics/Control sit behind a collapsed-by-default Advanced
+// toggle so the observer's first contact is the handful of panels that answer
+// "what is happening right now". Demoted panels stay reachable three ways:
+// the toggle, the Ctrl+K palette (built from NAV, not from rendered sections),
+// and #panel= deep links (navigation auto-expands the group, session-only).
+// Persisted value is whitelist-validated: anything but the literal 'open'
+// (corrupt value, unavailable storage) falls back to collapsed.
+// ---------------------------------------------------------------------------
+const NAV_ADV_KEY = 'gmsniff.nav.advanced';
+const ADV_PANEL_IDS = new Set(['recall-panel', 'exec-panel', 'hooks-panel', 'rs-tools', 'codeinsight', 'memory-graph',
+  'prd', 'mutables', 'lifecycle', 'codesearch', 'console', 'browser-sessions']);
+let navAdvanced = (() => { try { return localStorage.getItem(NAV_ADV_KEY) === 'open'; } catch (_) { return false; } })();
+
+function isAdvancedPanel(id) { return ADV_PANEL_IDS.has(id) || (typeof id === 'string' && id.startsWith('sub-')); }
+
+// One-shot: navigating to a demoted panel (deep link, palette, back/forward)
+// expands the group for this session without persisting -- a shared deep link
+// never overwrites the observer's stored collapsed preference.
+function expandAdvancedFor(id) { if (isAdvancedPanel(id)) navAdvanced = true; }
+
+function toggleAdvanced(e) {
+  e.preventDefault();
+  navAdvanced = !navAdvanced;
+  try { localStorage.setItem(NAV_ADV_KEY, navAdvanced ? 'open' : 'collapsed'); } catch (_) {}
+  renderShell();
+}
+
+// Status-bar glance: PRD/mutable pressure for the scoped project, or a
+// watcher-liveness aggregate when unscoped -- all read from state.projects
+// (fetched once at boot), zero additional polling surface.
+function statusGlance() {
+  if (state.cwd) {
+    const p = state.projects.find(r => r.cwd === state.cwd);
+    return p ? `prd ${p.prd_pending}/${p.prd_total} pending, mut unknown ${p.mut_unknown}` : '';
+  }
+  if (!state.projects.length) return '';
+  const alive = state.projects.filter(r => r.alive).length;
+  return `${alive}/${state.projects.length} watchers alive`;
+}
+
 function renderShell() {
+  const advSections = [
+    { group: 'Subsystems', items: SUB_LIST.map(s => navItem('sub-' + s, s)) },
+    { group: 'Analytics', items: [navItem('recall-panel', 'Recall Stats'), navItem('exec-panel', 'Exec Stats'), navItem('hooks-panel', 'Hook Stats'), navItem('rs-tools', 'RS Tools'), navItem('codeinsight', 'CodeInsight'), navItem('memory-graph', 'Memory Graph')] },
+    { group: 'Control', items: [navItem('prd', 'PRD Editor'), navItem('mutables', 'Mutables Editor'), navItem('lifecycle', 'Lifecycle Control'), navItem('codesearch', 'Codesearch'), navItem('console', 'GM Call Console'), navItem('browser-sessions', 'Browser Sessions')] },
+  ];
+  const advCount = advSections.reduce((n, s) => n + s.items.length, 0);
   const side = Side({
     sections: [
-      { group: 'Overview', items: [navItem('overview', 'Dashboard'), navItem('days', 'By Day'), navItem('live', 'Live Stream'), navItem('events', 'All Events'), navItem('search-panel', 'Search')] },
-      { group: 'Process', items: [navItem('deviations', 'Deviations', ui.devTotal || null), navItem('sessions', 'Sessions'), navItem('tree', 'Process Tree'), navItem('conversations', 'Conversations'), navItem('query', 'Query')] },
-      { group: 'Subsystems', items: SUB_LIST.map(s => navItem('sub-' + s, s)) },
-      { group: 'Analytics', items: [navItem('recall-panel', 'Recall Stats'), navItem('exec-panel', 'Exec Stats'), navItem('hooks-panel', 'Hook Stats'), navItem('rs-tools', 'RS Tools'), navItem('codeinsight', 'CodeInsight'), navItem('memory-graph', 'Memory Graph')] },
-      { group: 'Control', items: [navItem('prd', 'PRD Editor'), navItem('mutables', 'Mutables Editor'), navItem('lifecycle', 'Lifecycle Control'), navItem('codesearch', 'Codesearch'), navItem('console', 'GM Call Console'), navItem('browser-sessions', 'Browser Sessions')] },
+      { group: 'Daily', items: [navItem('overview', 'Dashboard'), navItem('live', 'Live Stream'), navItem('deviations', 'Deviations', ui.devTotal || null), navItem('sessions', 'Sessions')] },
+      { group: 'Investigate', items: [navItem('days', 'By Day'), navItem('events', 'All Events'), navItem('search-panel', 'Search'), navItem('tree', 'Process Tree'), navItem('conversations', 'Conversations'), navItem('query', 'Query')] },
+      { group: 'Advanced', items: [{ label: navAdvanced ? 'Hide advanced' : 'Show advanced', href: '#', onClick: toggleAdvanced, count: navAdvanced ? null : advCount }] },
+      ...(navAdvanced ? advSections : []),
     ],
   });
 
@@ -246,7 +294,7 @@ function renderShell() {
     // so it is visible regardless of which panel is active, and hidden entirely (null) when
     // every discovered project is healthy.
     main: [HealthBanner(), bodyContainer],
-    status: Status({ left: ['gmsniff'], right: [state.cwd || '(own root)'] }),
+    status: Status({ left: ['gmsniff'], right: [state.cwd || '(own root)', statusGlance()].filter(Boolean) }),
   });
   webjsx.applyDiff(root, app);
 
@@ -305,7 +353,7 @@ async function computeBody(force) {
   const p = ui.panel;
   const setBody = (f) => renderBody(f);
   if (p !== 'memory-graph') stopMemoryGraphLayout();
-  if (p === 'overview') return Dashboard();
+  if (p === 'overview') return Dashboard({ onNav: go, devTotal: ui.devTotal, health: ui.health });
   if (p === 'days') return ByDay();
   if (p === 'live') return LiveStream({ connState: ui.connState }, setBody);
   if (p === 'events') return AllEvents(setBody);
@@ -355,6 +403,7 @@ function focusMain() {
 
 async function go(id) {
   ui.panel = id;
+  expandAdvancedFor(id);
   syncHash();
   await renderBody(true);
   focusMain();
@@ -398,6 +447,7 @@ function connectSSE() {
 
 async function boot() {
   applyHashState(parseHash(location.hash));
+  expandAdvancedFor(ui.panel);
   // Canonicalize the hash immediately (covers both a bare load with no hash,
   // where this establishes #panel=overview, and a hash naming an unknown
   // panel, where applyHashState already fell back to the default and this
@@ -410,7 +460,7 @@ async function boot() {
   refreshDeviationBadge();
   setInterval(refreshDeviationBadge, 10000);
   connectSSE();
-  window.gmsniff = { state, ui, go, renderBody, renderShell, openPalette, closePalette, buildCommandRegistry, parseHash, hashForState, syncHash, liveStreamDebugSnapshot };
+  window.gmsniff = { state, ui, go, renderBody, renderShell, openPalette, closePalette, buildCommandRegistry, parseHash, hashForState, syncHash, liveStreamDebugSnapshot, isAdvancedPanel, getNavAdvanced: () => navAdvanced, statusGlance };
 }
 
 boot();

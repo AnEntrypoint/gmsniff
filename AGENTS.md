@@ -18,8 +18,12 @@ No test framework, no `test/` directory. `test.js` at repo root is the single, m
 
 Pushing to `main` triggers `.github/workflows/publish-npm.yml`: auto-bumps the patch version and publishes to npm, then commits `chore: auto-bump version to X [skip ci]` back to `main`. Don't hand-bump `package.json`'s version — the workflow owns it.
 
+## Information tiering (deliberate)
+
+The GUI sidebar (`gui/app.js` renderShell) and CLI help (`src/cli.js` printHelp) are deliberately tiered daily-first for the observer: Daily/Investigate groups lead; Subsystems/Analytics/Control panels sit behind a collapsed-by-default "Show advanced" toggle (localStorage key `gmsniff.nav.advanced`, whitelist-validated); `--help` opens with QUICK START before INVESTIGATION/DIAGNOSTICS/AGENT-FACING, and `--schema` subcommands carry a matching `tier` field. Do not flatten, merge, or re-alphabetize this ordering as cleanup. Demoted panels stay reachable via the Ctrl+K palette and `#panel=` deep links (which auto-expand the group session-only).
+
 ## GM_LOG_DIR / spool discovery
 
-Default central log dir is `~/.claude/gm-log` (override via `GM_LOG_DIR`), matching gm's own JS log writer. Per-project fallback/fanout discovers sibling project dirs under `DEV_ROOT`/`GM_DEV_ROOT`/`GM_SPOOL_DIRS`/cwd/`C:/dev` (or `~/dev`), each identified by a `.gm/exec-spool/.status.json` or `.watcher.log` marker.
+Central log defaults to `~/.claude/gm-log` (`GM_LOG_DIR` overrides); project discovery roots and markers live in `src/registry.js` discoverCwdSet -- full details in the memory store (drained entry) and `README.md`.
 
 @.gm/next-step.md

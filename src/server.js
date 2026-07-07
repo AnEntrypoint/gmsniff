@@ -349,6 +349,12 @@ class Store {
   }
 
   snapshot() {
+    // events is append-only, so this aggregate is immutable for a given
+    // length. The Dashboard (default panel) hits this on every load and every
+    // SSE-driven overview re-render; measured 8.7s TTFB at 1.6M events when
+    // recomputed each call. Same length-keyed pattern as registry.js's
+    // _cwdSetCache.
+    if (this._snapshotCache && this._snapshotCache.len === this.events.length) return this._snapshotCache.value;
     const bySub = {}, byEvent = {}, byDay = {}, pids = new Set();
     let errors = 0;
     for (const e of this.events) {
@@ -358,7 +364,9 @@ class Store {
       if (e.pid) pids.add(e.pid);
       if (e.ok === false || e.err) errors++;
     }
-    return { total: this.events.length, bySub, byEvent, byDay, pids: pids.size, errors, subsystems: SUBSYSTEMS, observedSubsystems: this.observedSubsystems() };
+    const value = { total: this.events.length, bySub, byEvent, byDay, pids: pids.size, errors, subsystems: SUBSYSTEMS, observedSubsystems: this.observedSubsystems() };
+    this._snapshotCache = { len: this.events.length, value };
+    return value;
   }
 
   subsystem(sub, { limit = 200, offset = 0, event: evFilter, day, q, pid } = {}) {
