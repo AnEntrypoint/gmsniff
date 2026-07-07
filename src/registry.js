@@ -7,41 +7,71 @@ import os from 'os';
 // same row-parsing semantics instead of drifting copies.
 
 const ID_LINE = /^- id:\s*(.*)$/;
+const BOUNDARY_LINE = /^- ([a-zA-Z_][\w]*):\s?(.*)$/;
 const FIELD_LINE = /^\s{2}([a-zA-Z_][\w]*):\s?(.*)$/;
+const LIST_ITEM_LINE = /^\s{2}-\s+(.*)$/;
 
 // Splits a prd.yml/mutables.yml body into structured rows: [{id, fields..., _raw, _start, _end}]
-// _raw preserves the exact source slice (including leading "- id:" line) so an editor can
+// _raw preserves the exact source slice (including leading boundary line) so an editor can
 // rewrite a single row back into the file byte-for-byte for every other row.
+// A field written as a YAML block-list (`tags:` on its own line followed by `  - item` lines
+// at the same 2-space indent as the field key) parses into an array on that field's key,
+// same as gm's own prd.yml emits for e.g. tags.
+//
+// Row boundary is any top-level `- <field>: ...` line, not just `- id:`. gm's own live
+// prd.yml has a legacy row cluster shaped `- title: <text>` with `id:` as a plain field
+// further down (not the boundary marker) -- treating only `- id:` as a boundary silently
+// drops those rows entirely (confirmed: 11 real rows, incl. severity-tagged ones, invisible
+// to readPrd() before this fix). The boundary line's own field (title, id, whatever key it
+// uses) is captured like any other field, so `- id: x` rows are byte-identical to before.
 export function parseYamlRows(text) {
   if (!text) return [];
   const lines = text.split('\n');
   const rows = [];
   let cur = null;
+  let listField = null; // field name currently accumulating block-list items, if any
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    const idm = line.match(ID_LINE);
-    if (idm) {
+    const bm = line.match(BOUNDARY_LINE);
+    if (bm) {
       if (cur) { cur._end = i; rows.push(cur); }
-      cur = { id: unquote(idm[1].trim()), _start: i, _lines: [line] };
+      cur = { id: undefined, _start: i, _lines: [line] };
+      cur[bm[1]] = unquote(bm[2].trim());
+      if (bm[1] === 'id') cur.id = cur[bm[1]];
+      listField = null;
       continue;
     }
     if (cur) {
-      if (line.match(/^- /) && !ID_LINE.test(line)) {
-        // a non-"- id:" top-level list item -- treat as boundary too (defensive)
-        cur._end = i;
-        rows.push(cur);
-        cur = null;
+      if (listField && LIST_ITEM_LINE.test(line)) {
+        cur._lines.push(line);
+        cur[listField].push(unquote(line.match(LIST_ITEM_LINE)[1].trim()));
         continue;
       }
+      if (listField && cur[listField].length === 0) {
+        // `key:` had no value AND no list items followed (bare/empty field, not a block-list) --
+        // fall back to the pre-existing empty-string behavior rather than leaving an empty array.
+        cur[listField] = '';
+      }
+      listField = null;
       cur._lines.push(line);
       const fm = line.match(FIELD_LINE);
-      if (fm) cur[fm[1]] = unquote(fm[2].trim());
+      if (fm) {
+        if (fm[2].trim() === '') { cur[fm[1]] = []; listField = fm[1]; }
+        else cur[fm[1]] = unquote(fm[2].trim());
+        if (fm[1] === 'id') cur.id = cur[fm[1]];
+      }
     }
   }
   if (cur) { cur._end = lines.length; rows.push(cur); }
   for (const r of rows) {
     r._raw = r._lines.join('\n');
     delete r._lines;
+    // A bare `key:` at true row/file end with no list items following (never closed by the
+    // in-loop fallback above, since there was no subsequent line to trigger it) -- same
+    // empty-string fallback as the in-loop case.
+    for (const k of Object.keys(r)) {
+      if (Array.isArray(r[k]) && r[k].length === 0) r[k] = '';
+    }
   }
   return rows;
 }
@@ -84,7 +114,20 @@ export function readPrd(cwd) {
     // minority conventions; body is a superseded historical field (66 body-only rows,
     // none in the recent tail) kept as the lowest-priority fallback so those rows don't
     // render empty.
-    rows: f.rows.map(r => ({ id: r.id, status: r.status || 'pending', text: r.text || r.note || r.subject || r.body || '', witness: r.witness || undefined })),
+    // severity/tags are additive enrichment (real fields in ../gm's live prd.yml, ~0.5%
+    // and ~1.8% of rows respectively) -- surfaced as-is, undefined when absent, so the GUI
+    // can badge them without every other row growing spurious empty badges. desc/description/
+    // detail/title/acceptance/scope are deliberately NOT added here: they are alternate
+    // free-text spellings, not new signal, and would just be a 3rd/4th/5th near-duplicate
+    // fallback branch on top of text/note/subject/body.
+    rows: f.rows.map(r => ({
+      id: r.id,
+      status: r.status || 'pending',
+      text: r.text || r.note || r.subject || r.body || '',
+      witness: r.witness || undefined,
+      severity: r.severity || undefined,
+      tags: Array.isArray(r.tags) && r.tags.length ? r.tags : undefined,
+    })),
   };
 }
 
@@ -268,7 +311,7 @@ export const VERB_ALLOWLIST = new Set([
   'prd-list', 'recall_kv', 'task-list', 'task-spawn', 'task-stop',
 ]);
 
-const VERB_SHAPE = /^[a-zA-Z0-9-]+$/;
+const VERB_SHAPE = /^[a-zA-Z0-9_-]+$/;
 
 export function isKnownVerb(verb) {
   return typeof verb === 'string' && VERB_SHAPE.test(verb) && VERB_ALLOWLIST.has(verb);

@@ -567,7 +567,8 @@ const DEVIATION_META = {
   'deviation.client-edit-no-witness': { sev: 'critical', recover: 'browser' },
   'deviation.browser-witness-missing': { sev: 'critical', recover: 'browser' },
   'deviation.browser-witness-hash-mismatch': { sev: 'critical', recover: 'browser' },
-  'deviation.complete-without-push': { sev: 'critical', recover: 'git_push' },
+  'deviation.complete-without-ci-validation': { sev: 'critical', recover: 'git_status + CI-wait' },
+  'deviation.consolidate-without-residual-scan': { sev: 'critical', recover: 'residual-scan' },
   'deviation.push-dirty': { sev: 'critical', recover: 'git_status + commit' },
   'deviation.complete-chain-poll': { sev: 'info', recover: 'stop (chain terminal)' },
   'deviation.bash-git-bypass': { sev: 'warn', recover: 'git verbs' },
@@ -996,6 +997,7 @@ function recallScores(all, opts) {
 
 function classifierRejects(all, opts) {
   const evs = all.filter(e => e.event === 'memorize_reject');
+  if (evs.length === 0) { process.stdout.write('# memorize rejects: 0 events matching event=memorize_reject -- confirm this build emits memorize_reject before reading this as "no rejects".\n'); return; }
   const byReason = new Map();
   for (const e of evs) {
     const r = e.reason || '?';
@@ -1075,6 +1077,10 @@ function recallModes(all, opts) {
 
 function tableDrops(all) {
   const evs = all.filter(e => e.event === 'table_dropped');
+  if (evs.length === 0) {
+    process.stdout.write('# table drops: 0 events matching event=table_dropped -- not observed emitted by any sampled gm-log build; a 0 here is NOT a confirmed-healthy zero, it may mean this build never emits table_dropped at all.\n');
+    return;
+  }
   process.stdout.write(`# table drops: ${evs.length}\n`);
   process.stdout.write(`TS                   TABLE                 OLD_DIM  NEW_DIM\n`);
   for (const e of evs) {
@@ -1084,6 +1090,7 @@ function tableDrops(all) {
 
 function disciplineSigilIgnored(all) {
   const evs = all.filter(e => e.event === 'discipline_sigil_ignored');
+  if (evs.length === 0) { process.stdout.write('# discipline_sigil_ignored: 0 events matching event=discipline_sigil_ignored -- confirm this build emits the event before reading this as "no ignored sigils".\n'); return; }
   process.stdout.write(`# discipline_sigil_ignored: ${evs.length} (doc-vs-code drift)\n`);
   for (const e of evs.slice(-50).reverse()) {
     process.stdout.write(formatRow(e, { truncate: 300 }));

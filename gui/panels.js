@@ -5,7 +5,7 @@
 // the active panel's container on data load / SSE events / interval ticks.
 
 import * as webjsx from 'webjsx';
-import { Chip, Badge, Btn, Glyph } from 'ds/components/shell.js';
+import { Chip, Badge, Pill, Btn, Glyph } from 'ds/components/shell.js';
 import { PhaseWalk, TreeNode, BarRow, StatTile, StatsGrid, SubGrid, SessionRow, DevRow, LiveLog } from 'ds/components/data-density.js';
 import { TreeView, TreeItem, PropertyGrid, PropertyField, Dialog } from 'ds/components/editor-primitives.js';
 import { api, apiPost, esc, fmtTs, state, toast } from './data.js';
@@ -755,6 +755,12 @@ export function commitField(kind, row, field, value, since, setBody, validate) {
   editRow(kind, row.id, since, { [field]: value }, setBody, errKey);
 }
 
+// severity is a real but minority field in gm's own live prd.yml (~0.5% of rows) --
+// no fixed vocabulary is enforced upstream (free-text scalar), so tone mapping only
+// special-cases the values actually witnessed (critical/high/medium/low) and falls
+// back to neutral for anything else rather than guessing at unseen spellings.
+const SEVERITY_TONE = { critical: 'danger', high: 'danger', medium: 'neutral', low: 'positive' };
+
 export async function PrdEditor(setBody) {
   const r = await api('/api/prd', { scoped: true });
   if (r.error) return Empty('Failed to load PRD: ' + r.error);
@@ -776,6 +782,8 @@ export async function PrdEditor(setBody) {
             class: 'gm-inline-input' + (textErr ? ' gm-field-error' : ''), value: row.text,
             onchange: (e) => commitField('prd', row, 'text', e.target.value, since, setBody, validatePrdField),
           }) }),
+          ...(row.severity ? [PropertyField({ label: 'severity', inline: true, children: Badge({ children: row.severity, tone: SEVERITY_TONE[row.severity] || 'neutral' }) })] : []),
+          ...(row.tags && row.tags.length ? [PropertyField({ label: 'tags', inline: true, children: h('span', {}, ...row.tags.map(t => Pill({ key: t, tone: 'accent', children: t }))) })] : []),
         ] }));
     }));
 }
