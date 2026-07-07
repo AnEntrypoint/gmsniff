@@ -79,7 +79,12 @@ export function readPrd(cwd) {
   if (!f) return { mtimeMs: null, rows: [] };
   return {
     mtimeMs: f.mtimeMs,
-    rows: f.rows.map(r => ({ id: r.id, status: r.status || 'pending', text: r.text || r.note || r.subject || '', witness: r.witness || undefined })),
+    // text is by far the dominant/current free-text field (868 occurrences across
+    // ../gm/.gm/prd.yml, 100% of the most recent 300 rows); note/subject are older
+    // minority conventions; body is a superseded historical field (66 body-only rows,
+    // none in the recent tail) kept as the lowest-priority fallback so those rows don't
+    // render empty.
+    rows: f.rows.map(r => ({ id: r.id, status: r.status || 'pending', text: r.text || r.note || r.subject || r.body || '', witness: r.witness || undefined })),
   };
 }
 
@@ -257,6 +262,10 @@ export const VERB_ALLOWLIST = new Set([
   'git_status', 'git_log', 'git_diff', 'git_show', 'git_branch', 'git_add', 'git_commit',
   'git_finalize', 'git_push', 'git_checkout', 'git_fetch', 'git_rm', 'git_revert', 'git_reset',
   'memorize-fire', 'memorize-prune',
+  'auto-recall', 'bash', 'branch_status', 'close', 'discipline-note', 'exec', 'fetch',
+  'filter', 'fs_read', 'fs_write', 'health', 'kill-port', 'kv', 'lang', 'learn',
+  'learn-debug', 'learn-status', 'memorize', 'memorize-continue', 'mutable-list',
+  'prd-list', 'recall_kv', 'task-list', 'task-spawn', 'task-stop',
 ]);
 
 const VERB_SHAPE = /^[a-zA-Z0-9-]+$/;

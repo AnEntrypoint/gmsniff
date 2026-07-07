@@ -16,7 +16,7 @@ const h = webjsx.createElement;
 //   reached : bool[] parallel to phases — true once that phase has been hit.
 //   gapKinds: phase names that are a known gap (red), overrides reached.
 // ---------------------------------------------------------------------------
-export const DEFAULT_PHASES = ['PLAN', 'EXECUTE', 'EMIT', 'VERIFY', 'COMPLETE'];
+export const DEFAULT_PHASES = ['PLAN', 'EXECUTE', 'EMIT', 'VERIFY', 'CONSOLIDATE', 'COMPLETE'];
 
 export function PhaseWalk({ phases = DEFAULT_PHASES, reached = [], gapKinds = [] } = {}) {
     const gaps = new Set(gapKinds || []);

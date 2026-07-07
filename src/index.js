@@ -21,7 +21,7 @@ export function discoverSubsystems(logDir) {
   return [...out].sort();
 }
 
-export const DEFAULT_LOG_DIR = process.env.GM_LOG_DIR || path.join(os.homedir(), '.gm', 'gm-log');
+export const DEFAULT_LOG_DIR = process.env.GM_LOG_DIR || path.join(os.homedir(), '.claude', 'gm-log');
 const DEBOUNCE_MS = 50;
 // Real wall-clock gap given to libuv after issuing fs.watch handle closes, before a stop()
 // caller is allowed to proceed (e.g. to process.exit()) -- see GmLogWatcher.stop/

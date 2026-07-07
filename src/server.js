@@ -503,7 +503,7 @@ class Store {
       }
       if (typeof e.event === 'string' && e.event.startsWith('deviation.')) entry.deviations++;
     }
-    const PHASES = ['PLAN','EXECUTE','EMIT','VERIFY','COMPLETE'];
+    const PHASES = ['PLAN','EXECUTE','EMIT','VERIFY','CONSOLIDATE','COMPLETE'];
     const arr = [];
     for (const v of map.values()) {
       const reached = PHASES.map(p => v.phases.has(p));
@@ -536,7 +536,7 @@ class Store {
     if (!sess) return { sess: null, nodes: [], gaps: [] };
     const match = sess === '(no-session)' ? '' : sess;
     const evs = this.events.filter(e => (e.sess || '') === match).slice().sort((a,b)=>(a.ts||'').localeCompare(b.ts||''));
-    const PHASES = ['PLAN','EXECUTE','EMIT','VERIFY','COMPLETE'];
+    const PHASES = ['PLAN','EXECUTE','EMIT','VERIFY','CONSOLIDATE','COMPLETE'];
     const nodes = [];
     const gaps = [];
     let currentPhase = null;

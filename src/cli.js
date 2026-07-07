@@ -4,7 +4,7 @@ import path from 'path';
 import os from 'os';
 import { GmLogWatcher, MultiProjectWatcher, replayAll, DEFAULT_LOG_DIR } from './index.js';
 
-const PHASES = ['PLAN', 'EXECUTE', 'EMIT', 'VERIFY', 'COMPLETE'];
+const PHASES = ['PLAN', 'EXECUTE', 'EMIT', 'VERIFY', 'CONSOLIDATE', 'COMPLETE'];
 
 // EXIT CODE CONTRACT (single source of truth -- printed by --schema/--describe and --help so
 // an agentic caller never has to infer this from source): 0 = success (including zero-match,
@@ -470,12 +470,18 @@ function prdEdit(cwd, id, opts) {
   const filePath = path.join(cwd, '.gm', 'prd.yml');
   const fields = { status: opts.status };
   if (opts.text !== undefined) {
-    // rows use whichever of subject/note/text already exists as the free-text field;
-    // reuse it rather than bolting on a duplicate `text:` line.
+    // rows use whichever of text/note/subject/body already exists as the free-text field;
+    // reuse it rather than bolting on a duplicate `text:` line. text is the dominant/current
+    // convention; body is a superseded historical field kept last so legacy body-only rows
+    // still get edited in place instead of gaining a spurious second field.
     const text = fs.readFileSync(filePath, 'utf-8');
     const { rows } = splitYamlRows(text);
     const row = rows.find(r => r.id === id);
-    const existingField = row && /^  note:/m.test(row.raw) ? 'note' : (row && /^  text:/m.test(row.raw) ? 'text' : 'subject');
+    const existingField = row && /^  text:/m.test(row.raw) ? 'text'
+      : row && /^  note:/m.test(row.raw) ? 'note'
+      : row && /^  subject:/m.test(row.raw) ? 'subject'
+      : row && /^  body:/m.test(row.raw) ? 'body'
+      : 'subject';
     fields[existingField] = opts.text;
   }
   const raw = editYamlRow(filePath, id, fields);
