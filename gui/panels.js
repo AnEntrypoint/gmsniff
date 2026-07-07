@@ -389,7 +389,7 @@ export async function Deviations(setBody) {
 // ---------------------------------------------------------------------------
 // SESSIONS / PROCESS TREE
 // ---------------------------------------------------------------------------
-const PHASES = ['PLAN', 'EXECUTE', 'EMIT', 'VERIFY', 'COMPLETE'];
+const PHASES = ['PLAN', 'EXECUTE', 'EMIT', 'VERIFY', 'CONSOLIDATE', 'COMPLETE'];
 
 // Session detail Dialog: focus-trapped modal (ds Dialog primitive) opened by
 // clicking a SessionRow. Fetches the phase walk + full event list scoped to
