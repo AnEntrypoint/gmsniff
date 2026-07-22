@@ -429,7 +429,14 @@ function readWatcherStatus(cwd) {
     let alive = false;
     try { process.kill(j.pid, 0); alive = true; } catch (_) {}
     const age = j.ts ? Date.now() - j.ts : null;
-    return { pid: j.pid, version: j.version, wrapper_sha: j.wrapper_sha || null, idle_limit_ms: j.idle_limit_ms || null, alive, age_ms: age };
+    // Two live .status.json shapes: legacy per-project JS-wrapper (version + wrapper_sha,
+    // one process per project) and the current agentplug shared daemon (runtime:"agentplug",
+    // shared_process:true, one process serving many project cwds, no version/wrapper_sha field
+    // at all since the wasm guest it serves updates independently of the runner binary).
+    // version presence alone previously gated aliveness display, silently dropping every
+    // agentplug-driven project (the entire current-generation fleet) from --watchers/--conformance.
+    const runtime = j.runtime || (j.version ? 'wrapper' : null);
+    return { pid: j.pid, version: j.version || null, wrapper_sha: j.wrapper_sha || null, idle_limit_ms: j.idle_limit_ms || null, runtime, shared_process: !!j.shared_process, alive, age_ms: age };
   } catch (_) { return null; }
 }
 
@@ -459,7 +466,7 @@ function paperConformance(cwds) {
     if (!k || seen.has(k)) continue;
     seen.add(k);
     const st = readWatcherStatus(cwd);
-    if (!st || !st.version) continue;
+    if (!st) continue;
     const ps = readPrdMutablesState(cwd);
     rows.push({ cwd, ...st, ...ps });
   }
@@ -470,7 +477,8 @@ function paperConformance(cwds) {
     const eps = r.mut_unknown > 0 ? color(String(r.mut_unknown).padStart(6), 33) : '     0';
     const prd = r.prd_pending > 0 ? color(String(r.prd_pending).padStart(8), 33) : '       0';
     const proj = path.basename(r.cwd);
-    process.stdout.write(`${state}  v${(r.version || '?').padEnd(8)} ${eps} ${prd}  ${proj}\n`);
+    const verLabel = r.version ? `v${r.version}` : (r.runtime === 'agentplug' ? 'agentplug' : '?');
+    process.stdout.write(`${state}  ${verLabel.padEnd(9)} ${eps} ${prd}  ${proj}\n`);
   }
   process.stderr.write(`# ${rows.length} projects - unresolved-mutables=eps, PRD-pend=open items\n`);
 }
@@ -623,7 +631,8 @@ function listSessions(all) {
     if (cwdsArr.length === 1) {
       const st = readWatcherStatus(cwdsArr[0]);
       if (st) {
-        const tag = st.alive ? color(`v${st.version} ALIVE`, 32) : color(`v${st.version} dead `, 31);
+        const verLabel = st.version ? `v${st.version}` : (st.runtime === 'agentplug' ? 'agentplug' : 'v?');
+        const tag = st.alive ? color(`${verLabel} ALIVE`, 32) : color(`${verLabel} dead `, 31);
         watcher = ` ${tag}`;
       }
     }
@@ -742,7 +751,6 @@ function watchers(all, opts = {}) {
   for (const cwd of cwds) {
     const status = readWatcherStatus(cwd);
     if (!status) continue;
-    if (!status.version) continue;
     if (!includeDead && !status.alive) continue;
     const updateInfo = readUpdateAvailable(cwd);
     rows.push({ cwd, update: updateInfo, ...status });
@@ -765,9 +773,12 @@ function watchers(all, opts = {}) {
     let update = '';
     if (r.update && r.update.latest && r.update.latest !== r.version) {
       update = color(`-> v${r.update.latest}`, 33);
+    } else if (r.shared_process) {
+      update = color(`shared:${r.pid}`, 36);
     }
     const wsha = r.wrapper_sha ? (wrapperDivergent ? color(r.wrapper_sha, 33) : r.wrapper_sha) : '       ';
-    process.stdout.write(`${state}  v${(r.version || '?').padEnd(8)} ${wsha} ${String(r.pid).padStart(6)} ${age.padEnd(9)} ${proj.padEnd(20)}  ${update}\n`);
+    const verLabel = r.version ? `v${r.version}` : (r.runtime === 'agentplug' ? 'agentplug' : '?');
+    process.stdout.write(`${state}  ${verLabel.padEnd(9)} ${wsha} ${String(r.pid).padStart(6)} ${age.padEnd(9)} ${proj.padEnd(20)}  ${update}\n`);
   }
   process.stderr.write(`# ${aliveCount} alive${includeDead ? ` - ${deadShown} dead shown` : ''}${drifted ? ` - ${drifted} need bootstrap+respawn` : ''}\n`);
 }
