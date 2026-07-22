@@ -5,7 +5,7 @@ import { fileURLToPath } from 'url';
 import { GmLogWatcher, MultiProjectWatcher, replayAll, SUBSYSTEMS, DEFAULT_LOG_DIR } from './index.js';
 import {
   readPrd, readMutables, rewriteRow, atomicWriteFile, discoverProjects, isKnownVerb, isAllowedProjectCwd,
-  readWatcherStatus, VERB_ALLOWLIST,
+  readWatcherStatus, VERB_ALLOWLIST, readLivePhaseState, resolveInstructionTier,
 } from './registry.js';
 
 const MAX_QUERY_LEN = 4096;
@@ -327,6 +327,24 @@ class Store {
     this.fanout.on('project.removed', p => { this.watchedProjects = this.fanout.projects(); this._broadcast('project.removed', p); });
     this.fanout.start();
     this.watchedProjects = this.fanout.projects();
+
+    // Live-witnessed this session: the fanout's own event stream tails each project's
+    // .gm/exec-spool/.watcher.log, a legacy per-project JS-wrapper log format the current
+    // shared agentplug daemon never writes to -- so an fanout.on('event')-triggered recheck
+    // never fires for any current-generation project (confirmed: gm root shows watching:true
+    // in the fanout's own registry, yet its .watcher.log tail is stale by hours while real
+    // dispatch activity is happening). next-step.md's own mtime is the reliable signal instead
+    // (rs-plugkit writes it directly on every genuine phase/instruction change, independent of
+    // the legacy log), so this polls it directly rather than piggybacking on a broken proxy.
+    // readLivePhaseState's own mtime-gated cache means each tick is a cheap statSync per
+    // project in the common no-change case -- polling here, push to the client via SSE.
+    this._lastPhaseSig = new Map(); // cwd -> `${phase}|${instruction_heading}|${updated_ts}`
+    this._phasePollTimer = setInterval(() => {
+      for (const cwd of discoverProjects(this.events).map(p => p.cwd)) {
+        this._maybeBroadcastPhaseChange(cwd);
+      }
+    }, 2500);
+    this._phasePollTimer.unref?.();
   }
 
   // async: both watcher.stop() and fanout.stop() now return Promises that resolve only
@@ -334,6 +352,7 @@ class Store {
   // it) -- callers awaiting Store.stop() before process.exit() avoid the Windows
   // UV_HANDLE_CLOSING race that an immediate exit after a synchronous stop() could hit.
   async stop() {
+    if (this._phasePollTimer) { clearInterval(this._phasePollTimer); this._phasePollTimer = null; }
     if (this.watcher) await this.watcher.stop();
     if (this.fanout) await this.fanout.stop();
     this.watcher = null;
@@ -346,6 +365,30 @@ class Store {
   _broadcast(kind, data) {
     const payload = `event: ${kind}\ndata: ${JSON.stringify(data)}\n\n`;
     for (const res of this.sseClients) { try { res.write(payload); } catch {} }
+  }
+
+  // Re-reads a project's live phase state (mtime-gated, so this is a cheap statSync in the
+  // common no-change case) and broadcasts 'project.phase-changed' only when the phase,
+  // instruction heading, or updated_ts genuinely differ from the last-seen signature for that
+  // cwd -- avoids flooding SSE clients with a frame per raw watcher.log line when the actual
+  // served instruction hasn't moved.
+  _maybeBroadcastPhaseChange(cwd) {
+    let phaseState, tier;
+    try {
+      phaseState = readLivePhaseState(cwd);
+      const key = phaseState.instruction_heading ? phaseState.instruction_heading.toLowerCase().replace('update-docs', 'update_docs') : null;
+      tier = phaseState.present ? resolveInstructionTier(cwd, key) : { tier: 'default', file_path: null, source_repo: null };
+    } catch (_) { return; }
+    const sig = `${phaseState.phase}|${phaseState.instruction_heading}|${phaseState.updated_ts}`;
+    if (this._lastPhaseSig.get(cwd) === sig) return;
+    this._lastPhaseSig.set(cwd, sig);
+    this._broadcast('project.phase-changed', {
+      cwd, phase: phaseState.phase, skill: phaseState.skill,
+      instruction_heading: phaseState.instruction_heading,
+      instruction_excerpt: phaseState.instruction_excerpt,
+      instruction_tier: tier.tier, instruction_source_file: tier.file_path, instruction_source_repo: tier.source_repo,
+      updated_ts: phaseState.updated_ts, stale: phaseState.stale,
+    });
   }
 
   snapshot() {
@@ -891,7 +934,8 @@ const API_ROUTES = [
   { path: '/api/codesearch', method: 'POST', params: ['body: {cwd, query}'], response: '{ok, cwd, query, hits, raw} | 504 on dispatch timeout' },
   { path: '/api/browser-sessions', method: 'GET', params: ['cwd'], response: '{cwd, sessions, ports, sessionsFileFound, portsFileFound}' },
   { path: '/api/lifecycle/response', method: 'GET', params: ['cwd', 'verb', 'file'], response: '{ok, cwd, verb, file, response} | 404 if not yet written' },
-  { path: '/api/stream', method: 'GET', params: [], response: 'text/event-stream SSE: event/data frames of kind "event"|"error"|"hello"|"project.added"|"project.removed"' },
+  { path: '/api/stream', method: 'GET', params: [], response: 'text/event-stream SSE: event/data frames of kind "event"|"error"|"hello"|"project.added"|"project.removed"|"project.phase-changed"' },
+  { path: '/api/projects/live-state', method: 'GET', params: [], response: '{projects: [{cwd, alive, phase, skill, instruction_key, instruction_heading, instruction_excerpt, instruction_tier, instruction_source_file, updated_ts, stale}]}' },
 ];
 
 export function createServer({ logDir = DEFAULT_LOG_DIR, port = 0, host = '127.0.0.1' } = {}) {
@@ -949,6 +993,23 @@ export function createServer({ logDir = DEFAULT_LOG_DIR, port = 0, host = '127.0
           ...proj,
           watching: watchedKeys.has(path.resolve(proj.cwd).replace(/\\/g, '/').toLowerCase()),
         }));
+        return send(res, 200, { projects });
+      }
+      if (p === '/api/projects/live-state') {
+        const base = discoverProjects(store.events);
+        const projects = base.map(proj => {
+          const phaseState = readLivePhaseState(proj.cwd);
+          const key = phaseState.instruction_heading ? phaseState.instruction_heading.toLowerCase().replace('update-docs', 'update_docs') : null;
+          const tier = phaseState.present ? resolveInstructionTier(proj.cwd, key) : { tier: 'default', file_path: null, source_repo: null };
+          return {
+            cwd: proj.cwd, alive: proj.alive,
+            phase: phaseState.phase, skill: phaseState.skill,
+            instruction_key: key, instruction_heading: phaseState.instruction_heading,
+            instruction_excerpt: phaseState.instruction_excerpt,
+            instruction_tier: tier.tier, instruction_source_file: tier.file_path, instruction_source_repo: tier.source_repo,
+            updated_ts: phaseState.updated_ts, stale: phaseState.stale, present: phaseState.present, unparseable: !!phaseState.unparseable,
+          };
+        });
         return send(res, 200, { projects });
       }
       if (p === '/api/health-summary') {

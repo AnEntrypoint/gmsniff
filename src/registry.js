@@ -233,6 +233,93 @@ export function readPrdMutablesState(cwd) {
   return out;
 }
 
+// Maps a served instruction's leading markdown heading to the skill that drives it. gm/
+// gm-continue/wfgy-method are the only skills that mutate .gm state today; PLAN/EXECUTE/EMIT/
+// VERIFY/CONSOLIDATE/UPDATE-DOCS headings are all phases inside the gm skill's own walk.
+const PHASE_HEADING_TO_SKILL = {
+  PLAN: 'gm', EXECUTE: 'gm', EMIT: 'gm', VERIFY: 'gm', CONSOLIDATE: 'gm', 'UPDATE-DOCS': 'gm',
+};
+
+// mtime-gated per-cwd cache mirroring readPrdMutablesState's shape -- next-step.md is polled
+// once per project per SSE tick, so a cheap statSync-only short-circuit avoids re-parsing
+// unchanged content on every poll.
+const _phaseStateCache = new Map(); // cwd -> { mtime, value }
+
+// Reads .gm/next-step.md (written by rs-plugkit on every phase/instruction change) and returns
+// the live phase + skill + a short excerpt of the currently-served instruction prose. Real
+// on-disk shape: "# Next step\n\nPhase: <PHASE>\nUpdated: <epoch-ms>\n\n---\n\n# <PHASE>\n<prose>".
+export function readLivePhaseState(cwd) {
+  const nextStepPath = path.join(cwd, '.gm', 'next-step.md');
+  const mtime = statMtimeMs(nextStepPath);
+  if (mtime === null) return { phase: null, skill: null, instruction_heading: null, instruction_excerpt: null, updated_ts: null, stale: true, present: false };
+  const cached = _phaseStateCache.get(cwd);
+  if (cached && cached.mtime === mtime) return cached.value;
+
+  let value;
+  try {
+    const text = fs.readFileSync(nextStepPath, 'utf-8');
+    const phaseMatch = text.match(/^Phase:\s*(.+)$/m);
+    const updatedMatch = text.match(/^Updated:\s*(\d+)$/m);
+    const bodyIdx = text.indexOf('\n---\n');
+    const body = bodyIdx >= 0 ? text.slice(bodyIdx + 5).trimStart() : '';
+    const headingMatch = body.match(/^#\s*(.+?)\s*$/m);
+    const heading = headingMatch ? headingMatch[1].trim().toUpperCase() : null;
+    const phase = phaseMatch ? phaseMatch[1].trim() : heading;
+    const updated_ts = updatedMatch ? Number(updatedMatch[1]) : null;
+    // long_gap_threshold_ms is the project's own served staleness bound (turn-summary.json,
+    // default 300000ms); fall back to that default when the summary is unavailable rather than
+    // guessing a different number here.
+    let threshold = 300000;
+    try {
+      const summary = JSON.parse(fs.readFileSync(path.join(cwd, '.gm', 'exec-spool', '.turn-summary.json'), 'utf-8'));
+      if (summary && Number.isFinite(summary.long_gap_threshold_ms)) threshold = summary.long_gap_threshold_ms;
+    } catch (_) {}
+    value = {
+      phase: phase || null,
+      skill: heading ? (PHASE_HEADING_TO_SKILL[heading] || null) : null,
+      instruction_heading: heading,
+      instruction_excerpt: body.slice(0, 500),
+      updated_ts,
+      stale: updated_ts === null ? true : (Date.now() - updated_ts) > threshold,
+      present: true,
+    };
+  } catch (_) {
+    // Partial write mid-update or unreadable content -- fail open to an unparseable-but-present
+    // state rather than throwing, so one bad project's file doesn't break every other row.
+    value = { phase: null, skill: null, instruction_heading: null, instruction_excerpt: null, updated_ts: null, stale: true, present: true, unparseable: true };
+  }
+  _phaseStateCache.set(cwd, { mtime, value });
+  return value;
+}
+
+// Resolves which of the three prose.rs::resolve() tiers is actually serving a given
+// instruction key for this project: (1) .gm/instructions/<key>.md, a per-project vendored
+// override that always wins; (2) .gm/instructions/source.json + a matching
+// .gm/instructions-source-cache/<key>.md, synced from a configured source repo; (3) neither,
+// meaning the compiled default baked into the wasm guest is what's actually serving it. Covers
+// both the phase-prose keys (plan/execute/emit/verify/consolidate/update_docs/entry/browser)
+// and the gate/residual namespace (gates/<name>, residual/<name>), which resolve through the
+// identical chain per AGENTS.md.
+export function resolveInstructionTier(cwd, key) {
+  if (!key) return { tier: 'default', file_path: null, source_repo: null };
+  const vendoredPath = path.join(cwd, '.gm', 'instructions', `${key}.md`);
+  if (fs.existsSync(vendoredPath)) return { tier: 'vendored', file_path: vendoredPath, source_repo: null };
+
+  try {
+    const sourceJsonPath = path.join(cwd, '.gm', 'instructions', 'source.json');
+    const source = JSON.parse(fs.readFileSync(sourceJsonPath, 'utf-8'));
+    const cachePath = path.join(cwd, '.gm', 'instructions-source-cache', `${key}.md`);
+    if (fs.existsSync(cachePath)) {
+      return { tier: 'source-synced', file_path: cachePath, source_repo: source && source.repo ? source.repo : null };
+    }
+  } catch (_) {}
+
+  // source.json present but no matching cache file for this specific key still falls through
+  // to the compiled default -- the per-key cache miss, not the presence of source.json alone,
+  // is what determines the real serving tier.
+  return { tier: 'default', file_path: null, source_repo: null };
+}
+
 function canon(p) {
   return p && path.resolve(p).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
 }

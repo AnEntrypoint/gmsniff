@@ -6,7 +6,7 @@
 
 import * as webjsx from 'webjsx';
 import { Chip, Badge, Pill, Btn, Glyph } from 'ds/components/shell.js';
-import { PhaseWalk, TreeNode, BarRow, StatTile, StatsGrid, SubGrid, SessionRow, DevRow, LiveLog } from 'ds/components/data-density.js';
+import { PhaseWalk, DEFAULT_PHASES, TreeNode, BarRow, StatTile, StatsGrid, SubGrid, SessionRow, DevRow, LiveLog } from 'ds/components/data-density.js';
 import { TreeView, TreeItem, PropertyGrid, PropertyField, Dialog, JsonViewer } from 'ds/components/editor-primitives.js';
 import { api, apiPost, esc, fmtTs, state, toast } from './data.js';
 import { runForceLayout } from './forcegraph.js';
@@ -525,6 +525,112 @@ export function SessionDetailDialog(setBody) {
     actions: [{ label: 'Close', onClick: () => closeSessionDetail(setBody) }],
     children: body,
   });
+}
+
+// ---------------------------------------------------------------------------
+// SKILL LAYOUT / LIVE AGENTS -- shows every discovered project's current
+// phase/skill/served-instruction at a glance, with a drilldown into the full
+// instruction text and which of the three resolve tiers (vendored override,
+// source-synced cache, compiled default) is actually serving it. Backed by
+// GET /api/projects/live-state and live-updated via the 'project.phase-
+// changed' SSE frame (see app.js's stream handler).
+// ---------------------------------------------------------------------------
+const PHASE_TONE = {
+  PLAN: 'var(--sky, #79c0ff)', EXECUTE: 'var(--accent, #58a6ff)', EMIT: 'var(--purple, #bc8cff)',
+  VERIFY: 'var(--yellow, #d29922)', CONSOLIDATE: 'var(--orange, #ffa657)', COMPLETE: 'var(--green, #3fb950)',
+};
+const TIER_TONE = { vendored: 'var(--orange, #ffa657)', 'source-synced': 'var(--purple, #bc8cff)', default: 'var(--fg-muted, #8b949e)' };
+const TIER_LABEL = { vendored: 'vendored override', 'source-synced': 'source-synced', default: 'compiled default' };
+
+const skillLayoutState = { filter: '' };
+const skillDrilldownState = { open: false, project: null };
+
+function openSkillDrilldown(project, setBody) {
+  skillDrilldownState.open = true;
+  skillDrilldownState.project = project;
+  setBody();
+}
+
+function closeSkillDrilldown(setBody) {
+  skillDrilldownState.open = false;
+  skillDrilldownState.project = null;
+  setBody();
+}
+
+export function SkillDrilldownDialog(setBody) {
+  const s = skillDrilldownState;
+  if (!s.open || !s.project) return null;
+  const p = s.project;
+  const tierTone = TIER_TONE[p.instruction_tier] || TIER_TONE.default;
+  const body = h('div', {},
+    h('div', { class: 'gm-mb-12' },
+      Pill({ children: p.phase || 'no phase' }),
+      Pill({ children: p.skill || 'no skill' }),
+      p.stale ? Pill({ children: 'stale' }) : null,
+      !p.alive ? Pill({ children: 'stopped' }) : null),
+    h('div', { class: 'gm-mb-12', style: `color:${tierTone}; font-weight:600;` },
+      TIER_LABEL[p.instruction_tier] || p.instruction_tier,
+      p.instruction_source_file ? h('div', { class: 'gm-mt-4', style: 'font-weight:400; font-family:monospace; font-size:0.85em; word-break:break-all;' }, esc(p.instruction_source_file)) : null,
+      p.instruction_source_repo ? h('div', { class: 'gm-mt-4', style: 'font-weight:400;' }, 'synced from: ' + esc(p.instruction_source_repo)) : null),
+    h('h2', { class: 'gm-mt-10' }, 'Served instruction (' + (p.instruction_key || 'unknown') + ')'),
+    p.unparseable
+      ? h('p', { class: 'gm-text-danger' }, 'next-step.md present but could not be parsed (partial write or malformed content).')
+      : !p.present
+        ? Empty('No active agent -- next-step.md not found for this project.')
+        : h('pre', { class: 'gm-code-block', style: 'white-space:pre-wrap; max-height:400px; overflow:auto;' }, esc(p.instruction_excerpt || '')));
+  return Dialog({
+    title: (p.cwd || '').split(/[\\/]/).filter(Boolean).pop() || p.cwd,
+    open: true, dismissible: true, ariaLabel: 'Instruction drilldown',
+    onClose: () => closeSkillDrilldown(setBody),
+    actions: [{ label: 'Close', onClick: () => closeSkillDrilldown(setBody) }],
+    children: body,
+  });
+}
+
+function skillLayoutRow(p, setBody) {
+  const phaseIdx = DEFAULT_PHASES.indexOf(p.phase);
+  const reached = DEFAULT_PHASES.map((_, i) => phaseIdx >= 0 && i <= phaseIdx);
+  const tierTone = TIER_TONE[p.instruction_tier] || TIER_TONE.default;
+  const name = (p.cwd || '').split(/[\\/]/).filter(Boolean).pop() || p.cwd;
+  return h('div', {
+    class: 'ds-session-row', key: p.cwd, role: 'button', tabindex: '0',
+    onclick: () => openSkillDrilldown(p, setBody),
+    onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openSkillDrilldown(p, setBody); } },
+  },
+    h('div', { class: 'gm-flex-between' },
+      h('strong', {}, name),
+      h('span', {},
+        !p.alive ? Pill({ children: 'stopped' }) : (p.present ? Pill({ children: p.phase || '(no phase)' }) : Pill({ children: 'no active agent' })),
+        p.instruction_tier ? h('span', { class: 'gm-ml-6', style: `color:${tierTone};` }, TIER_LABEL[p.instruction_tier] || p.instruction_tier) : null)),
+    p.present ? PhaseWalk({ reached }) : null,
+    p.skill ? h('div', { class: 'gm-mt-4', style: 'opacity:0.75;' }, 'skill: ' + esc(p.skill) + (p.instruction_key ? ' / ' + esc(p.instruction_key) : '')) : null,
+    p.instruction_excerpt ? h('div', { class: 'gm-mt-4', style: 'opacity:0.6; font-size:0.85em;' }, esc(p.instruction_excerpt.slice(0, 140)) + (p.instruction_excerpt.length > 140 ? '...' : '')) : null);
+}
+
+export async function SkillLayout(setBody) {
+  const r = await api('/api/projects/live-state');
+  if (r.error) return Empty('Failed to load live agent state: ' + r.error);
+  const projects = r.projects || [];
+  if (!projects.length) return Empty('No projects discovered yet.');
+
+  const filterVal = skillLayoutState.filter.toLowerCase();
+  const filtered = filterVal
+    ? projects.filter(p => [(p.cwd || ''), (p.phase || ''), (p.skill || ''), (p.instruction_key || '')].some(f => f.toLowerCase().includes(filterVal)))
+    : projects;
+
+  return h('div', {},
+    h('h2', {}, 'Skill Layout / Live Agents'),
+    Toolbar(
+      h('input', {
+        class: 'gm-input', type: 'text', placeholder: 'Filter by cwd / phase / skill...',
+        value: skillLayoutState.filter,
+        oninput: (e) => { skillLayoutState.filter = e.target.value; setBody(); },
+      })),
+    h('p', { class: 'gm-mt-4', style: 'opacity:0.7;' }, `${filtered.length} of ${projects.length} projects`),
+    filtered.length
+      ? h('div', { class: 'gm-mt-10' }, ...filtered.map(p => skillLayoutRow(p, setBody)))
+      : Empty('No projects match this filter.'),
+    SkillDrilldownDialog(setBody));
 }
 
 export async function Sessions(onOpen, setBody) {

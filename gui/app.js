@@ -9,13 +9,14 @@ import {
   Deviations, Sessions, ProcessTree, QueryPanel, RecallStats, ExecStats, HookStats,
   PrdEditor, MutablesEditor, LifecycleControl, RsTools, Codesearch, GmCallConsole,
   BrowserSessions, ConversationHistory, CodeInsightPanel, MemoryGraphPanel, stopMemoryGraphLayout, SUB_LIST,
-  lifecycleAct, runCodesearch, dispatchConsole, liveStreamDebugSnapshot,
+  lifecycleAct, runCodesearch, dispatchConsole, liveStreamDebugSnapshot, SkillLayout,
 } from './panels.js';
 
 const h = webjsx.createElement;
 const root = document.getElementById('root');
 
 const NAV = {
+  'skill-layout': 'Skill Layout',
   overview: 'Dashboard', days: 'By Day', live: 'Live Stream', events: 'All Events', 'search-panel': 'Search',
   deviations: 'Deviations', sessions: 'Sessions', tree: 'Process Tree', query: 'Query',
   'recall-panel': 'Recall Stats', 'exec-panel': 'Exec Stats', 'hooks-panel': 'Hook Stats',
@@ -266,7 +267,7 @@ function renderShell() {
   const advCount = advSections.reduce((n, s) => n + s.items.length, 0);
   const side = Side({
     sections: [
-      { group: 'Daily', items: [navItem('overview', 'Dashboard'), navItem('live', 'Live Stream'), navItem('deviations', 'Deviations', ui.devTotal || null), navItem('sessions', 'Sessions')] },
+      { group: 'Daily', items: [navItem('skill-layout', 'Skill Layout'), navItem('overview', 'Dashboard'), navItem('live', 'Live Stream'), navItem('deviations', 'Deviations', ui.devTotal || null), navItem('sessions', 'Sessions')] },
       { group: 'Investigate', items: [navItem('days', 'By Day'), navItem('events', 'All Events'), navItem('search-panel', 'Search'), navItem('tree', 'Process Tree'), navItem('conversations', 'Conversations'), navItem('query', 'Query')] },
       { group: 'Advanced', items: [{ label: navAdvanced ? 'Hide advanced' : 'Show advanced', href: '#', onClick: toggleAdvanced, count: navAdvanced ? null : advCount }] },
       ...(navAdvanced ? advSections : []),
@@ -353,6 +354,7 @@ async function computeBody(force) {
   const p = ui.panel;
   const setBody = (f) => renderBody(f);
   if (p !== 'memory-graph') stopMemoryGraphLayout();
+  if (p === 'skill-layout') return SkillLayout(setBody);
   if (p === 'overview') return Dashboard({ onNav: go, devTotal: ui.devTotal, health: ui.health });
   if (p === 'days') return ByDay();
   if (p === 'live') return LiveStream({ connState: ui.connState }, setBody);

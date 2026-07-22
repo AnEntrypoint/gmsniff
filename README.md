@@ -24,6 +24,8 @@ gmsniff --tree <sess>                # drill into one session chronologically
 
 The GUI opens on a Dashboard that leads with a "Projects now" glance (watcher liveness, PRD pending, unresolved mutables, deviation rate per project) and quick links into Live Stream, Deviations, and Sessions. The sidebar is tiered daily-first: Daily and Investigate groups always show; Subsystems, Analytics, and Control panels sit behind a collapsed "Show advanced" toggle. Every panel stays reachable via the Ctrl+K command palette and `#panel=` deep links regardless of the toggle.
 
+**Skill Layout** (`#panel=skill-layout`, top of the Daily group) shows every discovered project's live agent state at a glance: current phase on a PLAN->EXECUTE->EMIT->VERIFY->CONSOLIDATE->COMPLETE step indicator, current skill, and a preview of the instruction text the daemon is actually serving that project right now, color-coded and filterable by cwd/phase/skill. Clicking a project opens a drilldown with the full served instruction text and which of the three resolve tiers is serving it -- a `vendored override` (a per-project `.gm/instructions/<key>.md` file, shown with its exact path), `source-synced` (pulled from a configured upstream repo's cache), or the `compiled default` baked into the wasm guest -- so a surprising local override is never invisible. Live-updates via SSE (`project.phase-changed` frames) as agents progress, no manual refresh needed.
+
 ## Investigation
 
 When the glance shows something worth chasing:
