@@ -33,7 +33,7 @@ gmsniff --stats --since 24h          # breakdown by sub / event / sess / day
 gmsniff --list-events --sub plugkit  # event-type histogram
 gmsniff --efficiency <sess>          # turn count, dispatch ratio, time-to-COMPLETE
 gmsniff --updates                    # live drift state + update.* history
-gmsniff --watchers                   # liveness + version per project
+gmsniff --watchers                   # liveness + version per project -- recognizes both the legacy per-project JS-wrapper status shape (version+wrapper_sha) and the current agentplug shared-daemon shape (runtime:"agentplug", shared_process:true, one process serving many project cwds), badging shared daemons as shared:<pid>
 gmsniff --projects                   # PRD-pending + unresolved mutables per project
 gmsniff --rollup out.ndjson --since 7d
 ```
