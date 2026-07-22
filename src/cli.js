@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { GmLogWatcher, MultiProjectWatcher, replayAll, DEFAULT_LOG_DIR } from './index.js';
+import { readWatcherStatus } from './registry.js';
 
 const PHASES = ['PLAN', 'EXECUTE', 'EMIT', 'VERIFY', 'CONSOLIDATE', 'COMPLETE'];
 
@@ -420,24 +421,6 @@ function sortRows(rows, key, reverse) {
   rows.sort((a, b) => { const x = get(a), y = get(b); return x < y ? -1 : x > y ? 1 : 0; });
   if (reverse) rows.reverse();
   return rows;
-}
-
-function readWatcherStatus(cwd) {
-  try {
-    const j = JSON.parse(fs.readFileSync(path.join(cwd, '.gm', 'exec-spool', '.status.json'), 'utf-8'));
-    if (!j || !j.pid) return null;
-    let alive = false;
-    try { process.kill(j.pid, 0); alive = true; } catch (_) {}
-    const age = j.ts ? Date.now() - j.ts : null;
-    // Two live .status.json shapes: legacy per-project JS-wrapper (version + wrapper_sha,
-    // one process per project) and the current agentplug shared daemon (runtime:"agentplug",
-    // shared_process:true, one process serving many project cwds, no version/wrapper_sha field
-    // at all since the wasm guest it serves updates independently of the runner binary).
-    // version presence alone previously gated aliveness display, silently dropping every
-    // agentplug-driven project (the entire current-generation fleet) from --watchers/--conformance.
-    const runtime = j.runtime || (j.version ? 'wrapper' : null);
-    return { pid: j.pid, version: j.version || null, wrapper_sha: j.wrapper_sha || null, idle_limit_ms: j.idle_limit_ms || null, runtime, shared_process: !!j.shared_process, alive, age_ms: age };
-  } catch (_) { return null; }
 }
 
 function readPrdMutablesState(cwd) {

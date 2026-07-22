@@ -182,7 +182,15 @@ export function readWatcherStatus(cwd) {
     let alive = false;
     try { process.kill(j.pid, 0); alive = true; } catch (_) {}
     const age = j.ts ? Date.now() - j.ts : null;
-    return { pid: j.pid, version: j.version, wrapper_sha: j.wrapper_sha || null, idle_limit_ms: j.idle_limit_ms || null, alive, age_ms: age };
+    // Two live .status.json shapes: legacy per-project JS-wrapper (version + wrapper_sha,
+    // one process per project) and the current agentplug shared daemon (runtime:"agentplug",
+    // shared_process:true, one process serving many project cwds, no version/wrapper_sha field
+    // at all since the wasm guest it serves updates independently of the runner binary).
+    // version presence alone previously gated aliveness display, silently dropping every
+    // agentplug-driven project (the entire current-generation fleet) from callers wanting to
+    // label/badge the daemon (e.g. the GUI's health-summary route).
+    const runtime = j.runtime || (j.version ? 'wrapper' : null);
+    return { pid: j.pid, version: j.version || null, wrapper_sha: j.wrapper_sha || null, idle_limit_ms: j.idle_limit_ms || null, runtime, shared_process: !!j.shared_process, alive, age_ms: age };
   } catch (_) { return null; }
 }
 
