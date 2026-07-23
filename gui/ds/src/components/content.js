@@ -6,6 +6,18 @@ import * as webjsx from '../../vendor/webjsx/index.js';
 import { Btn, Heading, Lede, Dot, Icon } from './shell.js';
 const h = webjsx.createElement;
 
+// Avatar — generic identity disc: an image when `src` resolves, else a
+// letter fallback derived from `name`/`fallback`. Kit previously only had
+// scoped one-offs (chat.js `.chat-avatar`, community.js `.cm-user-avatar`)
+// duplicating this same letter-fallback logic; this is the reusable version.
+export function Avatar({ name, src, fallback, size = 'md', key } = {}) {
+    const letter = fallback != null ? fallback
+        : (name ? String(name).trim().charAt(0).toUpperCase() || '?' : '?');
+    const cls = 'ds-avatar ds-avatar-' + size;
+    if (src) return h('img', { key, class: cls, src, alt: name || '', loading: 'lazy' });
+    return h('span', { key, class: cls, 'aria-hidden': !!name, role: name ? 'img' : undefined, 'aria-label': name || undefined }, letter);
+}
+
 export function Panel({ title, count, right, style = '', class: className = '', children, kind, id }) {
     const cls = 'panel' + (kind ? ' panel-' + kind : '') + (className ? ' ' + className : '');
     return h('div', { class: cls, style, id: id || null },
@@ -107,13 +119,20 @@ export function Row({ code, rank, title, sub, meta, active, state = 'default', o
     const railWord = rail === 'flame' ? 'error' : rail === 'purple' ? 'subagent' : null;
     // `detail` renders as a sibling block AFTER the title/meta children (its own
     // line via flex-basis:100% in .ds-row-detail), not inside the title span.
+    // The same `highlight` search term that marks matches in the collapsed
+    // title previously stopped applying the moment a row expanded - the
+    // expanded body (often the ONLY place a match beyond the 220-char title
+    // window is actually visible) rendered as plain unmarked text.
+    const detailNode = (highlight && typeof detail === 'string')
+        ? h('span', {}, ...[].concat(highlightTitle(detail, highlight)))
+        : detail;
     return h(isLink ? 'a' : 'div', props,
         railWord ? h('span', { class: 'sr-only' }, railWord) : null,
         leading != null ? leading : (codeVal != null ? h('span', { class: 'code' }, codeVal) : null),
-        h('span', { class: 'title' }, titleNode, sub ? h('span', { class: 'sub' }, sub) : null),
+        h('span', { class: 'title', title: typeof title === 'string' ? title : undefined }, titleNode, sub ? h('span', { class: 'sub', title: typeof sub === 'string' ? sub : undefined }, sub) : null),
         trailing != null ? trailing : (meta != null ? h('span', { class: 'meta' }, meta) : null),
         actionRow,
-        detail != null ? h('pre', { class: 'ds-row-detail' }, detail) : null);
+        detail != null ? h('pre', { class: 'ds-row-detail' }, detailNode) : null);
 }
 
 export function RowLink({ code, title, sub, meta, href = '#', key, target }) {
@@ -154,9 +173,18 @@ export function Section({ title, eyebrow, children, id }) {
     );
 }
 
-export function Hero({ eyebrow, title, body, accent, actions }) {
+export function Hero({ eyebrow, title, body, accent, actions, badges }) {
     // Eyebrow + title share the title grid-area so the named-area layout stays
-    // intact; body and actions occupy the offset lower columns.
+    // intact; body occupies the wide left column, badges + actions stack in
+    // the narrow right column so it carries real visual weight instead of
+    // sitting empty beside the body copy.
+    const badgeList = Array.isArray(badges) ? badges.filter(Boolean) : [];
+    const badgeRow = badgeList.length
+        ? h('div', { class: 'ds-hero-stats' }, ...badgeList.map((b, i) =>
+            h('span', { key: 'hb' + i, class: 'ds-hero-stat' }, String(b && b.label != null ? b.label : b))))
+        : null;
+    const actionRow = actions ? h('div', { class: 'ds-hero-actions' }, ...(Array.isArray(actions) ? actions : [actions])) : null;
+    const aside = (badgeRow || actionRow) ? h('div', { class: 'ds-hero-aside' }, badgeRow, actionRow) : null;
     return h('div', { class: 'ds-hero' },
         h('div', { class: 'ds-hero-head' },
             eyebrow ? h('span', { class: 'eyebrow' }, eyebrow) : null,
@@ -166,7 +194,7 @@ export function Hero({ eyebrow, title, body, accent, actions }) {
             body,
             accent ? h('span', { class: 'ds-hero-accent' }, ' ' + accent) : null
         ) : null,
-        actions ? h('div', { class: 'ds-hero-actions' }, ...(Array.isArray(actions) ? actions : [actions])) : null
+        aside
     );
 }
 
@@ -224,9 +252,9 @@ export function HeroFromPageData(hero) {
             hero.body,
             hero.accent ? h('span', { class: 'ds-hero-accent' }, ' ' + hero.accent) : null,
         ) : null,
-        installRow,
-        ctaRow,
-        badgeRow,
+        (badgeRow || ctaRow || installRow)
+            ? h('div', { class: 'ds-hero-aside' }, badgeRow, installRow, ctaRow)
+            : null,
     );
 }
 
@@ -258,13 +286,17 @@ export function Install({ cmd, copied, onCopy }) {
 // every portfolio consumer theme.mjs (zellous/wireweave/247420) had hand-rolled
 // identically: lines.map((l,i) => a div per line holding a prompt span ('$' or
 // '#' for a comment line) and a cmd span, all wrapped in a Panel. This factory
-// targets the multi-line `.cli` contract already defined in app-shell.css and
-// gm-prose.css (`.cli` holding `.ds-cli-row` rows — each a prompt+cmd pair —
-// and `.ds-cli-comment` comment rows). `lines` is [{kind, text}] where kind: 'cmt' renders a
+// targets the multi-line `.ds-cli-block` contract defined in gm-prose.css
+// (`.ds-cli-block` holding `.ds-cli-row` rows — each a prompt+cmd pair — and
+// `.ds-cli-comment` comment rows). `lines` is [{kind, text}] where kind: 'cmt' renders a
 // comment-only row (no prompt glyph); any other kind (or omitted) renders a
 // command row prefixed '$'. `heading` titles the wrapping Panel ('quick start'
 // default, matching every hand-rolled instance); pass `heading: null` to
-// render the bare `.cli` block with no Panel chrome.
+// render the bare `.ds-cli-block` block with no Panel chrome.
+// Note: this is a different component than the bare `.cli` single prompt+cmd
+// row primitive (app-shell.css; see Install() above and the per-line usage
+// in terminal/site quickstart renderers) — the two used to collide on the
+// same `.cli` class name with incompatible display models.
 export function CliBlock({ lines = [], heading = 'quick start', className = '' } = {}) {
     if (!lines || !lines.length) return null;
     const rows = lines.map((l, i) => {
@@ -276,7 +308,7 @@ export function CliBlock({ lines = [], heading = 'quick start', className = '' }
                 h('span', { class: 'prompt' }, '$'),
                 h('span', { class: 'cmd' }, text));
     });
-    const body = h('div', { class: 'cli' + (className ? ' ' + className : '') }, ...rows);
+    const body = h('div', { class: 'ds-cli-block' + (className ? ' ' + className : '') }, ...rows);
     return heading == null ? body : Panel({ title: heading, children: body });
 }
 
@@ -355,15 +387,50 @@ export function Manifesto({ paragraphs = [], maxWidth }) {
     );
 }
 
+// items: [n, label] or [n, label, {delta, tone: 'up'|'down', spark: number[]}]
+// meta is optional and additive — every existing 2-tuple call site is untouched.
 export function Kpi({ items = [], emptyText = 'no metrics yet' }) {
     if (!items.length) return h('div', { class: 'empty' }, emptyText);
-    return h('div', { class: 'kpi' }, ...items.map(([n, l], i) =>
+    return h('div', { class: 'kpi' }, ...items.map(([n, l, meta], i) =>
         h('div', { key: i, class: 'kpi-card' },
             h('div', { class: 'num' }, String(n)),
-            h('div', { class: 'lbl' }, l))));
+            h('div', { class: 'lbl' }, l),
+            meta && (meta.delta != null || meta.spark)
+                ? h('div', { class: 'kpi-foot' },
+                    meta.delta != null
+                        ? h('span', { class: 'kpi-delta kpi-delta-' + (meta.tone === 'down' ? 'down' : 'up') },
+                            Icon(meta.tone === 'down' ? 'arrow-down' : 'arrow-up', { size: 12 }),
+                            String(meta.delta))
+                        : null,
+                    meta.spark ? Sparkline({ values: meta.spark, tone: meta.tone }) : null)
+                : null)));
 }
 
-export function Table({ headers = [], rows = [], onRowClick, emptyText = 'nothing here yet', rowLabels }) {
+// Minimal inline SVG trend line — token-stroke only, no raw color literals.
+export function Sparkline({ values = [], width = 72, height = 24, tone }) {
+    if (!values.length) return null;
+    const max = Math.max(...values), min = Math.min(...values);
+    const span = (max - min) || 1;
+    const step = width / (values.length - 1 || 1);
+    const points = values.map((v, i) => [i * step, height - ((v - min) / span) * height]);
+    const d = points.map(([x, y], i) => (i === 0 ? 'M' : 'L') + x.toFixed(1) + ',' + y.toFixed(1)).join(' ');
+    return h('svg', { class: 'ds-sparkline ds-sparkline-' + (tone === 'down' ? 'down' : 'up'), viewBox: '0 0 ' + width + ' ' + height, width, height, 'aria-hidden': 'true' },
+        h('path', { d, fill: 'none', 'stroke-width': '2', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }));
+}
+
+// Horizontal token-only bar breakdown — e.g. revenue by channel, traffic by source.
+export function BarChart({ items = [], emptyText = 'no data yet' }) {
+    if (!items.length) return h('div', { class: 'empty' }, emptyText);
+    const max = Math.max(...items.map(it => it.value || 0)) || 1;
+    return h('div', { class: 'ds-barchart' }, ...items.map((it, i) =>
+        h('div', { key: i, class: 'ds-barchart-row' },
+            h('div', { class: 'ds-barchart-label' }, it.label),
+            h('div', { class: 'ds-barchart-track' },
+                h('div', { class: 'ds-barchart-fill', style: '--bar-pct:' + Math.round((it.value / max) * 100) + '%' })),
+            h('div', { class: 'ds-barchart-value' }, it.display != null ? it.display : String(it.value)))));
+}
+
+export function Table({ headers = [], rows = [], onRowClick, emptyText = 'nothing here yet', rowLabels, striped = false, compact = false, sortable = false, sortKey, sortDir = 'asc', onSort }) {
     if (!rows || rows.length === 0) return h('div', { class: 'empty' }, emptyText);
     // rowLabels lets callers supply a plain-text label per row when the first
     // cell is a vnode (so the aria-label is meaningful, not the literal 'row').
@@ -377,8 +444,26 @@ export function Table({ headers = [], rows = [], onRowClick, emptyText = 'nothin
     // risks overriding native semantics, so it is omitted.
     // Scroll containment lives on the component itself: a wide table used
     // outside a Panel must never force page-level horizontal scroll.
-    return h('div', { class: 'ds-table-wrap' }, h('table', {},
-        h('thead', {}, h('tr', {}, ...headers.map((hd, i) => h('th', { key: i, scope: 'col' }, hd)))),
+    // striped/compact are opt-in density modifiers (webgeist g-table parity) —
+    // default false so the existing contract/visual is byte-unchanged.
+    const wrapClass = 'ds-table-wrap' + (striped ? ' is-striped' : '') + (compact ? ' is-compact' : '');
+    // sortable is opt-in (default false, byte-unchanged for existing callers):
+    // a header becomes a real <button> announcing aria-sort, dispatching
+    // onSort(headerIndex) so the HOST owns the actual row-ordering logic (this
+    // component has no opinion on comparator/locale/type - it only renders the
+    // control and current state). A docstudio-style dense admin table needs
+    // sortable columns; Table previously had no way to express that at all.
+    const thFor = (hd, i) => {
+        if (!sortable || !onSort) return h('th', { key: i, scope: 'col' }, hd);
+        const isActive = sortKey === i;
+        const ariaSort = isActive ? (sortDir === 'desc' ? 'descending' : 'ascending') : 'none';
+        return h('th', { key: i, scope: 'col', 'aria-sort': ariaSort },
+            h('button', { type: 'button', class: 'ds-table-sort-btn' + (isActive ? ' is-active' : ''), onclick: () => onSort(i) },
+                h('span', { class: 'ds-table-sort-label' }, hd),
+                isActive ? Icon(sortDir === 'desc' ? 'chevron-down' : 'chevron-up', { size: 12 }) : null));
+    };
+    return h('div', { class: wrapClass }, h('table', {},
+        h('thead', {}, h('tr', {}, ...headers.map((hd, i) => thFor(hd, i)))),
         h('tbody', {}, ...rows.map((row, i) => h('tr', {
             key: i,
             class: onRowClick ? 'clickable' : '',
@@ -474,9 +559,12 @@ export function PageHeader({ title, lede, eyebrow, right, compact, dense, id }) 
     );
 }
 
-export function SearchInput({ value = '', placeholder = 'search…', onInput, onSubmit, name = 'q', key, label }) {
-    return h('input', {
-        key,
+export function SearchInput({ value = '', placeholder = 'search…', onInput, onSubmit, name = 'q', key, label, resultCount }) {
+    // Shared clear path — both the Escape key and the visible clear button
+    // call this, so there is exactly one place that clears the field.
+    const doClear = (e) => { if (onInput) onInput('', e); };
+    const input = h('input', {
+        key: 'i',
         type: 'search',
         name,
         class: 'ds-search-input',
@@ -484,12 +572,41 @@ export function SearchInput({ value = '', placeholder = 'search…', onInput, on
         'aria-label': label || placeholder,
         value,
         oninput: onInput ? (e) => onInput(e.target.value, e) : null,
-        // IME guard: the Enter that commits a CJK composition must not submit.
-        onkeydown: onSubmit ? (e) => { if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) onSubmit(e.target.value, e); } : null
+        onkeydown: (e) => {
+            // Escape clears the field in place (stays focused) rather than
+            // falling through to whatever ancestor Escape handler exists.
+            if (e.key === 'Escape' && value) { e.preventDefault(); e.stopPropagation(); doClear(e); return; }
+            // IME guard: the Enter that commits a CJK composition must not submit.
+            if (onSubmit && e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) onSubmit(e.target.value, e);
+        }
     });
+    // Visible clear (X) button — mouse/touch users have no way to discover the
+    // Escape-to-clear shortcut, so this surfaces the same clear path visibly.
+    // Only rendered when there's something to clear.
+    const clearBtn = value
+        ? h('button', {
+            key: 'clr', type: 'button', class: 'ds-search-clear',
+            'aria-label': 'clear search',
+            onclick: doClear,
+        }, Icon('x'))
+        : null;
+    // Always return the same wrapping shape regardless of whether resultCount/
+    // clearBtn are present this render - a conditional bare-input-vs-wrapped-
+    // span return here previously changed SearchInput's VElement type at the
+    // SAME keyed slot from render to render (e.g. typing into an empty filter
+    // makes resultCount go from undefined to a string), and webjsx's applyDiff
+    // has no way to morph one element type into another in place - it produced
+    // a corrupted merged DOM node carrying attributes from both shapes.
+    return h('span', { key, class: 'ds-search-input-wrap' },
+        input,
+        clearBtn,
+        resultCount != null ? h('span', { key: 'cnt', class: 'sr-only', role: 'status', 'aria-live': 'polite' }, resultCount) : null);
 }
 
-export function TextField({ label, value = '', type = 'text', placeholder = '', onInput, onChange, name, key, hint, multiline, rows = 4, maxLength, min, max, error, title, 'aria-label': ariaLabel, 'aria-invalid': ariaInvalid, 'aria-describedby': ariaDescribedBy }) {
+export function TextField({ label, value = '', type = 'text', placeholder = '', onInput, onChange, name, key, hint, multiline, rows = 4, maxLength, min, max, error, title, size = 'md', 'aria-label': ariaLabel, 'aria-invalid': ariaInvalid, 'aria-describedby': ariaDescribedBy }) {
+    // size: 'sm' | 'md' | 'lg' — md is the base .ds-field control; sm/lg add a
+    // wrapper modifier that snaps the control height/padding/font to --ctl-*.
+    const sizeCls = size === 'sm' ? ' ds-field--sm' : (size === 'lg' ? ' ds-field--lg' : '');
     const errorId = error != null ? ((key ? key : 'tf') + '-err') : null;
     const describedBy = ariaDescribedBy || errorId || null;
     const input = multiline
@@ -515,7 +632,7 @@ export function TextField({ label, value = '', type = 'text', placeholder = '', 
             oninput: onInput ? (e) => onInput(e.target.value, e) : null,
             onchange: onChange ? (e) => onChange(e.target.value, e) : null
         });
-    return h('label', { key, class: 'ds-field' },
+    return h('label', { key, class: 'ds-field' + sizeCls },
         ...[
             label != null ? h('span', { key: 'l', class: 'ds-field-label' }, label) : null,
             input,
@@ -526,7 +643,8 @@ export function TextField({ label, value = '', type = 'text', placeholder = '', 
     );
 }
 
-export function Select({ label, value = '', options = [], onChange, name, key, placeholder, hint, title, 'aria-label': ariaLabel }) {
+export function Select({ label, value = '', options = [], onChange, name, key, placeholder, hint, title, size = 'md', 'aria-label': ariaLabel }) {
+    const sizeCls = size === 'sm' ? ' ds-field--sm' : (size === 'lg' ? ' ds-field--lg' : '');
     const opts = [];
     if (placeholder != null) opts.push(h('option', { key: '_ph', value: '', disabled: true, selected: value === '' || value == null }, placeholder));
     for (const o of options) {
@@ -541,8 +659,9 @@ export function Select({ label, value = '', options = [], onChange, name, key, p
         title,
         onchange: onChange ? (e) => onChange(e.target.value, e) : null
     }, ...opts);
-    if (label == null && hint == null) return select;
-    return h('label', { key, class: 'ds-field' },
+    if (label == null && hint == null && size === 'md') return select;
+    if (label == null && hint == null) return h('label', { key, class: 'ds-field' + sizeCls }, select);
+    return h('label', { key, class: 'ds-field' + sizeCls },
         label != null ? h('span', { key: 'l', class: 'ds-field-label' }, label) : null,
         select,
         hint != null ? h('span', { key: 'h', class: 'ds-field-hint' }, hint) : null

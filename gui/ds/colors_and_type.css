@@ -30,7 +30,7 @@
      forward of the heritage green; green/purple/mascot demote to print-ink
      category roles. */
   --acid:        #B6FF1B;
-  --acid-deep:   #4E7A00; /* AA text tone of the lead on paper */
+  --acid-deep:   #4E4200; /* AA text tone of the lead on paper (WCAG-verified: #4E7A00 measured 4.21:1 against --accent-tint's own color-mix() output, which derives FROM --acid-deep -- so a small darkening shifts both foreground and background together and converges too slowly; #4E4200 is the minimal shade that actually clears 4.5:1 against its own self-referential tint background) */
   --green:       #247420;
   --green-2:     #3A9A34;
   --green-deep:  #133F10;
@@ -51,9 +51,21 @@
      the originals (#FF5A1F / #D9A93A) which were tuned on ink and fail on
      paper (2.9:1 / 2.0:1). */
   --flame:       #C53E00;
-  --amber:       #8A6512;
+  /* #8A6512 measured 4.5+:1 on --paper but only 4.26:1 on --bg-2, which the
+     dashboard card status text actually renders on - darkened for margin on
+     both backgrounds (5.21:1 on --bg-2). */
+  --amber:       #7C570F;
   --sky:         #3A6EFF;
-  --warn:        #E0241A;
+  /* --warn = interactive danger controls (buttons, banners, menus, error
+     inputs); --danger below = passive error/status text and metrics
+     (kpi/sparkline deltas, auth-error text). Two tokens, one convention.
+     #E0241A measured 4.19:1 on --paper — fails WCAG AA 4.5:1 for the many
+     TEXT usages (.field-error, .ds-btn-warn, .ds-stat-val.err-rate, toast/
+     session error labels), not just the interactive-control (>=3:1) usages.
+     Darkened to clear AA on --paper (5.29:1), --paper-2 (4.78:1), and the
+     thebird warm-paper preset (5.25:1) while staying visually a clear
+     warm red. */
+  --warn:        #C41C0C;
   /* Syntax-token aliases: light values pass 4.5:1 on paper; the dark blocks
      restore the bright dark-tuned originals. Components reference ONLY these. */
   --code-string:  var(--green);
@@ -61,7 +73,11 @@
   --code-fn:      #B84300;
   --code-str-alt: var(--mascot-deep);
   --code-num:     #946300;
-  --danger:      oklch(0.55 0.18 25);
+  /* 0.55 lightness measured 4.70:1 on --paper but only 4.25:1 on --bg-2 (the
+     auth-error banner's actual background) - darkened for AA margin on both.
+     --danger = passive error/status text and metrics; --warn above =
+     interactive danger controls. */
+  --danger:      oklch(0.50 0.18 25);
   --success:     var(--green-2);
   --live:        var(--green);
 
@@ -80,7 +96,11 @@
   --accent-fg:   var(--ink);
   --accent-ink:  var(--acid-deep);
   --accent-bright: var(--acid); /* base value so var(--accent-bright) never falls back empty; ink + [data-accent] retune it */
-  --accent-tint: color-mix(in oklab, var(--accent) 30%, var(--bg));
+  /* Blends --accent-ink (the readable/darker ink variant), not the raw
+     --accent fill, so light-theme active states clear contrast against --bg;
+     dark/ink and auto-dark restate the prior --accent-based value explicitly
+     below so this change does not leak into them via inheritance. */
+  --accent-tint: color-mix(in oklab, var(--accent-ink) 22%, var(--bg));
 
   /* On-color foregrounds — text/icons that sit ON a saturated fill (accent,
      danger, category chips). Theme-driven so white-on-color never hard-codes
@@ -170,7 +190,9 @@
   --space-1-75:  6px;
   --space-2:     8px;
   --space-2-5:   10px;
+  --space-2-75:  12px;   /* fills the 10->16 hole (row-form gap, dense cell pad) */
   --space-3:     16px;
+  --space-3-5:   20px;   /* fills the 16->24 hole (settings body, mono block pad) */
   --space-4:     24px;
   --space-5:     32px;
   --space-6:     48px;
@@ -214,12 +236,11 @@
   --ease-exit:   cubic-bezier(0.4, 0, 1, 1);
 
   /* Print texture — the signature surface treatment. --grain is a tiled
-     fractal-noise data-URI; --halftone is a dot screen. Both are opt-in via
-     .ds-grain / .ds-halftone utilities and tuned faint so type stays crisp. */
+     fractal-noise data-URI, opt-in via the .ds-grain utility and tuned faint
+     so type stays crisp. */
   --grain-opacity:    0.05;
   --grain-blend:      multiply;
   --grain:       url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
-  --halftone-size:    6px;
   /* Offset-ink registration — the small print-mark offset used on editorial
      edges (panel spine, expo numbering). A literal length, not a color. */
   --ink-offset:  3px;
@@ -244,6 +265,19 @@
   --size-sm:     32px;
   --size-base:   42px;
   --size-lg:     56px;
+
+  /* Dense control-height ladder — the actual heights front-door controls
+     (buttons, fields, rows) snap to, one rung tighter than the --size-*
+     chrome scale so app UI reads compact instead of marketing-scale. Density
+     scales them so [data-density=compact/spacious] moves every control at once.
+     Mirrors webgeist's 30/38/46 button ladder, retuned for this system. */
+  --ctl-sm:      calc(28px * var(--density));
+  --ctl-md:      calc(34px * var(--density));
+  --ctl-lg:      calc(42px * var(--density));
+  /* The canonical single-line input/select/searchfield height (== --ctl-md)
+     and the default list-row min-height, both density-aware. */
+  --field-height: var(--ctl-md);
+  --row-height:   calc(40px * var(--density));
 
   /* Unified focus-ring tokens (single source for the design system). Outset
      rings (the default) tokenize colour+width+offset; bordered text fields use
@@ -274,25 +308,26 @@
   outline-offset: var(--focus-offset);
 }
 
-/* Link focus-visible */
+/* Link focus-visible — all route through the single --focus-* token set so a
+   focus retune (colour/width/offset) happens in one place, never per selector. */
 a:focus-visible,
 [role="link"]:focus-visible {
-  outline: 2px solid var(--accent-ink);
-  outline-offset: 2px;
+  outline: var(--focus-w) solid var(--focus-color);
+  outline-offset: var(--focus-offset);
 }
 
 /* Form inputs with focus-visible */
 input:focus-visible,
 textarea:focus-visible,
 select:focus-visible {
-  outline: 2px solid var(--accent-ink);
-  outline-offset: 2px;
+  outline: var(--focus-w) solid var(--focus-color);
+  outline-offset: var(--focus-offset);
 }
 
 /* Interactive element focus-visible */
 [tabindex]:focus-visible {
-  outline: 2px solid var(--accent-ink);
-  outline-offset: 2px;
+  outline: var(--focus-w) solid var(--focus-color);
+  outline-offset: var(--focus-offset);
 }
 
 [data-theme="ink"],
@@ -317,6 +352,9 @@ select:focus-visible {
   --accent-fg: var(--ink);
   --accent-ink: var(--acid); /* on ink, the lime itself reads as bright text */
   --accent-bright: var(--acid);
+  /* Preserves the prior --accent-based blend for dark; the :root light-theme
+     value above was retuned to blend --accent-ink instead. */
+  --accent-tint: color-mix(in oklab, var(--accent) 30%, var(--bg));
   --danger:    oklch(0.68 0.19 25);
   --flame:     #FF5A1F;
   --amber:     #D9A93A;
@@ -329,6 +367,14 @@ select:focus-visible {
   --code-fn:      var(--flame);
   --code-str-alt: var(--mascot);
   --code-num:     var(--sun);
+}
+
+/* Restores the pre-existing (weaker) dark-theme selection tint after the
+   light-theme-only bump in app-shell.css's base ::selection rule. */
+[data-theme="ink"] ::selection,
+[data-theme="dark"] ::selection {
+  background: color-mix(in oklab, var(--accent) 24%, var(--bg-2));
+  color: var(--fg);
 }
 
 /* NOTE: the [data-theme="auto"] block below mirrors the
@@ -358,6 +404,7 @@ select:focus-visible {
     --accent-fg: var(--ink);
     --accent-ink: var(--acid);
     --accent-bright: var(--acid);
+    --accent-tint: color-mix(in oklab, var(--accent) 30%, var(--bg));
     --danger:    oklch(0.68 0.19 25);
     --flame:     #FF5A1F;
     --amber:     #D9A93A;
@@ -368,6 +415,10 @@ select:focus-visible {
     --code-fn:      var(--flame);
     --code-str-alt: var(--mascot);
     --code-num:     var(--sun);
+  }
+  [data-theme="auto"] ::selection {
+    background: color-mix(in oklab, var(--accent) 24%, var(--bg-2));
+    color: var(--fg);
   }
 }
 
@@ -428,8 +479,9 @@ select:focus-visible {
   --bg: var(--paper); --bg-2: var(--paper-2); --bg-3: var(--paper-3);
   --fg: var(--ink);   --fg-2: var(--ink-2);   --fg-3: var(--ink-3);
   --accent: var(--acid); --accent-fg: var(--ink); --accent-ink: var(--acid-deep);
+  --accent-tint: color-mix(in oklab, var(--accent-ink) 22%, var(--bg));
   /* A paper island under a dark ancestor must not inherit the dark signal pair. */
-  --flame: #C53E00; --amber: #8A6512; --warn: #E0241A; --sky: #3A6EFF;
+  --flame: #C53E00; --amber: #7C570F; --warn: #C41C0C; --sky: #3A6EFF;
 }
 
 /* thebird — warm-paper brand preset. A first-class swappable theme: it lives
@@ -481,6 +533,49 @@ select:focus-visible {
     transition-duration: 0.001ms !important;
     scroll-behavior: auto !important;
   }
+}
+
+/* ============================================================
+   Semantic alias tier — primitive -> semantic -> component
+   ------------------------------------------------------------
+   Three layers, in order:
+     1. PRIMITIVE  (above)  raw palette values: --acid, --green, --sky, --warn,
+        --panel-1/2/3, --paper/--ink, etc. These are the only tokens that ever
+        carry a literal color/length. A re-brand edits primitives.
+     2. SEMANTIC   (here)   named-by-INTENT aliases that resolve to a primitive
+        (e.g. --accent: var(--panel-accent)). A component or a future re-brand
+        can retune ONE semantic variable (say, --rail-danger) without hunting
+        through every primitive it happens to reuse elsewhere.
+     3. COMPONENT  (app-shell.css, community.css, etc.) component sheets keep
+        consuming primitives directly today (--accent, --panel-*, --green,
+        --warn, ...) exactly as before — this tier does not repoint any
+        existing component rule. It exists so a FUTURE swap has a semantic
+        layer ready to migrate onto, one component sheet at a time, without
+        a flag-day rewrite. Purely additive: no primitive token's name or
+        value changes here, and no component references these new names yet.
+
+   Naming matches vocabulary already established elsewhere in this system:
+   --surface-1/2 mirror the --panel-1/--panel-2 tonal-surface steps already
+   used across app-shell.css/community.css; --rail-info/-success/-warning/-error
+   mirror the canonical .tone-info/.tone-success/.tone-warning/.tone-error
+   banner/badge/chip severity names (app-shell.css L592, community.css
+   .cm-banner.tone-*) rather than inventing a new severity vocabulary.
+   ============================================================ */
+:root {
+  /* --accent already exists as a primitive-facing alias (var(--acid)) above;
+     restated here under the semantic tier for discoverability alongside its
+     siblings. Same value, same token — not a second definition. */
+  --surface-1: var(--panel-1);
+  --surface-2: var(--panel-2);
+
+  /* Rail/status severity aliases — map onto the same color choices the
+     existing .cm-banner.tone-* rules in community.css already use, so a
+     future rail/indicator component can consume one semantic name instead
+     of picking the right primitive per severity by hand. */
+  --rail-info:    var(--sky);
+  --rail-success: var(--green-2);
+  --rail-warning: var(--amber);
+  --rail-error:   var(--warn);
 }
 
 /* Elevation tokens consumed by overlays (Tooltip, Popover, Dropdown, Dialog). */

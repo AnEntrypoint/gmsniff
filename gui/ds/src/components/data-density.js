@@ -60,11 +60,14 @@ export function TreeNode({ ts, kind, variant = '', phase, id, keyLabel, reason, 
 // ---------------------------------------------------------------------------
 export function BarRow({ label, value, pct = 0, tone } = {}) {
     const clamped = Math.max(0, Math.min(100, pct));
-    return h('div', { class: 'ds-bar-row' },
+    return h('div', {
+        class: 'ds-bar-row', role: 'meter', 'aria-label': label != null ? String(label) : 'value',
+        'aria-valuenow': String(clamped), 'aria-valuemin': '0', 'aria-valuemax': '100',
+    },
         h('span', { class: 'ds-bar-row-label', style: tone ? `color:${tone}` : null }, label),
-        h('div', { class: 'ds-bar-bg' },
+        h('div', { class: 'ds-bar-bg', 'aria-hidden': 'true' },
             h('div', { class: 'ds-bar-fill', style: `width:${clamped}%` + (tone ? `;background:${tone}` : '') })),
-        h('span', { class: 'ds-bar-row-value' }, value));
+        h('span', { class: 'ds-bar-row-value', 'aria-hidden': 'true' }, value));
 }
 
 // ---------------------------------------------------------------------------
@@ -72,15 +75,15 @@ export function BarRow({ label, value, pct = 0, tone } = {}) {
 //   cls on StatTile selects an accent variant: '' | 'rate-big' | 'err-rate'.
 // ---------------------------------------------------------------------------
 export function StatTile({ val, lbl, cls = '' } = {}) {
-    return h('div', { class: 'ds-stat' },
-        h('div', { class: 'ds-stat-val' + (cls ? ' ' + cls : '') }, val),
-        h('div', { class: 'ds-stat-lbl' }, lbl));
+    return h('div', { class: 'ds-stat', role: 'group', 'aria-label': `${lbl || 'stat'}: ${val}` },
+        h('div', { class: 'ds-stat-val' + (cls ? ' ' + cls : ''), 'aria-hidden': 'true' }, val),
+        h('div', { class: 'ds-stat-lbl', 'aria-hidden': 'true' }, lbl));
 }
 
 export function StatsGrid({ items = [] } = {}) {
     if (!items.length) return h('div', { class: 'ds-stats-grid ds-stats-grid-empty' },
         h('span', { class: 'ds-stat-lbl' }, 'no stats'));
-    return h('div', { class: 'ds-stats-grid' },
+    return h('div', { class: 'ds-stats-grid', role: 'group', 'aria-label': 'stats' },
         ...items.map((it, i) => h('div', { key: it.key || i }, StatTile(it))));
 }
 
@@ -90,11 +93,12 @@ export function StatsGrid({ items = [] } = {}) {
 export function SubGrid({ items = [] } = {}) {
     if (!items.length) return h('div', { class: 'ds-sub-grid ds-sub-grid-empty' },
         h('span', { class: 'ds-stat-lbl' }, 'no items'));
-    return h('div', { class: 'ds-sub-grid' },
+    return h('div', { class: 'ds-sub-grid', role: 'group', 'aria-label': 'categories' },
         ...items.map((it, i) => h('button', {
             key: it.key || i, type: 'button', class: 'ds-sub-btn',
             onclick: it.onClick || null,
-        }, h('span', {}, String(it.count)), it.label)));
+            'aria-label': `${it.label}: ${String(it.count)}`,
+        }, h('span', { 'aria-hidden': 'true' }, String(it.count)), it.label)));
 }
 
 // ---------------------------------------------------------------------------
@@ -115,6 +119,7 @@ export function SessionRow({ sessId, phaseWalkProps, events, verbs, prd, muts, r
         class: 'ds-session-row', onclick: onClick || null,
         role: onClick ? 'button' : null, tabindex: onClick ? '0' : null,
         onkeydown: onClick ? (e) => { if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); onClick(e); } } : null,
+        'aria-label': onClick ? `session ${sessId}: ${counts}` : null,
     },
         h('span', { class: 'ds-session-row-id' }, sessId),
         h('span', { class: 'ds-session-row-counts' }, counts),
@@ -163,6 +168,6 @@ export function LiveLog({ entries = [], autoScroll = true } = {}) {
     };
     if (!entries.length) return h('div', { class: 'ds-live-log ds-live-log-empty' },
         h('span', { class: 'ds-stat-lbl' }, 'no log entries'));
-    return h('div', { class: 'ds-live-log', ref: seedScroll },
+    return h('div', { class: 'ds-live-log', ref: seedScroll, role: 'log', 'aria-label': 'live log' },
         ...entries.map((e, i) => h('div', { key: e.key || i }, LiveLogEntry(e))));
 }

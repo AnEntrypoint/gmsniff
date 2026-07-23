@@ -6,8 +6,8 @@ import { CommandPalette } from 'ds/components/overlay-primitives.js';
 import { state, loadProjects, api, toast } from './data.js';
 import {
   Dashboard, ByDay, LiveStream, pushLiveEntry, AllEvents, Search, SubsystemPanel,
-  Deviations, Sessions, ProcessTree, QueryPanel, RecallStats, ExecStats, HookStats,
-  PrdEditor, MutablesEditor, LifecycleControl, RsTools, Codesearch, GmCallConsole,
+  Deviations, Sessions, ProcessTree,
+  PrdEditor, MutablesEditor, LifecycleControl, Codesearch, GmCallConsole,
   BrowserSessions, ConversationHistory, CodeInsightPanel, MemoryGraphPanel, stopMemoryGraphLayout, SUB_LIST,
   lifecycleAct, runCodesearch, dispatchConsole, liveStreamDebugSnapshot, SkillLayout,
 } from './panels.js';
@@ -18,10 +18,9 @@ const root = document.getElementById('root');
 const NAV = {
   'skill-layout': 'Skill Layout',
   overview: 'Dashboard', days: 'By Day', live: 'Live Stream', events: 'All Events', 'search-panel': 'Search',
-  deviations: 'Deviations', sessions: 'Sessions', tree: 'Process Tree', query: 'Query',
-  'recall-panel': 'Recall Stats', 'exec-panel': 'Exec Stats', 'hooks-panel': 'Hook Stats',
+  deviations: 'Deviations', sessions: 'Sessions', tree: 'Process Tree',
   prd: 'PRD Editor', mutables: 'Mutables Editor', lifecycle: 'Lifecycle Control',
-  'rs-tools': 'RS Tools', codesearch: 'Codesearch', console: 'GM Call Console',
+  codesearch: 'Codesearch', console: 'GM Call Console',
   'browser-sessions': 'Browser Sessions', conversations: 'Conversations',
   codeinsight: 'CodeInsight', 'memory-graph': 'Memory Graph',
 };
@@ -227,7 +226,7 @@ function HealthBanner() {
 // (corrupt value, unavailable storage) falls back to collapsed.
 // ---------------------------------------------------------------------------
 const NAV_ADV_KEY = 'gmsniff.nav.advanced';
-const ADV_PANEL_IDS = new Set(['recall-panel', 'exec-panel', 'hooks-panel', 'rs-tools', 'codeinsight', 'memory-graph',
+const ADV_PANEL_IDS = new Set(['codeinsight', 'memory-graph',
   'prd', 'mutables', 'lifecycle', 'codesearch', 'console', 'browser-sessions']);
 let navAdvanced = (() => { try { return localStorage.getItem(NAV_ADV_KEY) === 'open'; } catch (_) { return false; } })();
 
@@ -261,14 +260,14 @@ function statusGlance() {
 function renderShell() {
   const advSections = [
     { group: 'Subsystems', items: SUB_LIST.map(s => navItem('sub-' + s, s)) },
-    { group: 'Analytics', items: [navItem('recall-panel', 'Recall Stats'), navItem('exec-panel', 'Exec Stats'), navItem('hooks-panel', 'Hook Stats'), navItem('rs-tools', 'RS Tools'), navItem('codeinsight', 'CodeInsight'), navItem('memory-graph', 'Memory Graph')] },
+    { group: 'Analytics', items: [navItem('codeinsight', 'CodeInsight'), navItem('memory-graph', 'Memory Graph')] },
     { group: 'Control', items: [navItem('prd', 'PRD Editor'), navItem('mutables', 'Mutables Editor'), navItem('lifecycle', 'Lifecycle Control'), navItem('codesearch', 'Codesearch'), navItem('console', 'GM Call Console'), navItem('browser-sessions', 'Browser Sessions')] },
   ];
   const advCount = advSections.reduce((n, s) => n + s.items.length, 0);
   const side = Side({
     sections: [
       { group: 'Daily', items: [navItem('skill-layout', 'Skill Layout'), navItem('overview', 'Dashboard'), navItem('live', 'Live Stream'), navItem('deviations', 'Deviations', ui.devTotal || null), navItem('sessions', 'Sessions')] },
-      { group: 'Investigate', items: [navItem('days', 'By Day'), navItem('events', 'All Events'), navItem('search-panel', 'Search'), navItem('tree', 'Process Tree'), navItem('conversations', 'Conversations'), navItem('query', 'Query')] },
+      { group: 'Investigate', items: [navItem('days', 'By Day'), navItem('events', 'All Events'), navItem('search-panel', 'Search'), navItem('tree', 'Process Tree'), navItem('conversations', 'Conversations')] },
       { group: 'Advanced', items: [{ label: navAdvanced ? 'Hide advanced' : 'Show advanced', href: '#', onClick: toggleAdvanced, count: navAdvanced ? null : advCount }] },
       ...(navAdvanced ? advSections : []),
     ],
@@ -373,20 +372,20 @@ async function computeBody(force) {
     if (!ui.sessListCache.length || force) { const r = await api('/api/sessions?limit=200'); ui.sessListCache = r.rows || []; }
     return ConversationHistory(ui.convSess, ui.sessListCache, (sess) => { ui.convSess = sess; syncHash(); renderBody(); });
   }
-  if (p === 'query') return QueryPanel(setBody);
-  if (p === 'recall-panel') return RecallStats();
-  if (p === 'exec-panel') return ExecStats();
-  if (p === 'hooks-panel') return HookStats();
   if (p === 'prd') return PrdEditor(setBody);
   if (p === 'mutables') return MutablesEditor(setBody);
   if (p === 'lifecycle') return LifecycleControl(setBody);
-  if (p === 'rs-tools') return RsTools();
   if (p === 'codesearch') return Codesearch(setBody);
   if (p === 'console') return GmCallConsole(setBody);
   if (p === 'browser-sessions') return BrowserSessions();
   if (p === 'codeinsight') return CodeInsightPanel(setBody);
   if (p === 'memory-graph') return MemoryGraphPanel();
-  return h('p', { class: 'gm-empty' }, 'Unknown panel: ' + p);
+  // Unknown panel id (removed panel, stale bookmark/deep link) -- degrade to the default
+  // landing panel rather than a dead end, since NAV[p] is already undefined for these ids
+  // (parseHash's own fallback only catches load-time hashes, not a runtime navigation attempt).
+  ui.panel = 'skill-layout';
+  syncHash();
+  return SkillLayout(setBody);
 }
 
 // Keyboard-only nav: webjsx reuses the sidebar <a> DOM node across the

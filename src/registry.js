@@ -417,10 +417,13 @@ export const VERB_ALLOWLIST = new Set([
   'kv_get', 'kv_put', 'kv_query', 'exec_js', 'lang', 'browser', 'health',
   'sql_open', 'sql_close', 'sql_list_dbs', 'sql_exec', 'sql_query', 'sql_smoke',
   'sql_serialize', 'sql_deserialize', 'codeinsight_index', 'codesearch',
-  'memorize', 'memorize-prune', 'recall',
+  'memorize', 'memorize-prune', 'memorize_prune', 'recall',
   'bash', 'branch_status', 'git_status', 'git_push', 'git_add', 'git_commit',
   'git_finalize', 'git_log', 'git_diff', 'git_show', 'git_fetch', 'git_branch',
   'git_checkout', 'git_rm', 'git_revert', 'git_reset',
+  // Accepted aliases (wasm_dispatch/verbs.rs match arms), not distinct verbs -- gmsniff must
+  // recognize these or a real dispatch under an alias name reads as "unknown verb" downstream.
+  'nodejs', 'javascript', 'node', 'js', 'python', 'py', 'sh', 'shell', 'zsh',
   'forget', 'discipline', 'close', 'filter', 'status',
   'learn', // retired: verbs.rs match arm always errors, but it IS a real recognized dispatch target
   // lang-runner verbs (shell_exec dispatch)

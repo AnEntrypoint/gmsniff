@@ -6,20 +6,63 @@ import * as webjsx from '../../vendor/webjsx/index.js';
 import { trapTab } from './overlay-primitives.js';
 const h = webjsx.createElement;
 
+/**
+ * The wordmark used in Topbar/AppShell headers.
+ *
+ * @param {Object} [props]
+ * @param {string} [props.name='247420'] - the brand text.
+ * @param {*} [props.leaf] - optional trailing breadcrumb-style leaf, rendered after a " / " separator.
+ * @returns {*} webjsx vnode
+ */
 export function Brand({ name = '247420', leaf } = {}) {
     return h('span', { class: 'brand' }, name,
         leaf ? h('span', { class: 'slash' }, ' / ') : null,
         leaf || null);
 }
 
-export function Chip({ tone = '', children }) {
-    return h('span', { class: 'chip' + (tone ? ' tone-' + tone : '') }, children);
+/**
+ * A small pill/tag label.
+ *
+ * @param {Object} props
+ * @param {string} [props.tone=''] - semantic color tone (empty = neutral).
+ * @param {'sm'|'md'|'lg'} [props.size='md']
+ * @param {boolean} [props.tag=false] - true renders a rectangular sentence-case variant for dense data (drops the all-caps pill styling). Orthogonal to tone.
+ * @param {*} props.children
+ * @returns {*} webjsx vnode
+ */
+export function Chip({ tone = '', size = 'md', tag = false, children }) {
+    const sizeCls = size === 'sm' ? ' chip--sm' : (size === 'lg' ? ' chip--lg' : '');
+    return h('span', { class: 'chip' + sizeCls + (tag ? ' chip--tag' : '') + (tone ? ' tone-' + tone : '') }, children);
 }
 
-export function Btn({ href, variant = 'default', children, onClick, 'aria-label': ariaLabel, primary, ghost, danger, disabled, className, key }) {
+/**
+ * The standard button/link factory. Renders an `<a>` when `href` is given,
+ * otherwise a `<button>`.
+ *
+ * @param {Object} props
+ * @param {string} [props.href] - if present, renders as a link instead of a button.
+ * @param {'default'|'primary'|'ghost'|'danger'} [props.variant='default']
+ * @param {'sm'|'md'|'lg'} [props.size='md']
+ * @param {*} props.children
+ * @param {Function} [props.onClick]
+ * @param {string} [props['aria-label']]
+ * @param {boolean} [props.primary] - legacy alias for variant:'primary', kept for backward compatibility.
+ * @param {boolean} [props.ghost] - legacy alias for variant:'ghost'.
+ * @param {boolean} [props.danger] - legacy alias for variant:'danger'.
+ * @param {boolean} [props.disabled]
+ * @param {string} [props.class] - extra class name(s) appended to the generated class list.
+ * @param {*} [props.key]
+ * @returns {*} webjsx vnode
+ */
+export function Btn({ href, variant = 'default', size = 'md', children, onClick, 'aria-label': ariaLabel, primary, ghost, danger, disabled, class: className, key }) {
     // Support legacy primary/ghost props for backward compatibility, but prefer variant
     const resolvedVariant = variant !== 'default' ? variant : (primary ? 'primary' : (ghost ? 'ghost' : (danger ? 'danger' : 'default')));
+    // size: 'sm' | 'md' | 'lg' — md is the base .btn rule (no class); sm/lg add a
+    // modifier that snaps height/padding/font to the --ctl-* ladder. Unknown
+    // sizes fall back to md so a typo never drops the button's base styling.
+    const sizeCls = size === 'sm' ? ' btn-sm' : (size === 'lg' ? ' btn-lg' : '');
     const cls = (resolvedVariant === 'primary' ? 'btn-primary' : (resolvedVariant === 'ghost' ? 'btn-ghost' : (resolvedVariant === 'danger' ? 'btn-primary danger' : 'btn')))
+        + sizeCls
         + (disabled ? ' is-disabled' : '')
         + (className ? ' ' + className : '');
     const onclick = (e) => {
@@ -67,8 +110,10 @@ export function IconButton({ icon, onClick, title, size = 'base', variant = 'gho
     }, Glyph({ children: icon, size }));
 }
 
-export function Badge({ children, variant = 'default', tone = 'neutral' }) {
-    return h('span', { class: 'ds-badge ds-badge-' + variant + ' tone-' + tone }, children);
+export function Badge({ children, variant = 'default', tone = 'neutral', size = 'md' }) {
+    // size: 'sm' | 'md' | 'lg' — md is the base 18px badge.
+    const sizeCls = size === 'sm' ? ' ds-badge--sm' : (size === 'lg' ? ' ds-badge--lg' : '');
+    return h('span', { class: 'ds-badge ds-badge-' + variant + sizeCls + ' tone-' + tone }, children);
 }
 
 // Pill — plain non-interactive label chip for tag-like annotations (a phase
@@ -98,6 +143,7 @@ export function Glyph({ children, color, size = 'base', label } = {}) {
 // Monochrome inline-SVG icons (stroke=currentColor) so chrome reads as one
 // coherent line-icon set instead of multicolor OS emoji. 16px box, 1.6 stroke.
 export const ICON_PATHS = {
+    lock: '<rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>',
     mic: '<path d="M12 3a3 3 0 0 0-3 3v5a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3z"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>',
     'mic-off': '<path d="M9 9v2a3 3 0 0 0 4.5 2.6M15 11V6a3 3 0 0 0-5.9-.8"/><path d="M5 11a7 7 0 0 0 11.5 5.4M12 18v3"/><path d="m4 4 16 16"/>',
     speaker: '<path d="M11 5 6 9H3v6h3l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/>',
@@ -123,6 +169,7 @@ export const ICON_PATHS = {
     'check-check': '<path d="M18 6 7 17l-3-3"/><path d="m22 10-7.5 7.5L13 16"/>',
     'chevron-right': '<path d="m9 6 6 6-6 6"/>',
     'chevron-down': '<path d="m6 9 6 6 6-6"/>',
+    'chevron-up': '<path d="m6 15 6-6 6 6"/>',
     'arrow-down': '<path d="M12 5v14M5 12l7 7 7-7"/>',
     'arrow-right': '<path d="M5 12h14M12 5l7 7-7 7"/>',
     x: '<path d="M18 6 6 18M6 6l12 12"/>',
@@ -135,6 +182,7 @@ export const ICON_PATHS = {
     square: '<rect x="4" y="4" width="16" height="16" rx="2"/>',
     activity: '<path d="M3 12h4l3 8 4-16 3 8h4"/>',
     info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>',
+    help: '<circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 0 1 4.9.8c0 1.7-2.4 2-2.4 3.7M12 17h.01"/>',
     warn: '<path d="M10.3 4 2.7 17a2 2 0 0 0 1.7 3h15.2a2 2 0 0 0 1.7-3L13.7 4a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/>',
     // file-type icons (replace the FILE_GLYPHS unicode set)
     'file-pdf': '<path d="M6 3h8l5 5v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M14 3v5h5"/><path d="M9 13h6M9 17h6"/>',
@@ -214,7 +262,14 @@ export function Topbar({ brand = '247420', leaf = '', items = [], active = '', o
         Brand({ name: brand, leaf }),
         search ? h('label', { class: 'app-search' },
             h('span', { class: 'icon', 'aria-hidden': 'true' }, 'search'),
-            h('input', { type: 'search', name: 'q', placeholder: search, 'aria-label': `search ${search}` })
+            // `search` is either a plain placeholder string (renders the
+            // default uncontrolled input) or a caller-built VElement (has
+            // .type/.props — e.g. a controlled <input> wired to app state)
+            // rendered as-is. Stringifying a VElement into placeholder/
+            // aria-label previously produced literal "[object Object]" text.
+            (search && typeof search === 'object' && 'type' in search)
+                ? search
+                : h('input', { type: 'search', name: 'q', placeholder: search, 'aria-label': `search ${search}` })
         ) : null,
         h('nav', { 'aria-label': 'main navigation' }, ...items.map(([label, href]) => {
             const cleanLabel = String(label).replace(' ->', '');
@@ -327,9 +382,9 @@ function toggleSide(open, fromEl) {
     if (next) {
         const drawer = shell.querySelector('.app-side-shell');
         const focusable = drawer && drawer.querySelector('button, a, input, [tabindex]');
-        if (focusable) try { focusable.focus(); } catch (_) {}
+        if (focusable) try { focusable.focus(); } catch (_) { /* swallow: focus() can throw on a detached/hidden element, drawer still opens */ }
         const onKey = (e) => {
-            if (e.key === 'Escape') { toggleSide(false, btn || body); if (btn) try { btn.focus(); } catch (_) {} return; }
+            if (e.key === 'Escape') { toggleSide(false, btn || body); if (btn) try { btn.focus(); } catch (_) { /* swallow: focus() can throw on a detached/hidden element */ } return; }
             if (drawer) trapTab(drawer, e);
         };
         body._dsSideKey = onKey;
@@ -410,7 +465,7 @@ function toggleWs(which, fromEl) {
     });
     try {
         localStorage.setItem('ds.ws.' + which, nowCollapsed ? 'collapsed' : 'open');
-    } catch (_) {}
+    } catch (_) { /* swallow: persistence is best-effort, collapse state still applies in-memory */ }
     // Expanding restores the persisted width (seed skips collapsed columns, so
     // it must run after the open flag is written).
     if (!nowCollapsed) seedWsWidths(shell);
@@ -441,7 +496,7 @@ function wsResize(col, dx, persist = true, fromEl) {
     if (handle) { handle.setAttribute('aria-valuenow', String(next)); handle.setAttribute('aria-valuetext', next + ' pixels'); }
     // Commit to storage only on a settled move (pointerup / keyboard), not on
     // every pointermove frame (that fired dozens of synchronous writes per drag).
-    if (persist) { try { localStorage.setItem('ds.ws.w.' + col, String(next)); } catch (_) {} }
+    if (persist) { try { localStorage.setItem('ds.ws.w.' + col, String(next)); } catch (_) { /* swallow: persistence is best-effort, resize still applies in-memory */ } }
 }
 // Per-column viewport caps for persisted widths: a width dragged on a wide
 // monitor must not crush the content column when the page reloads on a
@@ -456,7 +511,7 @@ function seedWsWidths(el) {
             if (wsCollapsed(col, false)) return;
             const v = localStorage.getItem('ds.ws.w.' + col);
             if (v && /^\d+$/.test(v)) el.style.setProperty('--ws-' + col + '-w', `min(${v}px, ${WS_VW_CAP[col]})`);
-        } catch (_) {}
+        } catch (_) { /* swallow: localStorage unavailable, seeding is best-effort */ }
     });
 }
 function WsResizer(col) {
@@ -516,10 +571,10 @@ function toggleWsDrawer(which, open, fromEl) {
     // into the scrim/background content behind it).
     const drawer = shell.querySelector(which === 'pane' ? '.ws-pane' : '.ws-sessions');
     const focusable = drawer && drawer.querySelector('button, a, input, [tabindex]');
-    if (focusable) try { focusable.focus(); } catch (_) {}
+    if (focusable) try { focusable.focus(); } catch (_) { /* swallow: focus() can throw on a detached/hidden element, drawer still opens */ }
     removeWsDrawerHandlers(shell); // replace, never stack (opening one drawer over the other)
     const onKey = (e) => {
-        if (e.key === 'Escape') { toggleWsDrawer(which, false, shell); if (btn) try { btn.focus(); } catch (_) {} return; }
+        if (e.key === 'Escape') { toggleWsDrawer(which, false, shell); if (btn) try { btn.focus(); } catch (_) { /* swallow: focus() can throw on a detached/hidden element */ } return; }
         if (drawer) trapTab(drawer, e);
     };
     shell._wsEscHandler = onKey;
@@ -553,28 +608,29 @@ function wsCollapsed(which, fallback) {
         const v = localStorage.getItem('ds.ws.' + which);
         if (v === 'collapsed') return true;
         if (v === 'open') return false;
-    } catch (_) {}
+    } catch (_) { /* swallow: localStorage unavailable, fall back to caller-supplied default */ }
     return !!fallback;
 }
 
-// WorkspaceShell — a Claude-Desktop / cowork three-(or four-)column app shell.
-//
-//   rail   : the persistent left workspace nav (icon+label items, collapsible
-//            to icon-only). Pass the result of WorkspaceRail() or any vnode.
-//   sessions: an OPTIONAL second column (a conversation/session list) shown
-//            between the rail and the main content. Null hides it.
-//   main   : the primary content column (chat thread, files view, dashboard...).
-//   pane   : an OPTIONAL right context pane (per-conversation context, file
-//            preview...). Null hides it; collapsible when present.
-//   crumb  : an optional thin top chrome bar (breadcrumb + status), spanning
-//            the content area only (the rail has its own header).
-//   status : an optional footer.
-//   narrow : caller's isNarrow() — drives the mobile single-column collapse.
-//   railCollapsed / paneCollapsed : initial collapse (persisted state wins).
-//
-// Pure stateless chrome (props in, vnode out). Collapse is DOM-class + a
-// persisted flag, so the host does not have to thread collapse state through its
-// own store. Visual styling lives in app-shell.css (.ws-*).
+/**
+ * A Claude-Desktop / cowork three-(or four-)column app shell.
+ *
+ * Pure stateless chrome (props in, vnode out). Collapse is DOM-class + a
+ * persisted flag, so the host does not have to thread collapse state through
+ * its own store. Visual styling lives in app-shell.css (.ws-*).
+ *
+ * @param {Object} props
+ * @param {*} props.rail - the persistent left workspace nav (icon+label items, collapsible to icon-only). Pass the result of WorkspaceRail() or any vnode.
+ * @param {*} props.sessions - an OPTIONAL second column (a conversation/session list) shown between the rail and the main content. Null hides it.
+ * @param {*} props.main - the primary content column (chat thread, files view, dashboard...).
+ * @param {*} props.pane - an OPTIONAL right context pane (per-conversation context, file preview...). Null hides it; collapsible when present.
+ * @param {*} props.crumb - an optional thin top chrome bar (breadcrumb + status), spanning the content area only (the rail has its own header).
+ * @param {*} props.status - an optional footer.
+ * @param {boolean} props.narrow - caller's isNarrow() — drives the mobile single-column collapse.
+ * @param {boolean} props.railCollapsed - initial rail collapse (persisted state wins).
+ * @param {boolean} props.paneCollapsed - initial pane collapse (persisted state wins).
+ * @returns {*} webjsx vnode
+ */
 export function WorkspaceShell({ rail, sessions, main, pane, crumb, status, narrow,
                                  railCollapsed = false, paneCollapsed = false,
                                  railLabel = 'workspace navigation',

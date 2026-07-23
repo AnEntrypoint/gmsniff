@@ -73,6 +73,32 @@ export function useLongPress(targetEl, callback, { ms = 500 } = {}) {
     return () => { cancel(); evts.forEach(([k, fn]) => targetEl.removeEventListener(k, fn)); };
 }
 
+// withBusy — run an async action with its triggering button disabled +
+// busy-labelled, so a double-click/double-tap can't fire it twice and the
+// user sees progress. Restores the button (label, disabled state,
+// aria-busy) when the action settles, including on throw. Re-entry while
+// already busy is dropped silently rather than queued. Mirrors docstudio's
+// dom-busy.js withButtonBusy — agentgui's app.js has no equivalent anywhere,
+// so every async-click handler (share/delete/retry/approve-deny) is
+// currently unguarded against rapid repeat clicks firing the same mutating
+// request twice.
+export async function withBusy(btn, fn, busyLabel = '...') {
+    if (!btn) return fn();
+    if (btn.disabled) return;                 // already in flight -> drop the repeat
+    const prevHtml = btn.innerHTML;
+    const prevDisabled = btn.disabled;
+    btn.disabled = true;
+    btn.setAttribute('aria-busy', 'true');
+    if (busyLabel != null) btn.textContent = busyLabel;
+    try {
+        return await fn();
+    } finally {
+        btn.disabled = prevDisabled;
+        btn.removeAttribute('aria-busy');
+        btn.innerHTML = prevHtml;
+    }
+}
+
 // Tooltip — single shared bubble appended to <body>.
 let _tipEl = null, _tipFloat = null, _tipTimer = null, _tipId = 0;
 function _hideTip() {
@@ -237,6 +263,116 @@ export function Dropdown({ trigger, items = [], onSelect, placement = 'bottom-st
     return (child && child.type)
         ? webjsx.createElement(child.type, { ...(child.props || {}), ref: refFn }, ...(child.children || []))
         : h('button', { type: 'button', class: 'ds-dropdown-trigger', ref: refFn }, child || 'Menu');
+}
+
+// PermissionMenu — a role=menu of role=menuitemcheckbox rows, one per
+// category, with roving tabindex + Arrow-up/down/Home/End navigation and
+// Escape-closes-and-restores-focus, plus "Approve all"/"Revoke all" actions.
+// Mirrors Dropdown's own open/close + outside-click wiring (a portaled menu
+// element, a document-level mousedown listener, focus restored to the
+// trigger on close) rather than reimplementing that plumbing.
+export function PermissionMenu({ trigger, categories = [], approved = [], onToggle, onToggleAll, placement = 'bottom-start', ariaLabel = 'Permissions' } = {}) {
+    let triggerEl = null, open = false, menuEl = null, floating = null;
+    const isApproved = (id) => approved.indexOf(id) !== -1;
+    const liveItems = () => menuEl ? [...menuEl.querySelectorAll('[role="menuitemcheckbox"]')] : [];
+    const focusItem = (idx) => { const items = liveItems(); if (!items.length) return; items[((idx % items.length) + items.length) % items.length].focus(); };
+    const onDown = (e) => { if (menuEl && menuEl.contains(e.target)) return; if (triggerEl && triggerEl.contains(e.target)) return; close(false); };
+    const close = (restore = true) => {
+        if (!open) return; open = false;
+        if (floating) { floating.dispose(); floating = null; }
+        if (menuEl && menuEl.parentNode) menuEl.parentNode.removeChild(menuEl);
+        menuEl = null;
+        document.removeEventListener('mousedown', onDown, true);
+        if (triggerEl) triggerEl.setAttribute('aria-expanded', 'false');
+        if (restore && triggerEl) triggerEl.focus();
+    };
+    const toggle = (cat) => { if (onToggle) onToggle(cat.id, !isApproved(cat.id)); };
+    const onMenuKey = (e) => {
+        const items = liveItems(), idx = items.indexOf(document.activeElement);
+        if (e.key === 'Escape') { e.preventDefault(); close(); }
+        else if (e.key === 'ArrowDown') { e.preventDefault(); focusItem(idx + 1); }
+        else if (e.key === 'ArrowUp') { e.preventDefault(); focusItem(idx - 1); }
+        else if (e.key === 'Home') { e.preventDefault(); focusItem(0); }
+        else if (e.key === 'End') { e.preventDefault(); focusItem(items.length - 1); }
+        else if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); if (idx >= 0) items[idx].click(); }
+    };
+    const renderMenu = () => {
+        const rows = categories.map((cat, i) => h('button', {
+            key: cat.id || i, type: 'button', role: 'menuitemcheckbox',
+            'aria-checked': isApproved(cat.id) ? 'true' : 'false',
+            class: 'ov-perm-item' + (isApproved(cat.id) ? ' is-approved' : ''),
+            tabindex: '-1',
+            onclick: () => toggle(cat),
+        }, h('span', { class: 'ov-perm-label' }, cat.label || cat.id)));
+        const actionsRow = h('div', { class: 'ov-perm-actions' },
+            h('button', { type: 'button', class: 'ov-perm-action', onclick: () => onToggleAll && onToggleAll(true) }, 'Approve all'),
+            h('button', { type: 'button', class: 'ov-perm-action', onclick: () => onToggleAll && onToggleAll(false) }, 'Revoke all'));
+        return h('div', { class: 'ov-perm-list' }, ...rows, actionsRow);
+    };
+    const openMenu = (focusFirst = true) => {
+        if (open || !triggerEl) return;
+        open = true;
+        menuEl = document.createElement('div');
+        menuEl.className = 'ds-popover ov-perm-menu';
+        menuEl.setAttribute('role', 'menu');
+        menuEl.setAttribute('aria-label', ariaLabel);
+        menuEl.tabIndex = -1;
+        webjsx.applyDiff(menuEl, renderMenu());
+        document.body.appendChild(menuEl);
+        menuEl.addEventListener('keydown', onMenuKey);
+        floating = useFloating(triggerEl, menuEl, { placement, offset: FLOAT_OFFSET_DROPDOWN });
+        document.addEventListener('mousedown', onDown, true);
+        triggerEl.setAttribute('aria-expanded', 'true');
+        if (focusFirst) queueMicrotask(() => focusItem(0));
+    };
+    const onTrigClick = () => { if (open) close(false); else openMenu(true); };
+    const onTrigKey = (e) => { if (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ') { e.preventDefault(); if (!open) openMenu(true); else focusItem(0); } };
+    const refFn = (el) => {
+        if (!el || el._dsPermMenu) return;
+        el._dsPermMenu = true; triggerEl = el;
+        el.addEventListener('click', onTrigClick);
+        el.addEventListener('keydown', onTrigKey);
+        el.setAttribute('aria-haspopup', 'menu');
+        el.setAttribute('aria-expanded', 'false');
+    };
+    const child = (typeof trigger === 'function') ? trigger() : trigger;
+    return (child && child.type)
+        ? webjsx.createElement(child.type, { ...(child.props || {}), ref: refFn }, ...(child.children || []))
+        : h('button', { type: 'button', class: 'ov-perm-trigger', ref: refFn }, child || 'Permissions');
+}
+
+// ApprovalPrompt — an inline, in-thread tool-permission card (as opposed to
+// PermissionMenu's settings-style dropdown): shows the tool name + an
+// optional args preview, an optional free-text note the user can attach to
+// their decision (auto-focused, since the note is usually the primary
+// reason to open this card at all), and up to four resolution actions
+// (once/session/all/deny). Mirrors docstudio's chat-approval-prompts.js
+// buildApprovalPrompt shape. The note textarea is entirely optional -
+// omitting `onDecision`'s use of the note arg keeps existing simpler
+// once/deny-only call sites unaffected.
+export function ApprovalPrompt({ toolName, categoryLabel, argsPreview, onDecision, autoFocusNote = true } = {}) {
+    let noteEl = null;
+    const noteRef = (el) => {
+        if (!el || noteEl === el) return;
+        noteEl = el;
+        if (autoFocusNote) queueMicrotask(() => noteEl && noteEl.focus());
+    };
+    const decide = (kind) => { if (onDecision) onDecision(kind, (noteEl && noteEl.value || '').trim()); };
+    return h('div', { class: 'ov-approval', role: 'group', 'aria-label': toolName ? `Permission requested: ${toolName}` : 'Permission requested' },
+        h('div', { class: 'ov-approval-head' },
+            h('span', { class: 'ov-approval-icon' }, Icon('lock', { size: 16 })),
+            h('strong', { class: 'ov-approval-tool' }, toolName || ''),
+            categoryLabel ? h('span', { class: 'ov-approval-cat' }, '- ' + categoryLabel) : null),
+        argsPreview ? h('pre', { class: 'ov-approval-args' }, argsPreview) : null,
+        h('textarea', {
+            class: 'ov-approval-note', ref: noteRef,
+            placeholder: 'Add instructions for the assistant (optional)...',
+        }),
+        h('div', { class: 'ov-approval-actions' },
+            h('button', { type: 'button', class: 'ov-approval-btn ov-approval-btn-primary', onclick: () => decide('once') }, 'Allow once'),
+            h('button', { type: 'button', class: 'ov-approval-btn ov-approval-btn-soft', onclick: () => decide('session') }, 'Allow for session'),
+            h('button', { type: 'button', class: 'ov-approval-btn', onclick: () => decide('all') }, 'Allow all'),
+            h('button', { type: 'button', class: 'ov-approval-btn ov-approval-btn-deny', onclick: () => decide('deny') }, 'Deny')));
 }
 
 // Clamp a fixed-position box to the viewport given desired top-left coords.

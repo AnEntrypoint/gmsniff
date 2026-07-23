@@ -68,7 +68,7 @@ const FLAG_DEFS = [
   { name: 'all', type: 'bool', desc: 'with --watchers: include dead watchers too' },
   { name: 'all-dispatch', type: 'bool', desc: 'with --tree: show dispatch.start events too (dropped by default)' },
   { name: 'no-color', type: 'bool', desc: 'disable ANSI color in output' },
-  { name: 'embed-failures', type: 'bool', desc: 'rs-learn embed_text step failures (structured + watcher.log fallback)' },
+  { name: 'embed-failures', type: 'bool', desc: 'embed_fail/embed_query_failed/memorize_embed_failed events (structured + watcher.log fallback)' },
   { name: 'recall-misses', type: 'bool', desc: 'recall events with hit=false grouped by query' },
   { name: 'recall-scores', type: 'bool', desc: 'histogram of top-hit recall scores' },
   { name: 'classifier-rejects', type: 'bool', desc: 'memorize_reject events grouped by reason' },
@@ -644,6 +644,17 @@ const DEVIATION_META = {
   'deviation.push-dirty': { sev: 'critical', recover: 'git_status + commit' },
   'deviation.complete-chain-poll': { sev: 'info', recover: 'stop (chain terminal)' },
   'deviation.bash-git-bypass': { sev: 'warn', recover: 'git verbs' },
+  // Confirmed against real ../gm rs-plugkit source (gates.rs, orchestrator/prd.rs, lib.rs) and
+  // real gm-log data (see AGENTS.md source-of-truth note) -- previously unmodeled here.
+  'deviation.prd-add-no-id': { sev: 'warn', recover: 'prd-add (pass id, or a slugifiable subject/title/description)' },
+  'deviation.platform-search-drift': { sev: 'warn', recover: 'codesearch|recall (not raw Grep/Glob mid-chain)' },
+  'deviation.await-result-violation': { sev: 'critical', recover: 'memorize-continue (pipeline suspended, only this verb advances state)' },
+  'deviation.unsolicited-doc-created': { sev: 'warn', recover: '(fs_write to an unlisted top-level doc path -- confirm intentional)' },
+  'deviation.stuck-loop-escalation': { sev: 'critical', recover: 'prd-add (name the stuck state) then wfgy-method, never bare-retry the same transition' },
+  'deviation.browser-profile-collision': { sev: 'warn', recover: 'browser (session reset/new -- profile dir contention)' },
+  'deviation.push-non-main-branch': { sev: 'warn', recover: 'git_branch (consolidate to main per CLAUDE.md invariant)' },
+  'deviation.push-rebase-conflict': { sev: 'critical', recover: 'resolving-merge-conflicts then git_push' },
+  'deviation.push-remote-outpaces': { sev: 'warn', recover: 'git_fetch + re-resolve before git_push' },
 };
 const SEV_COLOR = { critical: 31, warn: 33, info: 36 };
 // A foreign session is tagged cwd-<hash> by the hook layer; an own session carries a real
@@ -985,7 +996,12 @@ function readWatcherLogEmbedFails(cwd, sinceMs, untilMs) {
 }
 
 function embedFailures(all, opts) {
-  const structured = all.filter(e => e.event === 'embed_fail' || (e._sub === 'rs_learn' && e.event === 'embed_fail'));
+  // Matches on event name alone -- rs-learn (the crate that used to tag these _sub:'rs_learn')
+  // is retired (rs-plugkit wasm_dispatch/verbs.rs); current embed_fail/embed_query_failed/
+  // memorize_embed_failed events carry no explicit sub tag (default through to 'plugkit') or
+  // are tagged sub:'memory' by recall.rs -- filtering _sub==='rs_learn' would silently match
+  // nothing against a current-generation project's real log.
+  const structured = all.filter(e => e.event === 'embed_fail' || e.event === 'embed_query_failed' || e.event === 'memorize_embed_failed');
   let fallback = [];
   if (!structured.length) {
     const sinceMs = parseTime(opts.since || opts.after);
@@ -1106,7 +1122,9 @@ function memoryLeverage(all, opts) {
     }
   }
   for (const e of evs) {
-    if (e._sub !== 'rs_learn' || e.event !== 'recall') continue;
+    // recall events are tagged sub:'memory' by rs-plugkit orchestrator/recall.rs (confirmed
+    // live), not 'rs_learn' -- the retired crate's old tag would never match current data.
+    if (e._sub !== 'memory' || e.event !== 'recall') continue;
     const k = e.sess || '(no-session)';
     const s = bySess.get(k);
     if (!s) continue;

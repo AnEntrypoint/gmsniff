@@ -15,7 +15,7 @@
     margin: 0; border-radius: 0; box-shadow: none;
     background: var(--panel-1);
     color: var(--panel-text);
-    font: var(--fs-tiny, 12px)/var(--lh-base, 1.4) var(--ff-mono, monospace);
+    font: var(--fs-tiny, 12px)/var(--lh-base, 1.55) var(--ff-mono, monospace);
     overflow: hidden;
 }
 .ds-ep-panel-head {
@@ -75,7 +75,7 @@
     background: var(--panel-1);
     color: var(--panel-text);
     border-bottom: 1px solid var(--rule);
-    font: var(--fs-tiny, 12px)/var(--lh-base, 1.4) var(--ff-mono, monospace);
+    font: var(--fs-tiny, 12px)/var(--lh-base, 1.55) var(--ff-mono, monospace);
 }
 .ds-ep-toolbar.dense { padding: 2px 4px; gap: 2px; }
 .ds-ep-toolbar-leading,
@@ -108,12 +108,36 @@
 }
 
 /* Tabs */
-.ds-ep-tabs { display: flex; flex-direction: column; min-height: 0; height: 100%; }
+.ds-ep-tabs { display: flex; flex-direction: column; min-height: 0; height: 100%; position: relative; }
 .ds-ep-tabs-head {
     display: flex; flex-shrink: 0; flex-wrap: nowrap;
     overflow-x: auto; scroll-behavior: smooth;
     background: var(--panel-1);
     border-bottom: 1px solid var(--rule);
+    position: relative;
+}
+/* Sliding indicator — a single 2px bar under the active tab that animates its
+   left/width between tabs (webgeist's "expensive" underline-slide), instead of
+   each tab toggling its own static border. A REAL child element positioned by
+   the Tabs ref (inline left/width/top). It lives as a child of the OUTER
+   .ds-ep-tabs column (position:relative), NOT the .ds-ep-tabs-head, because an
+   absolutely-positioned child of a horizontal flex container mis-sizes to 0 in
+   Chromium; the outer column is a vertical flex, which sizes it correctly.
+   The ref sets top to the head's height so it sits on the head's bottom edge.
+   .has-slider gates the static per-tab border off (below). */
+.ds-ep-tab-indicator {
+    /* Sized by left+right insets (set inline by positionSlider), NOT width — an
+       abspos element's `width` computes to 0 in some flex-sibling layouts in
+       Chromium, whereas insets size reliably. left+right at the same value
+       collapse it to 0 until positioned (no-JS: invisible). */
+    position: absolute; top: 0; left: 0; right: 100%; height: 2px;
+    background: var(--accent);
+    transition: left var(--dur-base, 160ms) var(--ease, ease),
+                right var(--dur-base, 160ms) var(--ease, ease);
+    pointer-events: none;
+}
+@media (prefers-reduced-motion: reduce) {
+    .ds-ep-tab-indicator { transition: none; }
 }
 .ds-ep-tab {
     flex: 1; appearance: none; background: transparent; border: 0;
@@ -128,6 +152,9 @@
     color: var(--accent);
     border-bottom-color: var(--accent);
 }
+/* When the JS slider is active, the active tab's own static border is
+   redundant (the sliding bar draws it) — hide it so they don't double up. */
+.ds-ep-tabs-head.has-slider .ds-ep-tab.active { border-bottom-color: transparent; }
 /* Flex column so a full-height docked child (e.g. an inspector panel) fills
    the tab body instead of collapsing under a block container. */
 .ds-ep-tabs-body { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; }
@@ -151,11 +178,11 @@
 .ds-ep-tree {
     display: flex; flex-direction: column;
     color: var(--panel-text);
-    font: var(--fs-tiny, 12px)/var(--lh-base, 1.4) var(--ff-mono, monospace);
+    font: var(--fs-tiny, 12px)/var(--lh-base, 1.55) var(--ff-mono, monospace);
     overflow: auto;
 }
 .ds-ep-tree-item { display: flex; flex-direction: column; }
-.ds-ep-tree-item:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 2px; }
+.ds-ep-tree-item:focus-visible { outline: var(--focus-w) solid var(--focus-color); outline-offset: var(--focus-offset); }
 .ds-ep-tree-row {
     display: flex; align-items: center; gap: 6px;
     padding: 4px 8px 4px 0;
@@ -191,7 +218,7 @@
     display: flex; flex-direction: column; gap: 6px;
     padding: 8px;
     color: var(--panel-text);
-    font: var(--fs-tiny, 12px)/var(--lh-base, 1.4) var(--ff-mono, monospace);
+    font: var(--fs-tiny, 12px)/var(--lh-base, 1.55) var(--ff-mono, monospace);
 }
 .ds-ep-propfield {
     display: grid;
@@ -333,7 +360,8 @@
 .ds-ep-actionbar > * { flex: 1 1 0; }
 .ds-ep-actionbar button {
     width: 100%;
-    min-height: 28px; height: 28px; padding: 0 10px;
+    /* Snapped to --ctl-sm (was a lone 28px literal that happened to match). */
+    min-height: var(--ctl-sm); height: var(--ctl-sm); padding: 0 var(--space-2-5);
     border-radius: var(--r-1, 4px);
     font: var(--fs-tiny, 12px)/1 var(--ff-mono, monospace);
 }
@@ -371,6 +399,76 @@
 .ds-ep-pager-btn:hover:not([disabled]) { background: color-mix(in oklab, var(--accent) 10%, transparent); }
 .ds-ep-pager-btn:disabled { opacity: 0.4; cursor: default; }
 .ds-ep-pager-label { white-space: nowrap; }
+
+.ds-ep-pager-numbered { flex-wrap: wrap; }
+.ds-ep-pager-num {
+    appearance: none; cursor: pointer;
+    background: var(--panel-2, var(--bg-2));
+    border: 1px solid var(--rule);
+    color: var(--panel-text, var(--fg));
+    min-width: 1.75em;
+    padding: var(--space-half, 3px) var(--space-1, 5px);
+    border-radius: var(--r-1, 4px);
+    font: inherit;
+    text-align: center;
+}
+.ds-ep-pager-num:hover { background: color-mix(in oklab, var(--accent) 10%, transparent); }
+.ds-ep-pager-num.is-current {
+    background: var(--accent);
+    color: var(--accent-ink);
+    border-color: var(--accent);
+}
+.ds-ep-pager-ellipsis { padding: 0 var(--space-hair, 2px); opacity: 0.6; }
+.ds-ep-pager-total { white-space: nowrap; margin-left: auto; }
+
+/* Grid / GridItem — 24-column responsive layout. GridItem's flex-basis is
+   set per-tier via --xs-basis/--sm-basis/--md-basis/--lg-basis/--xl-basis
+   custom properties (computed in JS from a 1-24 span); each @media tier
+   below picks up whichever property is set for that breakpoint, cascading
+   down from xs as the mobile-first default. Mirrors BP_SM/MD/LG/XL. */
+.ds-ep-grid {
+    display: flex; flex-wrap: wrap;
+    gap: var(--space-2, 8px);
+}
+.ds-ep-grid-item {
+    box-sizing: border-box;
+    flex-grow: var(--xs-grow, 1);
+    flex-basis: var(--xs-basis, 100%);
+    max-width: var(--xs-basis, 100%);
+    display: var(--xs-display, inherit);
+}
+@media (min-width: 480px) {
+    .ds-ep-grid-item[style*="--sm-basis"] {
+        flex-grow: var(--sm-grow, 1);
+        flex-basis: var(--sm-basis, 100%);
+        max-width: var(--sm-basis, 100%);
+        display: var(--sm-display, inherit);
+    }
+}
+@media (min-width: 768px) {
+    .ds-ep-grid-item[style*="--md-basis"] {
+        flex-grow: var(--md-grow, 1);
+        flex-basis: var(--md-basis, 100%);
+        max-width: var(--md-basis, 100%);
+        display: var(--md-display, inherit);
+    }
+}
+@media (min-width: 1024px) {
+    .ds-ep-grid-item[style*="--lg-basis"] {
+        flex-grow: var(--lg-grow, 1);
+        flex-basis: var(--lg-basis, 100%);
+        max-width: var(--lg-basis, 100%);
+        display: var(--lg-display, inherit);
+    }
+}
+@media (min-width: 1440px) {
+    .ds-ep-grid-item[style*="--xl-basis"] {
+        flex-grow: var(--xl-grow, 1);
+        flex-basis: var(--xl-basis, 100%);
+        max-width: var(--xl-basis, 100%);
+        display: var(--xl-display, inherit);
+    }
+}
 
 /* JsonViewer */
 .ds-ep-json {
@@ -419,8 +517,8 @@
 .ds-ep-json-node[open] > .ds-ep-json-sum::before { content: '-'; }
 .ds-ep-json-sum:hover { background: color-mix(in oklab, var(--accent) 8%, transparent); }
 .ds-ep-json-sum:focus-visible {
-    outline: 2px solid var(--accent-ink);
-    outline-offset: -2px;
+    outline: var(--focus-w) solid var(--focus-color);
+    outline-offset: calc(var(--focus-offset) * -1);
 }
 .ds-ep-json-tag {
     margin-left: var(--space-1, 4px);
@@ -444,8 +542,8 @@
 .ds-ep-json-copy:hover { opacity: 1; border-color: var(--accent); }
 .ds-ep-json-copy.copied { color: var(--green-2, var(--green)); border-color: var(--green-2, var(--green)); opacity: 1; }
 .ds-ep-json-copy:focus-visible {
-    outline: 2px solid var(--accent-ink);
-    outline-offset: 2px;
+    outline: var(--focus-w) solid var(--focus-color);
+    outline-offset: var(--focus-offset);
     opacity: 1;
 }
 
@@ -633,15 +731,23 @@
     display: flex; flex-direction: column;
     outline: none;
 }
-.ds-ep-dialog-head { padding: 14px 16px 6px; border-bottom: 1px solid var(--rule); }
-.ds-ep-dialog-title { margin: 0; font-size: 16px; font-weight: 600; }
-.ds-ep-dialog-body { padding: 14px 16px; }
+/* size:"wide" -- for dialog content that genuinely needs more than the default 560px cap
+   (e.g. two panes shown side by side); still respects the same viewport-relative ceiling
+   pattern as the default so it never overflows on narrow viewports. */
+.ds-ep-dialog.is-wide { max-width: min(1100px, 96vw); }
+/* Padding tokenized to the --space-* scale (was raw 14/16/10/6) and shaved to
+   app density — a dialog is working chrome, not a marketing card. */
+.ds-ep-dialog-head { padding: var(--space-2-75) var(--space-3) var(--space-1-5); border-bottom: 1px solid var(--rule); }
+.ds-ep-dialog-title { margin: 0; font-size: var(--fs-body); font-weight: 600; }
+.ds-ep-dialog-body { padding: var(--space-2-75) var(--space-3); }
 .ds-ep-dialog-actions {
-    display: flex; gap: 8px; justify-content: flex-end;
-    padding: 10px 14px; border-top: 1px solid var(--rule);
+    display: flex; gap: var(--space-2); justify-content: flex-end;
+    padding: var(--space-2) var(--space-2-75); border-top: 1px solid var(--rule);
 }
 .ds-ep-dialog-btn {
-    padding: 8px 14px;
+    /* Snapped to the --ctl-sm rung + tokenized padding (was 8px 14px). */
+    min-height: var(--ctl-sm); padding: 0 var(--space-3);
+    display: inline-flex; align-items: center; justify-content: center;
     border: 1px solid var(--rule);
     border-radius: var(--r-1, 6px);
     background: var(--panel-2, transparent);
@@ -651,11 +757,11 @@
 .ds-ep-dialog-btn.kind-primary {
     background: var(--accent); color: var(--accent-fg); border-color: var(--accent);
 }
-.ds-ep-dialog-btn.kind-primary:hover { filter: brightness(1.08); }
+.ds-ep-dialog-btn.kind-primary:hover { filter: brightness(0.92); }
 .ds-ep-dialog-btn.kind-danger {
     background: var(--danger); color: var(--on-accent); border-color: var(--danger);
 }
-.ds-ep-dialog-btn.kind-danger:hover { filter: brightness(1.1); }
+.ds-ep-dialog-btn.kind-danger:hover { filter: brightness(0.92); }
 
 /* ---------------------------------------------------------------
    Toast
@@ -675,7 +781,7 @@
     border: 1px solid var(--rule);
     border-left: 3px solid var(--accent);
     border-radius: var(--r-1, 6px);
-    padding: 10px 14px;
+    padding: var(--space-2) var(--space-2-75);
     box-shadow: var(--shadow-3);
     min-width: 220px; max-width: 360px;
     opacity: 1;
@@ -685,6 +791,23 @@
 .ds-ep-toast.kind-warn    { border-left-color: var(--warn); }
 .ds-ep-toast.kind-error   { border-left-color: var(--danger); }
 .ds-ep-toast.leaving { opacity: 0; transform: translateY(-6px); }
+.ds-ep-toast.has-action {
+    display: flex; align-items: center; gap: var(--space-2);
+}
+.ds-ep-toast-msg { flex: 1; }
+.ds-ep-toast-action {
+    flex-shrink: 0;
+    background: transparent;
+    color: var(--accent-ink, var(--accent));
+    border: none;
+    font: inherit;
+    font-weight: 600;
+    padding: var(--space-1) var(--space-1-75);
+    border-radius: var(--r-1, 6px);
+    cursor: pointer;
+}
+.ds-ep-toast-action:hover { background: var(--panel-2, var(--panel-bg)); }
+.ds-ep-toast-action:focus-visible { outline: 2px solid var(--accent-ink, var(--accent)); outline-offset: 1px; }
 @media (max-width: 480px) {
     .ds-ep-toast-host { left: 16px; right: 16px; align-items: center; }
     .ds-ep-toast { width: 100%; max-width: 100%; }
@@ -700,8 +823,8 @@
 .ds-ep-resize:focus-visible,
 .ds-ep-dialog-btn:focus-visible,
 .ds-ep-pager-btn:focus-visible {
-    outline: 2px solid var(--accent-ink);
-    outline-offset: 2px;
+    outline: var(--focus-w) solid var(--focus-color);
+    outline-offset: var(--focus-offset);
 }
 
 /* ---------------------------------------------------------------
@@ -752,19 +875,26 @@
 .ds-ep-iconbtn:focus-visible,
 .ds-ep-iconbtn-group button:focus-visible,
 .ds-ep-resize:focus-visible {
-    outline: 2px solid var(--accent-ink);
-    outline-offset: 2px;
+    outline: var(--focus-w) solid var(--focus-color);
+    outline-offset: var(--focus-offset);
     border-radius: var(--r-1);
 }
 
 /* ---------------------------------------------------------------
    Form primitives — Checkbox, Radio, RadioGroup, Toggle, Field
+   See also .ds-check-box in app-shell.css — a separate CSS-drawn
+   multi-select checkbox family for FileRow/FileCell/SessionCard
+   row selection; intentionally distinct rendering (CSS-drawn vs
+   native), do not let one drift toward the other by accident.
    --------------------------------------------------------------- */
 .ds-check-row,
 .ds-radio-row,
 .ds-toggle-row {
     display: inline-flex; align-items: center; gap: var(--space-2, 8px);
-    min-height: 44px;
+    /* Desktop density: ~30px rows, not the 44px touch target (which stacked a
+       lot of dead vertical space in inspector/settings forms). The full 44px
+       target is restored under pointer:coarse below. */
+    min-height: 30px;
     padding: var(--space-1, 4px) var(--space-2, 8px);
     cursor: pointer;
     color: var(--fg);
@@ -773,6 +903,10 @@
 .ds-check-row:has(input:disabled),
 .ds-radio-row:has(input:disabled),
 .ds-toggle-row:has(button:disabled) { opacity: 0.5; cursor: not-allowed; }
+/* Touch devices: restore the 44px minimum tap target. */
+@media (pointer: coarse) {
+    .ds-check-row, .ds-radio-row, .ds-toggle-row { min-height: 44px; }
+}
 
 .ds-check, .ds-radio {
     width: 18px; height: 18px;
@@ -781,8 +915,8 @@
     cursor: inherit;
 }
 .ds-check:focus-visible, .ds-radio:focus-visible {
-    outline: 2px solid var(--accent-ink);
-    outline-offset: 2px;
+    outline: var(--focus-w) solid var(--focus-color);
+    outline-offset: var(--focus-offset);
 }
 
 .ds-check-label, .ds-radio-label, .ds-toggle-label {
@@ -826,8 +960,8 @@
     transform: translateX(20px);
 }
 .ds-toggle:focus-visible {
-    outline: 2px solid var(--accent-ink);
-    outline-offset: 2px;
+    outline: var(--focus-w) solid var(--focus-color);
+    outline-offset: var(--focus-offset);
 }
 .ds-toggle:disabled { cursor: not-allowed; }
 
@@ -840,25 +974,10 @@
     display: flex; flex-direction: column; gap: var(--space-1, 4px);
     margin-bottom: var(--space-2, 8px);
 }
-.ds-field-label {
-    color: var(--fg-2, var(--fg));
-    font-size: var(--fs-sm, 14px);
-    font-weight: 500;
-}
-.ds-field-required {
-    color: var(--danger);
-    font-weight: 700;
-    margin-left: 2px;
-}
-.ds-field-hint {
-    color: var(--fg-3, var(--fg-2));
-    font-size: var(--fs-tiny, 12px);
-}
-.ds-field-error {
-    color: var(--danger);
-    font-size: var(--fs-tiny, 12px);
-    font-weight: 500;
-}
+/* .ds-field-label / .ds-field-required / .ds-field-hint / .ds-field-error
+   canonical definitions now live in app-shell.css alongside the rest of the
+   .ds-field family (this file's .ds-field-wrap consumes them by class name).
+   Removed here to stop the two bodies fighting on stylesheet load order. */
 .ds-field-wrap [aria-invalid="true"] {
     border-color: var(--danger) !important;
 }
@@ -884,8 +1003,8 @@
     color: var(--panel-text, var(--fg-text));
     border: 1px solid var(--rule);
     border-radius: var(--r-1, 6px);
-    padding: 6px 10px;
-    font-size: 12px;
+    padding: var(--space-1-75) var(--space-2-5);
+    font-size: var(--fs-micro);
     line-height: 1.4;
     max-width: 280px;
     box-shadow: var(--shadow-3);
@@ -928,8 +1047,12 @@
 .ds-dropdown-list { display: flex; flex-direction: column; }
 .ds-dropdown-item {
     display: flex; align-items: center; gap: 8px;
-    min-height: 44px;
-    padding: 8px 12px;
+    /* Dense desktop row (was an unconditional 44px touch target — a menu of
+       these was very tall on desktop). ~30px here; the 44px tap target is
+       restored under @media(pointer:coarse) below, matching the .ds-check-row
+       treatment. */
+    min-height: 30px;
+    padding: var(--space-1-5) var(--space-2-75);
     background: transparent; border: 0;
     color: inherit; font: inherit; text-align: left;
     border-radius: var(--r-1, 4px);
@@ -940,9 +1063,12 @@
     background: var(--panel-2, var(--rule));
     outline: none;
 }
+@media (pointer: coarse) {
+    .ds-dropdown-item { min-height: 44px; padding: var(--space-2) var(--space-3); }
+}
 .ds-dropdown-item:focus-visible {
-    outline: 2px solid var(--accent-ink);
-    outline-offset: -2px;
+    outline: var(--focus-w) solid var(--focus-color);
+    outline-offset: calc(var(--focus-offset) * -1);
 }
 .ds-dropdown-item[aria-disabled="true"] {
     opacity: 0.5;
@@ -959,9 +1085,12 @@
     color: inherit; font: inherit;
     border: 1px solid var(--rule);
     border-radius: var(--r-1, 6px);
-    padding: 6px 12px;
+    padding: 0 var(--space-2-75);
     cursor: pointer;
-    min-height: 32px;
+    /* Snapped to the --ctl-sm rung so this small control shares the height
+       ladder with buttons/fields instead of a lone 32px literal. */
+    min-height: var(--ctl-sm); height: var(--ctl-sm);
+    display: inline-flex; align-items: center;
 }
 @media (pointer: coarse) {
     .ds-dropdown-trigger { min-height: 44px; }
@@ -985,11 +1114,11 @@
     cursor: grab; font: 14px/1 var(--ff-mono, monospace); letter-spacing: -2px;
     touch-action: none; user-select: none;
 }
-.ds-reorder-handle:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 2px; }
+.ds-reorder-handle:focus-visible { outline: var(--focus-w) solid var(--focus-color); outline-offset: var(--focus-offset); }
 .ds-reorder-handle:active { cursor: grabbing; }
 [data-dragging="true"] { opacity: 0.6; cursor: grabbing; transform: scale(0.98); }
 [data-drop-target-active="true"] {
-    outline: 2px dashed var(--focus-ring, var(--accent)); outline-offset: 2px;
+    outline: 2px dashed var(--focus-ring, var(--accent)); outline-offset: var(--focus-offset);
     background: color-mix(in srgb, var(--accent) 8%, var(--panel-1));
 }
 .ds-reorder-insertion-line {
@@ -1195,7 +1324,7 @@
     border: 1px solid var(--rule); border-radius: var(--r-1, 10px);
     padding: var(--space-1, 4px) var(--space-2, 8px); font: inherit;
 }
-.ov-set-control:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 1px; border-color: var(--accent-ink); }
+.ov-set-control:focus-visible { outline: var(--focus-w) solid var(--focus-color); outline-offset: 1px; border-color: var(--accent-ink); }
 input.ov-set-control[type="range"] { padding: 0; accent-color: var(--accent); }
 .ov-set-toggle { width: 18px; height: 18px; accent-color: var(--accent); flex-shrink: 0; cursor: pointer; }
 .ov-set-btn {
@@ -1220,7 +1349,7 @@ input.ov-set-control[type="range"] { padding: 0; accent-color: var(--accent); }
     overflow: hidden;
 }
 .ov-auth-head { display: flex; align-items: center; justify-content: space-between; padding: var(--space-3); border-bottom: 1px solid var(--rule); }
-.ov-auth-title { margin: 0; font-size: var(--fs-2, 16px); font-weight: 700; }
+.ov-auth-title { margin: 0; font-size: var(--fs-lg); font-weight: 700; }
 .ov-auth-x { border: none; background: transparent; color: var(--fg-2, var(--fg)); font-size: 22px; line-height: 1; cursor: pointer; }
 .ov-auth-x:hover { color: var(--fg); }
 .ov-auth-tabs { display: flex; gap: var(--space-1); padding: var(--space-2) var(--space-3) 0; }
@@ -1228,11 +1357,11 @@ input.ov-set-control[type="range"] { padding: 0; accent-color: var(--accent); }
 .ov-auth-tab:hover { color: var(--fg); }
 .ov-auth-tab.is-active { background: var(--bg-2); color: var(--fg); font-weight: 700; }
 .ov-auth-body { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-3); }
-.ov-auth-hint { margin: 0; font-size: var(--fs-0, 12px); color: var(--fg-2, var(--fg)); }
+.ov-auth-hint { margin: 0; font-size: var(--fs-tiny); color: var(--fg-2, var(--fg)); }
 .ov-auth-input { padding: var(--space-2); border: 1px solid var(--rule-strong); border-radius: var(--r-1); background: var(--bg-3); color: var(--fg); }
 .ov-auth-primary { padding: var(--space-2); border: none; border-radius: var(--r-1); background: var(--accent); color: var(--on-accent); font-weight: 700; cursor: pointer; }
 .ov-auth-primary:disabled { opacity: .6; cursor: progress; }
-.ov-auth-error { margin: 0 var(--space-3) var(--space-3); padding: var(--space-2); border-radius: var(--r-1); background: color-mix(in oklab, var(--danger) 15%, transparent); color: var(--danger); font-size: var(--fs-0, 12px); }
+.ov-auth-error { margin: 0 var(--space-3) var(--space-3); padding: var(--space-2); border-radius: var(--r-1); background: color-mix(in oklab, var(--danger) 15%, transparent); color: var(--danger); font-size: var(--fs-tiny); }
 
 /* VideoLightbox — ov-lightbox-* */
 .ov-lightbox-backdrop {
@@ -1244,7 +1373,7 @@ input.ov-set-control[type="range"] { padding: 0; accent-color: var(--accent); }
 .ov-lightbox-x:hover { background: color-mix(in oklab, var(--on-color) 24%, transparent); }
 .ov-lightbox-stage { display: flex; flex-direction: column; align-items: center; gap: var(--space-2); max-width: 92vw; max-height: 90vh; }
 .ov-lightbox-video { max-width: 92vw; max-height: 82vh; border-radius: var(--r-1); background: #000; /* true black media letterbox, intentional */ }
-.ov-lightbox-label { color: var(--on-color); font-size: var(--fs-0, 12px); opacity: .85; }
+.ov-lightbox-label { color: var(--on-color); font-size: var(--fs-tiny); opacity: .85; }
 
 /* ---------------------------------------------------------------
    Editor-primitive scrollbars — thin, dark, themed so docked panels
@@ -1292,7 +1421,7 @@ input.ov-set-control[type="range"] { padding: 0; accent-color: var(--accent); }
 }
 .ds-input-color::-webkit-color-swatch-wrapper { padding: 2px; }
 .ds-input-color::-webkit-color-swatch { border: none; border-radius: var(--r-hair); }
-.ds-input-color:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 2px; }
+.ds-input-color:focus-visible { outline: var(--focus-w) solid var(--focus-color); outline-offset: var(--focus-offset); }
 .ds-input-check {
     appearance: none; -webkit-appearance: none;
     width: 16px; height: 16px; flex-shrink: 0;
@@ -1305,7 +1434,7 @@ input.ov-set-control[type="range"] { padding: 0; accent-color: var(--accent); }
     width: 4px; height: 8px; border: solid var(--accent-fg);
     border-width: 0 2px 2px 0; transform: rotate(45deg);
 }
-.ds-input-check:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 2px; }
+.ds-input-check:focus-visible { outline: var(--focus-w) solid var(--focus-color); outline-offset: var(--focus-offset); }
 
 /* ---------------------------------------------------------------
    Tree drag-reparent affordance — clear drop target + dragging row.
@@ -1377,4 +1506,139 @@ input.ov-set-control[type="range"] { padding: 0; accent-color: var(--accent); }
     .ds-247420 .ds-ep-dock-left { bottom: calc(46vh + 12px); max-height: 40vh; }
     .ds-247420 .ds-ep-dock.collapsed { bottom: auto; }
     .ds-247420 .ds-ep-dock-left.collapsed { top: 6px; bottom: auto; }
+}
+
+/* Collapse / CollapseGroup — progressive-disclosure toggle panel. */
+.ds-ep-collapse {
+    border: 1px solid var(--rule);
+    border-radius: var(--r-1, 4px);
+    background: var(--panel-2, var(--bg-2));
+}
+.ds-ep-collapse + .ds-ep-collapse { margin-top: var(--space-1, 5px); }
+.ds-ep-collapse-head {
+    appearance: none; cursor: pointer; width: 100%;
+    display: flex; align-items: center; gap: var(--space-1-5, 5px);
+    background: transparent; border: none;
+    padding: var(--space-1-5, 5px) var(--space-2, 8px);
+    font: inherit; color: var(--panel-text, var(--fg));
+    text-align: left;
+}
+.ds-ep-collapse-head:hover { background: color-mix(in oklab, var(--accent) 6%, transparent); }
+.ds-ep-collapse-chevron {
+    font-family: var(--ff-mono, monospace);
+    width: 1em; flex-shrink: 0;
+    color: var(--panel-text-3, var(--fg-3));
+}
+.ds-ep-collapse-title { flex: 1; font-weight: 600; }
+.ds-ep-collapse-body {
+    padding: var(--space-2, 8px);
+    border-top: 1px solid var(--rule);
+}
+.ds-ep-collapse-group { display: flex; flex-direction: column; }
+
+/* Divider — plain rule / labeled rule / vertical separator. */
+.ds-ep-divider {
+    border: none; border-top: 1px solid var(--rule);
+    margin: var(--space-2, 8px) 0;
+}
+.ds-ep-divider-labeled {
+    display: flex; align-items: center; gap: var(--space-1-5, 5px);
+    margin: var(--space-2, 8px) 0;
+}
+.ds-ep-divider-labeled::before,
+.ds-ep-divider-labeled::after {
+    content: '';
+    flex: 1;
+    border-top: 1px solid var(--rule);
+}
+.ds-ep-divider-label {
+    font: var(--fs-tiny, 12px)/1 var(--ff-mono, monospace);
+    color: var(--panel-text-3, var(--fg-3));
+    white-space: nowrap;
+}
+/* PermissionMenu (ov-perm) — roving-tabindex menuitemcheckbox rows +
+   approve-all/revoke-all actions, styled to match the sibling Dropdown menu. */
+.ov-perm-menu { min-width: 220px; }
+.ov-perm-list { display: flex; flex-direction: column; padding: var(--space-1, 4px); }
+.ov-perm-item {
+    display: flex; align-items: center; gap: var(--space-2, 8px);
+    width: 100%; min-height: 36px;
+    padding: var(--space-2, 8px) var(--space-3, 16px);
+    background: transparent; border: 0;
+    color: var(--fg); font: inherit; text-align: left;
+    border-radius: var(--r-1, 10px); cursor: pointer;
+}
+.ov-perm-item:hover { background: var(--panel-2, var(--rule)); }
+.ov-perm-item[aria-checked="true"] { color: var(--accent-ink); }
+.ov-perm-item[aria-checked="true"]::before { content: '[x] '; font-family: var(--ff-mono, monospace); }
+.ov-perm-item[aria-checked="false"]::before { content: '[ ] '; font-family: var(--ff-mono, monospace); color: var(--fg-3); }
+.ov-perm-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ov-perm-actions {
+    display: flex; gap: var(--space-2, 8px);
+    padding: var(--space-2, 8px) var(--space-3, 16px);
+    border-top: 1px solid var(--rule); margin-top: var(--space-1, 4px);
+}
+.ov-perm-action {
+    flex: 1; appearance: none; border: 1px solid var(--rule); background: transparent;
+    color: var(--fg-2); font: inherit; font-size: var(--fs-tiny, 12px);
+    padding: 4px 8px; border-radius: var(--r-1, 10px); cursor: pointer;
+}
+.ov-perm-action:hover { background: var(--panel-2, var(--rule)); }
+
+/* ApprovalPrompt — inline in-thread tool-permission card: name/category
+   head, optional args preview, an optional free-text note, four resolution
+   actions. Distinct from PermissionMenu (a settings dropdown); this renders
+   directly in the chat flow like a message. */
+.ov-approval {
+    display: flex; flex-direction: column; gap: var(--space-2, 8px);
+    max-width: var(--measure, 640px);
+    padding: var(--space-4, 16px);
+    border: var(--bw-hair) solid var(--rule);
+    border-radius: var(--r-2, 12px);
+    background: var(--panel, var(--bg-2));
+    box-shadow: var(--shadow-1);
+}
+.ov-approval-head { display: flex; align-items: center; gap: var(--space-2, 8px); color: var(--accent-ink); }
+.ov-approval-icon { display: inline-flex; flex: 0 0 auto; }
+.ov-approval-tool { color: var(--fg); }
+.ov-approval-cat { color: var(--fg-3); font-weight: 400; }
+.ov-approval-args {
+    margin: 0; padding: var(--space-2, 8px);
+    background: var(--panel-2, var(--rule)); border-radius: var(--r-1, 10px);
+    font: var(--fs-tiny, 12px)/1.4 var(--ff-mono, monospace);
+    color: var(--fg-3); max-height: 100px; overflow: auto; white-space: pre-wrap; word-break: break-all;
+}
+.ov-approval-note {
+    width: 100%; min-height: 48px; resize: vertical;
+    padding: var(--space-2, 8px) var(--space-2-75, 12px);
+    border: var(--bw-hair) solid var(--rule); border-radius: var(--r-1, 10px);
+    background: var(--bg); color: var(--fg); font: inherit; box-sizing: border-box;
+}
+.ov-approval-note:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 2px; }
+.ov-approval-actions { display: flex; gap: var(--space-2, 8px); flex-wrap: wrap; align-items: center; }
+.ov-approval-btn {
+    appearance: none; border: var(--bw-hair) solid var(--rule); background: transparent;
+    color: var(--fg); font: inherit; font-size: var(--fs-tiny, 13px); font-weight: 500;
+    padding: var(--space-1-75, 6px) var(--space-3, 16px); border-radius: var(--r-pill, 999px); cursor: pointer;
+}
+.ov-approval-btn:hover { background: var(--panel-2, var(--rule)); }
+.ov-approval-btn-primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.ov-approval-btn-primary:hover { filter: brightness(1.05); }
+.ov-approval-btn-soft { background: var(--panel-2, var(--rule)); border-color: transparent; }
+.ov-approval-btn-deny { margin-left: auto; border-color: var(--danger); color: var(--danger-ink, var(--danger)); }
+.ov-approval-btn-deny:hover { background: var(--danger); color: var(--bg); }
+
+/* CountdownDialog's ticking status line: tabular-nums so the number swap
+   each second doesn't jitter the modal layout. */
+.ds-countdown-status {
+    font-variant-numeric: tabular-nums; font-feature-settings: 'tnum';
+    color: var(--fg-2);
+}
+
+.ds-ep-divider-vertical {
+    display: inline-block;
+    align-self: stretch;
+    width: 0;
+    border-left: 1px solid var(--rule);
+    margin: 0 var(--space-1-5, 5px);
 }

@@ -47,7 +47,7 @@ export function ThemeToggle({ compact = false, onChange } = {}) {
             onclick: () => {
                 const next = current === 'auto' ? 'paper' : (current === 'paper' ? 'ink' : 'auto');
                 applyTheme(next);
-                if (onChange) try { onChange(next); } catch {}
+                if (onChange) try { onChange(next); } catch { /* swallow: consumer onChange callback must not break the toggle */ }
             }
         },
         // CSS-drawn half-disc so the control still reads as the theme switch
@@ -69,7 +69,7 @@ export function ThemeToggle({ compact = false, onChange } = {}) {
             class: 'ds-seg-btn' + (current === mode ? ' is-on' : ''),
             onclick: () => {
                 applyTheme(mode);
-                if (onChange) try { onChange(mode); } catch {}
+                if (onChange) try { onChange(mode); } catch { /* swallow: consumer onChange callback must not break the toggle */ }
             }
         }, label)
     ));

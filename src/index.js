@@ -3,7 +3,14 @@ import path from 'path';
 import os from 'os';
 import { EventEmitter } from 'events';
 
-export const SUBSYSTEMS = ['plugkit', 'exec', 'hook', 'rs_learn', 'rs_codeinsight', 'rs_search', 'bootstrap', 'plugkit_wrapper'];
+// Single source of truth for the subsystem tag universe -- gui/panels.js imports this rather
+// than keeping its own copy. Confirmed against real ../gm source + the last 7 days of every
+// discovered project's real gm-log data: rs_learn (crate explicitly retired, rs-plugkit
+// wasm_dispatch/verbs.rs), rs_codeinsight, rs_search, plugkit_wrapper, acp-launcher, learning,
+// git, and exec all had zero live events in that window and no current emitter in ../gm source
+// -- removed. 'memory' added: rs-plugkit orchestrator/recall.rs tags every recall event
+// sub:"memory", confirmed live (hundreds/day in real logs) and previously unmodeled here.
+export const SUBSYSTEMS = ['plugkit', 'hook', 'bootstrap', 'memory'];
 export function discoverSubsystems(logDir) {
   const out = new Set();
   if (!fs.existsSync(logDir)) return [...out];

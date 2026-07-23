@@ -213,58 +213,41 @@ function extractCodeInsightItems(entries, summary) {
 // memorized text (a `default/mem-*.json` file is a bare text file, not JSON-parseable). Nodes
 // are derived from the plain-text memory files (key/text/namespace); edges are read from the
 // real graph_edges directory when present (never fabricated).
+// .gm/memories/*.md is the current, converged memory corpus (content-hash-keyed md files with
+// a small YAML-ish frontmatter block: key/ns/created/updated) -- .gm/disciplines/default/*.json
+// is a legacy mirror that stops receiving writes once a project converts (confirmed live: this
+// repo's own .gm/disciplines/default/*.json mtimes freeze at a fixed point while .gm/memories/
+// keeps gaining fresh files every session). Reading the frozen mirror silently showed a stale
+// snapshot forever; read the real corpus instead. The md corpus has no cross-reference/edge
+// convention (no [[wikilink]]-style links observed in any real memory file), so this returns
+// nodes only -- an "edges" key would have to be fabricated with no current backing data.
 function readMemoryGraph(cwd) {
-  const disciplinesDir = path.join(cwd, '.gm', 'disciplines');
+  const memoriesDir = path.join(cwd, '.gm', 'memories');
   const nodes = [];
-  const nodeKeys = new Set();
-  let namespaces = [];
-  try {
-    namespaces = fs.readdirSync(disciplinesDir, { withFileTypes: true })
-      .filter(d => d.isDirectory() && !d.name.startsWith('rs-learn_graph_edges') && !d.name.endsWith('-vec') && !d.name.endsWith('-manifest') && !d.name.endsWith('_router'))
-      .map(d => d.name);
-  } catch (_) { return { nodes: [], edges: [], note: 'no .gm/disciplines directory found for this project' }; }
+  let files = [];
+  try { files = fs.readdirSync(memoriesDir).filter(f => f.endsWith('.md')); }
+  catch (_) { return { nodes: [], edges: [], note: 'no .gm/memories directory found for this project' }; }
 
-  for (const ns of namespaces) {
-    const nsDir = path.join(disciplinesDir, ns);
-    let files = [];
-    try { files = fs.readdirSync(nsDir); } catch (_) { continue; }
-    for (const f of files) {
-      if (!f.endsWith('.json')) continue;
-      const key = f.slice(0, -5);
-      let text = null;
-      try {
-        const raw = fs.readFileSync(path.join(nsDir, f), 'utf-8');
-        try {
-          const parsed = JSON.parse(raw);
-          text = typeof parsed === 'string' ? parsed : (parsed.fact || parsed.text || JSON.stringify(parsed).slice(0, 300));
-        } catch (_) {
-          text = raw; // plain-text memory file, not JSON (real observed shape)
-        }
-      } catch (_) { continue; }
-      if (nodeKeys.has(key)) continue;
-      nodeKeys.add(key);
-      let stat = null;
-      try { stat = fs.statSync(path.join(nsDir, f)); } catch (_) {}
-      nodes.push({ key, text: String(text).slice(0, 500), namespace: ns, mtime: stat ? stat.mtimeMs : null });
+  for (const f of files) {
+    let raw;
+    try { raw = fs.readFileSync(path.join(memoriesDir, f), 'utf-8'); } catch (_) { continue; }
+    const key = f.slice(0, -3);
+    let ns = 'default', created = null, updated = null;
+    const fmMatch = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/);
+    let body = raw;
+    if (fmMatch) {
+      body = fmMatch[2];
+      for (const line of fmMatch[1].split(/\r?\n/)) {
+        const m = line.match(/^(\w+):\s*(.*)$/);
+        if (!m) continue;
+        if (m[1] === 'ns') ns = m[2].trim();
+        else if (m[1] === 'created') created = Number(m[2].trim()) || null;
+        else if (m[1] === 'updated') updated = Number(m[2].trim()) || null;
+      }
     }
+    nodes.push({ key, text: body.trim().slice(0, 500), namespace: ns, mtime: updated || created });
   }
-
-  const edges = [];
-  const edgesDir = path.join(disciplinesDir, 'rs-learn_graph_edges');
-  let edgeFiles = [];
-  try { edgeFiles = fs.readdirSync(edgesDir); } catch (_) { edgeFiles = []; }
-  for (const f of edgeFiles) {
-    if (!f.endsWith('.json')) continue;
-    try {
-      const e = JSON.parse(fs.readFileSync(path.join(edgesDir, f), 'utf-8'));
-      edges.push({ id: e.id, src: e.src, dst: e.dst, relation: e.relation, weight: e.weight ?? null, created_at: e.created_at ?? null });
-    } catch (_) {}
-  }
-
-  if (!edgeFiles.length) {
-    return { nodes, edges: [], note: 'no rs-learn_graph_edges discipline directory found; nodes derived from per-namespace memory files, edges unavailable' };
-  }
-  return { nodes, edges };
+  return { nodes, edges: [], note: nodes.length ? undefined : 'no memory files found in .gm/memories for this project' };
 }
 
 function listDisciplines(cwd) {

@@ -53,7 +53,30 @@ export function Tabs({ items = [], active, onChange, children, 'aria-label': ari
             if (btn) btn.focus();
         });
     };
-    return h('div', { class: 'ds-ep-tabs' },
+    // Position the sliding underline from the active tab's geometry. The ref is
+    // on the OUTER .ds-ep-tabs (position:relative) — the indicator is its child,
+    // NOT the flex head's (an abspos child of a horizontal flex row mis-sizes to
+    // 0 in Chromium). Runs on every render (ref fires after applyDiff) so a tab
+    // change re-measures; the CSS transition animates the move. left/width come
+    // from the active tab; top sits the bar on the head's bottom edge.
+    const positionSlider = (root) => {
+        if (!root) return;
+        const head = root.querySelector('.ds-ep-tabs-head');
+        const active = root.querySelector('.ds-ep-tab.active');
+        const ind = root.querySelector('.ds-ep-tab-indicator');
+        if (!head || !active || !ind) return;
+        // Size via left+right insets, NOT width: an abspos element's inline
+        // `width` computes to 0 in some flex-sibling layouts (Chromium), but
+        // left+right insets size reliably. left/right animate via the CSS
+        // transition on .ds-ep-tab-indicator.
+        const rootW = root.offsetWidth;
+        const l = active.offsetLeft, w = active.offsetWidth;
+        ind.style.left = l + 'px';
+        ind.style.right = Math.max(0, rootW - l - w) + 'px';
+        ind.style.top = (head.offsetTop + head.offsetHeight - 2) + 'px';
+        head.classList.add('has-slider');
+    };
+    return h('div', { class: 'ds-ep-tabs', ref: positionSlider },
         h('div', { class: 'ds-ep-tabs-head', role: 'tablist', 'aria-label': ariaLabel || 'tabs' },
             ...items.map((it, idx) => h('button', {
                 key: it.id,
@@ -69,6 +92,9 @@ export function Tabs({ items = [], active, onChange, children, 'aria-label': ari
                 onkeydown: (e) => onTabKeyDown(e, idx)
             }, it.label))
         ),
+        // The sliding underline — child of the outer column (see positionSlider).
+        // Keyed + decorative. Renders at 0-width until positioned (no-JS: hidden).
+        h('span', { key: '__ind', class: 'ds-ep-tab-indicator', 'aria-hidden': 'true' }),
         h('div', {
             class: 'ds-ep-tabs-body',
             role: 'tabpanel',
@@ -224,6 +250,45 @@ export function useMediaQuery(query) {
 }
 
 // ---------------------------------------------------------------------------
+// Grid / GridItem — 24-column responsive layout primitive (screen-real-estate
+// density: dense multi-column panels without a hand-rolled grid-template-
+// columns per consumer). Column-span props are integers 1-24 (or `true` for
+// full-width/auto-grow, or `0` to hide at that breakpoint) evaluated at four
+// tiers mirroring BP_SM/MD/LG/XL (480/768/1024/1440) via media queries in
+// editor-primitives.css — no JS-side matchMedia needed, CSS custom
+// properties + @media do the layout work so it degrades gracefully with
+// SSR/no-hydration. Grid itself is a flex row wrapper; GridItem computes
+// flex-basis/max-width from its span at each tier.
+// ---------------------------------------------------------------------------
+export function Grid({ gap, justify, align, children, key } = {}) {
+    const style = [
+        gap != null ? `gap:${typeof gap === 'number' ? gap + 'px' : gap}` : '',
+        justify ? `justify-content:${justify}` : '',
+        align ? `align-items:${align}` : '',
+    ].filter(Boolean).join(';');
+    return h('div', { key, class: 'ds-ep-grid', style: style || null }, children);
+}
+
+function gridSpanStyle(prefix, val) {
+    if (val === undefined) return '';
+    if (val === true) return `--${prefix}-basis:100%;--${prefix}-grow:1;--${prefix}-display:inherit;`;
+    if (val === 0) return `--${prefix}-display:none;`;
+    const pct = Math.max(0, Math.min(100, (100 / 24) * val));
+    return `--${prefix}-basis:${pct}%;--${prefix}-grow:0;--${prefix}-display:inherit;`;
+}
+
+export function GridItem({ xs, sm, md, lg, xl, children, key } = {}) {
+    const style = [
+        gridSpanStyle('xs', xs),
+        gridSpanStyle('sm', sm),
+        gridSpanStyle('md', md),
+        gridSpanStyle('lg', lg),
+        gridSpanStyle('xl', xl),
+    ].join('');
+    return h('div', { key, class: 'ds-ep-grid-item', style: style || null }, children);
+}
+
+// ---------------------------------------------------------------------------
 // FocusTrap — wraps subtree, traps Tab/Shift+Tab. Mount/unmount lifecycle is
 // managed via DOM-level keydown listener attached when first focused.
 // ---------------------------------------------------------------------------
@@ -280,7 +345,7 @@ export function ResizeHandle({ axis = 'horizontal', onResize, ariaLabel } = {}) 
     };
     const onPointerUp = (e) => {
         dragOrigin = null;
-        try { e.currentTarget.releasePointerCapture && e.currentTarget.releasePointerCapture(e.pointerId); } catch {}
+        try { e.currentTarget.releasePointerCapture && e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* swallow: pointer capture may already be released, drag end still proceeds */ }
     };
     const onKeyDown = (e) => {
         const k = e.key;
@@ -501,7 +566,7 @@ export function Drawer({ side = 'left', open = false, onClose, children, ariaLab
 // ---------------------------------------------------------------------------
 // Dialog — modal. actions = [{label, onClick, kind?}], dismissible (backdrop).
 // ---------------------------------------------------------------------------
-export function Dialog({ title, open = false, onClose, children, actions = [], dismissible = false, ariaLabel } = {}) {
+export function Dialog({ title, open = false, onClose, children, actions = [], dismissible = false, ariaLabel, size = 'default' } = {}) {
     if (!open) return null;
     const opener = (typeof document !== 'undefined') ? document.activeElement : null;
     const close = () => {
@@ -514,7 +579,7 @@ export function Dialog({ title, open = false, onClose, children, actions = [], d
         onmousedown: (e) => { if (dismissible && e.target === e.currentTarget) close(); },
     },
         h('div', {
-            class: 'ds-ep-dialog',
+            class: 'ds-ep-dialog' + (size === 'wide' ? ' is-wide' : ''),
             role: 'dialog',
             'aria-modal': 'true',
             'aria-label': ariaLabel || title || 'Dialog',
@@ -569,20 +634,32 @@ function ensureToastHost() {
     return _toastHostEl;
 }
 
-export function toast({ message, kind = 'info', duration = 3000 } = {}) {
+export function toast({ message, kind = 'info', duration = 3000, actionLabel, onAction } = {}) {
     const host = ensureToastHost();
     if (!host) return () => {};
     const el = document.createElement('div');
     el.className = 'ds-ep-toast kind-' + kind;
     el.setAttribute('role', 'status');
     el.setAttribute('aria-live', 'polite');
-    el.textContent = message;
-    host.appendChild(el);
+    const text = document.createElement('span');
+    text.className = 'ds-ep-toast-msg';
+    text.textContent = message;
+    el.appendChild(text);
     const dismiss = () => {
         if (!el.parentNode) return;
         el.classList.add('leaving');
         setTimeout(() => { el.parentNode && el.parentNode.removeChild(el); }, 200);
     };
+    if (actionLabel && onAction) {
+        el.classList.add('has-action');
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'ds-ep-toast-action';
+        btn.textContent = actionLabel;
+        btn.onclick = () => onAction(dismiss);
+        el.appendChild(btn);
+    }
+    host.appendChild(el);
     if (duration > 0) setTimeout(dismiss, duration);
     return dismiss;
 }
@@ -592,25 +669,69 @@ export function toast({ message, kind = 'info', duration = 3000 } = {}) {
 // gm-pager. page is 1-indexed; pageCount<=1 disables both buttons (no
 // divide-by-zero, no dead-end enabled control). total (optional) renders an
 // item-count suffix ("42 items") alongside the page label.
+//
+// numbered=true switches to a compact numbered-button row (screen-real-estate
+// dense mode) instead of the prev/next label: always shows first, last, the
+// current page, and up to `siblingCount` neighbors either side, collapsing
+// gaps into an ellipsis span. Falls back to prev/next automatically when
+// pageCount<=1. The prev/next contract (default) is untouched.
 // ---------------------------------------------------------------------------
-export function Pager({ page = 1, pageCount = 1, onPage, total, itemLabel = 'items' } = {}) {
+function buildPageRange(count, page, siblingCount) {
+    const limit = siblingCount * 2 + 3; // first + last + current + siblings
+    if (count <= limit) return Array.from({ length: count }, (_, i) => i + 1);
+    const pages = new Set([1, count, page]);
+    for (let i = 1; i <= siblingCount; i++) {
+        pages.add(page - i);
+        pages.add(page + i);
+    }
+    const sorted = [...pages].filter((p) => p >= 1 && p <= count).sort((a, b) => a - b);
+    const result = [];
+    let prev = null;
+    for (const p of sorted) {
+        if (prev !== null && p - prev > 1) result.push('...');
+        result.push(p);
+        prev = p;
+    }
+    return result;
+}
+
+export function Pager({ page = 1, pageCount = 1, onPage, total, itemLabel = 'items', numbered = false, siblingCount = 1 } = {}) {
     const safeCount = Math.max(1, pageCount || 1);
     const safePage = Math.min(Math.max(1, page || 1), safeCount);
     const atStart = safePage <= 1;
     const atEnd = safePage >= safeCount;
+    const prevBtn = h('button', {
+        type: 'button', class: 'ds-ep-pager-btn', disabled: atStart ? 'disabled' : null,
+        'aria-label': 'previous page',
+        onclick: () => { if (!atStart && onPage) onPage(safePage - 1); },
+    }, '<-');
+    const nextBtn = h('button', {
+        type: 'button', class: 'ds-ep-pager-btn', disabled: atEnd ? 'disabled' : null,
+        'aria-label': 'next page',
+        onclick: () => { if (!atEnd && onPage) onPage(safePage + 1); },
+    }, '->');
+    if (numbered) {
+        const range = buildPageRange(safeCount, safePage, Math.max(1, siblingCount || 1));
+        return h('div', { class: 'ds-ep-pager ds-ep-pager-numbered', role: 'group', 'aria-label': 'pagination' },
+            prevBtn,
+            ...range.map((p, i) => p === '...'
+                ? h('span', { key: 'ellipsis-' + i, class: 'ds-ep-pager-ellipsis' }, '...')
+                : h('button', {
+                    key: 'p' + p, type: 'button',
+                    class: 'ds-ep-pager-num' + (p === safePage ? ' is-current' : ''),
+                    'aria-current': p === safePage ? 'page' : null,
+                    'aria-label': 'page ' + p,
+                    onclick: () => { if (p !== safePage && onPage) onPage(p); },
+                }, String(p))),
+            nextBtn,
+            total != null ? h('span', { class: 'ds-ep-pager-total' }, total + ' ' + itemLabel) : null
+        );
+    }
     return h('div', { class: 'ds-ep-pager', role: 'group', 'aria-label': 'pagination' },
-        h('button', {
-            type: 'button', class: 'ds-ep-pager-btn', disabled: atStart ? 'disabled' : null,
-            'aria-label': 'previous page',
-            onclick: () => { if (!atStart && onPage) onPage(safePage - 1); },
-        }, '<-'),
+        prevBtn,
         h('span', { class: 'ds-ep-pager-label' },
             'page ' + safePage + ' / ' + safeCount + (total != null ? ' (' + total + ' ' + itemLabel + ')' : '')),
-        h('button', {
-            type: 'button', class: 'ds-ep-pager-btn', disabled: atEnd ? 'disabled' : null,
-            'aria-label': 'next page',
-            onclick: () => { if (!atEnd && onPage) onPage(safePage + 1); },
-        }, '->')
+        nextBtn
     );
 }
 
@@ -720,7 +841,7 @@ export function JsonViewer({ value, emptyText = 'no data', maxHeight, mode = 'pl
     if (!text) return h('div', { class: 'ds-ep-json ds-ep-json-empty' }, emptyText);
     const style = maxHeight ? ('max-height:' + maxHeight) : null;
     if (!knownJson && (mode === 'highlight' || mode === 'tree')) {
-        try { parsed = JSON.parse(text); knownJson = true; } catch { /* not JSON — render plain */ }
+        try { parsed = JSON.parse(text); knownJson = true; } catch { /* swallow: not JSON — render plain */ }
     }
     let body;
     if (mode === 'tree' && knownJson && parsed !== null && typeof parsed === 'object') {
@@ -746,4 +867,54 @@ export function IconButtonGroup({ items = [], value, onChange, dense = false } =
             onclick: () => { if (!it.disabled && onChange) onChange(it.id); }
         }, it.glyph != null ? it.glyph : it.label))
     );
+}
+
+// ---------------------------------------------------------------------------
+// Collapse — progressive-disclosure toggle panel (screen-real-estate
+// density: property inspectors, nested settings, FAQ-style panels).
+// Controlled component: caller owns `expanded` state and passes `onToggle`,
+// same pattern as Drawer/Dialog `open`/`onClose` above — no internal state.
+// ---------------------------------------------------------------------------
+export function Collapse({ title, expanded = false, onToggle, children, key } = {}) {
+    return h('div', { key, class: 'ds-ep-collapse' + (expanded ? ' is-expanded' : '') },
+        h('button', {
+            type: 'button', class: 'ds-ep-collapse-head',
+            'aria-expanded': expanded ? 'true' : 'false',
+            onclick: () => { if (onToggle) onToggle(!expanded); },
+        },
+            h('span', { class: 'ds-ep-collapse-chevron' }, expanded ? 'v' : '>'),
+            h('span', { class: 'ds-ep-collapse-title' }, title)),
+        expanded ? h('div', { class: 'ds-ep-collapse-body' }, children) : null);
+}
+
+// ---------------------------------------------------------------------------
+// CollapseGroup — accordion wrapper enforcing single-open-at-a-time when
+// `accordion=true` (default false — group just lays out children, each
+// Collapse still individually controlled). `openId`/`onOpenChange` drive the
+// accordion; `items` is [{id, title, children}].
+// ---------------------------------------------------------------------------
+export function CollapseGroup({ items = [], openId, onOpenChange, accordion = false, key } = {}) {
+    return h('div', { key, class: 'ds-ep-collapse-group' },
+        ...items.map((it) => Collapse({
+            key: it.id,
+            title: it.title,
+            expanded: accordion ? it.id === openId : Boolean(it.expanded),
+            onToggle: (next) => {
+                if (!onOpenChange) return;
+                if (accordion) onOpenChange(next ? it.id : null);
+                else onOpenChange(it.id, next);
+            },
+            children: it.children,
+        })));
+}
+
+// ---------------------------------------------------------------------------
+// Divider — plain rule, optional centered text label, optional vertical
+// orientation (for segmenting dense panels without a full Section wrapper).
+// ---------------------------------------------------------------------------
+export function Divider({ label, vertical = false, key } = {}) {
+    if (vertical) return h('span', { key, class: 'ds-ep-divider ds-ep-divider-vertical', role: 'separator', 'aria-orientation': 'vertical' });
+    if (!label) return h('hr', { key, class: 'ds-ep-divider' });
+    return h('div', { key, class: 'ds-ep-divider ds-ep-divider-labeled', role: 'separator' },
+        h('span', { class: 'ds-ep-divider-label' }, label));
 }

@@ -16,7 +16,7 @@ const h = webjsx.createElement;
 // ---------------------------------------------------------------------------
 // TOOLBAR primitive -- gmsniff has no dedicated ds Toolbar component; this
 // is the same inline `.gm-toolbar` row already used by AllEvents/Search/
-// SubsystemPanel/QueryPanel/Codesearch/GmCallConsole, factored into a small
+// SubsystemPanel/Codesearch/GmCallConsole, factored into a small
 // helper so panels that had NO toolbar (Sessions, Process Tree, Deviations,
 // Live Stream) can add one with the same visual/behavioral shape.
 // `actions` is an array of vnodes (buttons/inputs/chips) rendered left-to-right.
@@ -24,13 +24,17 @@ function Toolbar(...actions) {
   return h('div', { class: 'gm-toolbar' }, ...actions);
 }
 
+// Seed set matches src/index.js SUBSYSTEMS (the server-side source of truth, returned as
+// snap.subsystems) -- confirmed against real ../gm source + a week of real gm-log data across
+// every discovered project: only plugkit (dispatch.* default), hook (gates/deviations),
+// bootstrap (bootstrap.js), and memory (recall.rs, sub:"memory") have live emitters today.
+// Dashboard's observedSubsystems merge (below) still grows SUB_LIST if a genuinely new tag
+// shows up in real data, so this seed only needs to start correct, not stay exhaustive by hand.
 export const SUB_COLORS = {
-  hook: 'var(--purple, #bc8cff)', exec: 'var(--accent, #58a6ff)', rs_learn: 'var(--green, #3fb950)',
-  rs_codeinsight: 'var(--orange, #ffa657)', rs_search: 'var(--yellow, #d29922)', plugkit: 'var(--flame, #ff7b72)',
-  plugkit_wrapper: 'var(--teal, #39d353)', bootstrap: 'var(--sky, #79c0ff)', 'acp-launcher': '#ff9ddb',
-  learning: 'var(--green, #3fb950)', git: 'var(--orange, #ffa657)',
+  hook: 'var(--purple, #bc8cff)', plugkit: 'var(--flame, #ff7b72)',
+  bootstrap: 'var(--sky, #79c0ff)', memory: 'var(--green, #3fb950)',
 };
-export let SUB_LIST = ['plugkit', 'exec', 'hook', 'rs_learn', 'rs_codeinsight', 'rs_search', 'bootstrap', 'plugkit_wrapper', 'acp-launcher', 'learning', 'git'];
+export let SUB_LIST = ['plugkit', 'hook', 'bootstrap', 'memory'];
 
 function colorFor(sub) {
   if (SUB_COLORS[sub]) return SUB_COLORS[sub];
@@ -577,6 +581,9 @@ export function SkillDrilldownDialog(setBody) {
   const p = s.project;
   const tierTone = TIER_TONE[p.instruction_tier] || TIER_TONE.default;
   const recentEvents = p.recent_events || [];
+  // Split-pane: instruction (left) and its output feed (right) visible simultaneously --
+  // an observer reading recent output no longer loses the instruction out of view, and vice
+  // versa. Each column scrolls independently (own max-height) rather than one long page scroll.
   const body = h('div', {},
     h('div', { class: 'gm-mb-12' },
       Pill({ children: p.phase || 'no phase' }),
@@ -587,19 +594,22 @@ export function SkillDrilldownDialog(setBody) {
       TIER_LABEL[p.instruction_tier] || p.instruction_tier,
       p.instruction_source_file ? h('div', { class: 'gm-mt-4', style: 'font-weight:400; font-family:monospace; font-size:0.85em; word-break:break-all;' }, esc(p.instruction_source_file)) : null,
       p.instruction_source_repo ? h('div', { class: 'gm-mt-4', style: 'font-weight:400;' }, 'synced from: ' + esc(p.instruction_source_repo)) : null),
-    h('h2', { class: 'gm-mt-10' }, 'Served instruction (' + (p.instruction_key || 'unknown') + ')'),
-    p.unparseable
-      ? h('p', { class: 'gm-text-danger' }, 'next-step.md present but could not be parsed (partial write or malformed content).')
-      : !p.present
-        ? Empty('No active agent -- next-step.md not found for this project.')
-        : h('pre', { class: 'gm-code-block', style: 'white-space:pre-wrap; max-height:400px; overflow:auto;' }, esc(p.instruction_excerpt || '')),
-    h('h2', { class: 'gm-mt-10' }, `Recent output${p.recent_sess ? ' (session ' + String(p.recent_sess).slice(0, 20) + ')' : ''}`),
-    recentEvents.length
-      ? h('div', { style: 'max-height:300px; overflow:auto;' }, ...recentEvents.map(outputFeedRow))
-      : Empty(p.recent_sess ? 'No recent dispatch events for this session.' : 'No session activity recorded for this project yet.'));
+    h('div', { class: 'gm-split-pane' },
+      h('div', { class: 'gm-split-col' },
+        h('h2', { class: 'gm-mt-10' }, 'Served instruction (' + (p.instruction_key || 'unknown') + ')'),
+        p.unparseable
+          ? h('p', { class: 'gm-text-danger' }, 'next-step.md present but could not be parsed (partial write or malformed content).')
+          : !p.present
+            ? Empty('No active agent -- next-step.md not found for this project.')
+            : h('pre', { class: 'gm-code-block', style: 'white-space:pre-wrap; max-height:60vh; overflow:auto;' }, esc(p.instruction_excerpt || ''))),
+      h('div', { class: 'gm-split-col' },
+        h('h2', { class: 'gm-mt-10' }, `Recent output${p.recent_sess ? ' (session ' + String(p.recent_sess).slice(0, 20) + ')' : ''}`),
+        recentEvents.length
+          ? h('div', { style: 'max-height:60vh; overflow:auto;' }, ...recentEvents.map(outputFeedRow))
+          : Empty(p.recent_sess ? 'No recent dispatch events for this session.' : 'No session activity recorded for this project yet.'))));
   return Dialog({
     title: (p.cwd || '').split(/[\\/]/).filter(Boolean).pop() || p.cwd,
-    open: true, dismissible: true, ariaLabel: 'Instruction and output drilldown',
+    open: true, dismissible: true, ariaLabel: 'Instruction and output drilldown', size: 'wide',
     onClose: () => closeSkillDrilldown(setBody),
     actions: [{ label: 'Close', onClick: () => closeSkillDrilldown(setBody) }],
     children: body,
@@ -623,7 +633,10 @@ function skillLayoutRow(p, setBody) {
         p.instruction_tier ? h('span', { class: 'gm-ml-6', style: `color:${tierTone};` }, TIER_LABEL[p.instruction_tier] || p.instruction_tier) : null)),
     p.present ? PhaseWalk({ reached }) : null,
     p.skill ? h('div', { class: 'gm-mt-4', style: 'opacity:0.75;' }, 'skill: ' + esc(p.skill) + (p.instruction_key ? ' / ' + esc(p.instruction_key) : '')) : null,
-    p.instruction_excerpt ? h('div', { class: 'gm-mt-4', style: 'opacity:0.6; font-size:0.85em;' }, esc(p.instruction_excerpt.slice(0, 140)) + (p.instruction_excerpt.length > 140 ? '...' : '')) : null,
+    p.instruction_excerpt ? h('div', { class: 'gm-mt-4', style: 'opacity:0.6; font-size:0.85em;' },
+        (p.instruction_excerpt.length > 140
+          ? h('span', {}, esc(p.instruction_excerpt.slice(0, 140)) + '... ', h('em', { style: 'opacity:0.8;' }, '(preview -- click for full instruction)')
+          : esc(p.instruction_excerpt))) : null,
     p.recent_events && p.recent_events.length
       ? h('div', { class: 'gm-mt-4', style: 'opacity:0.55; font-size:0.8em;' },
           'output: ' + p.recent_events.slice(0, 2).map(n => n.kind + (n.phase ? ':' + n.phase : '')).join(', '))
@@ -822,102 +835,6 @@ export async function ProcessTree(sess, sessList, onSelect, onOpenSession, onRef
 }
 
 // ---------------------------------------------------------------------------
-// QUERY
-// ---------------------------------------------------------------------------
-const QUERY_TEMPLATES = {
-  'slow-dispatches': { filter: { event: 'dispatch.end', dur_ms: { gt: 1000 } }, projection: ['ts', 'verb', 'dur_ms', 'cwd', 'sess'], sort: [['dur_ms', 'desc']], limit: 50 },
-  'all-deviations': { filter: { event: { regex: '^deviation\\.' } }, groupBy: ['event'], sort: [['ts', 'desc']], limit: 200 },
-  'phase-transitions': { filter: { event: 'phase.transitioned' }, projection: ['ts', 'phase', 'next_skill', 'sess', 'cwd'], sort: [['ts', 'desc']], limit: 100 },
-  'dispatch-errors': { filter: { event: 'dispatch.error' }, projection: ['ts', 'verb', 'error', 'sess', 'cwd'], sort: [['ts', 'desc']], limit: 100 },
-  'instruction-served': { filter: { event: 'instruction.served', prd_pending: { gt: 0 } }, projection: ['ts', 'phase', 'prd_pending', 'mutables_pending', 'sess', 'cwd'], sort: [['ts', 'desc']], limit: 50 },
-  'recent-by-cwd': { filter: {}, groupBy: ['cwd'], sort: [['ts', 'desc']], limit: 500 },
-};
-const queryState = { spec: { filter: {}, sort: [['ts', 'desc']], limit: 50 }, result: null };
-export function QueryPanel(setBody) {
-  const specText = JSON.stringify(queryState.spec, null, 2);
-  return h('div', { class: 'ds-panel' },
-    h('h2', {}, 'Query -- compose your own analysis'),
-    h('p', { class: 'gm-hint-text' },
-      'JSON shape: {filter:{sub, event:{regex}, dur_ms:{gt}}, groupBy, projection, sort, limit}. Operators: eq/ne/in/nin/gt/gte/lt/lte/regex/contains/exists/and/or/not.'),
-    h('div', { class: 'gm-toolbar' },
-      Btn({ children: 'Run', onClick: () => runQuery(setBody) }),
-      Btn({ children: 'Reset', variant: 'ghost', onClick: () => { queryState.spec = { filter: {}, sort: [['ts', 'desc']], limit: 50 }; queryState.result = null; setBody(); } }),
-      h('select', {
-        onchange: (e) => { if (QUERY_TEMPLATES[e.target.value]) { queryState.spec = QUERY_TEMPLATES[e.target.value]; runQuery(setBody); } },
-      }, h('option', { value: '' }, 'load template...'), ...Object.keys(QUERY_TEMPLATES).map(k => h('option', { value: k }, k)))),
-    h('textarea', {
-      class: 'gm-textarea', spellcheck: 'false',
-      oninput: (e) => { try { queryState.spec = JSON.parse(e.target.value); } catch (_) {} },
-    }, specText),
-    queryState.result || h('p', { class: 'gm-empty' }, 'Run a query to see results.'));
-}
-async function runQuery(setBody) {
-  const r = await apiPost('/api/query', queryState.spec);
-  if (r.error) { queryState.result = h('p', { class: 'gm-text-danger' }, `${r.error}: ${r.detail || ''}`); setBody(); return; }
-  if (r.groups) {
-    const total = r.groups.reduce((s, g) => s + g.count, 0);
-    queryState.result = h('div', {},
-      h('p', { class: 'gm-hint-text' }, `grouped by ${r.groupBy.join(', ')} -- ${r.groups.length} groups -- ${total} rows (total: ${r.total})`),
-      h('table', { class: 'gm-table' }, h('tr', {}, h('th', {}, 'group'), h('th', {}, 'count'), h('th', {}, 'sample')),
-        ...r.groups.map((g, i) => h('tr', { key: i }, h('td', {}, h('strong', {}, g.key)), h('td', {}, String(g.count)), h('td', {}, JsonViewer({ value: g.sample[0] || {}, mode: 'highlight', maxHeight: '180px' }))))));
-  } else {
-    const rows = r.rows || [];
-    queryState.result = rows.length ? h('div', {},
-      h('p', { class: 'gm-hint-text' }, `${r.returned} of ${r.total} matching rows`),
-      renderEventTable(rows)) : Empty(`no matches (scanned ${r.total || 0} events)`);
-  }
-  setBody();
-}
-
-// ---------------------------------------------------------------------------
-// RECALL / EXEC / HOOKS STATS
-// ---------------------------------------------------------------------------
-export async function RecallStats() {
-  const r = await api('/api/recall');
-  if (r.error) return Empty('Failed to load recall stats: ' + r.error);
-  if (!r.total) return Empty('No recall events recorded yet.');
-  const hitPct = Math.round((r.hits / r.total) * 100);
-  return h('div', { class: 'gm-flex-row' },
-    h('div', { class: 'ds-panel' }, h('h2', {}, 'Recall Stats'),
-      StatsGrid({ items: [{ val: r.total, lbl: 'total recalls' }, { val: r.hits, lbl: 'hits' }, { val: r.misses, lbl: 'misses' }, { val: r.avgDur + 'ms', lbl: 'avg duration' }] }),
-      h('div', { class: 'gm-center-mt-14' },
-        h('div', { class: 'ds-stat-val' + (hitPct < 50 ? ' err-rate' : '') }, hitPct + '%'),
-        h('div', { class: 'gm-muted-12' }, 'hit rate'))),
-    h('div', { class: 'ds-panel gm-flex-2' }, h('h2', {}, 'Recent Recalls'),
-      h('table', { class: 'gm-table' }, h('tr', {}, h('th', {}, 'Time'), h('th', {}, 'Query'), h('th', {}, 'Hit'), h('th', {}, 'ms')),
-        ...(r.recent || []).map((e, i) => h('tr', { key: i }, h('td', {}, fmtTs(e.ts)), h('td', {}, e.query || ''), h('td', {}, e.hit ? Badge({ children: 'hit', tone: 'positive' }) : Badge({ children: 'miss', tone: 'danger' })), h('td', {}, String(e.dur_ms || '')))))));
-}
-
-export async function ExecStats() {
-  const r = await api('/api/exec');
-  if (r.error) return Empty('Failed to load exec stats: ' + r.error);
-  if (!r.total) return Empty('No exec spawns recorded yet.');
-  const runtimes = Object.entries(r.byRuntime || {}).sort((a, b) => b[1] - a[1]);
-  return h('div', { class: 'gm-flex-row' },
-    h('div', { class: 'ds-panel' }, h('h2', {}, 'Exec Stats'),
-      StatsGrid({ items: [{ val: r.total, lbl: 'total spawns' }, { val: r.errors, lbl: 'errors' }] }),
-      h('h2', { class: 'gm-mt-12' }, 'By Runtime'),
-      ...runtimes.map(([rt, n]) => BarRow({ label: rt, value: String(n), pct: r.total ? Math.round(n / r.total * 100) : 0 }))),
-    h('div', { class: 'ds-panel gm-flex-2' }, h('h2', {}, 'Recent Spawns'),
-      h('table', { class: 'gm-table' }, h('tr', {}, h('th', {}, 'Time'), h('th', {}, 'Runtime'), h('th', {}, 'OK'), h('th', {}, 'PID'), h('th', {}, 'CWD'), h('th', {}, 'Code')),
-        ...(r.recent || []).map((e, i) => h('tr', { key: i }, h('td', {}, fmtTs(e.ts)), h('td', {}, Badge({ children: e.runtime || '?', tone: 'neutral' })), h('td', {}, e.ok === false ? Badge({ children: 'err', tone: 'danger' }) : Badge({ children: 'ok', tone: 'positive' })), h('td', {}, String(e.pid || '')), h('td', { title: e.cwd || '' }, (e.cwd || '').slice(0, 40)), h('td', {}, String(e.code_len || '')))))));
-}
-
-export async function HookStats() {
-  const r = await api('/api/hooks');
-  if (r.error) return Empty('Failed to load hook stats: ' + r.error);
-  if (!r.total) return Empty('No hook events recorded yet.');
-  const evs = Object.entries(r.byEvent || {}).sort((a, b) => b[1] - a[1]);
-  return h('div', { class: 'gm-flex-row' },
-    h('div', { class: 'ds-panel' }, h('h2', {}, 'Hook Stats'), StatsGrid({ items: [{ val: r.total, lbl: 'total hooks' }] }),
-      h('h2', { class: 'gm-mt-12' }, 'By Event'),
-      ...evs.map(([ev, n]) => BarRow({ label: ev, value: String(n), pct: r.total ? Math.round(n / r.total * 100) : 0, tone: 'var(--purple,#bc8cff)' }))),
-    h('div', { class: 'ds-panel gm-flex-2' }, h('h2', {}, 'Recent Hooks'),
-      h('table', { class: 'gm-table' }, h('tr', {}, h('th', {}, 'Time'), h('th', {}, 'Event'), h('th', {}, 'Phase'), h('th', {}, 'PID'), h('th', {}, 'ms')),
-        ...(r.recent || []).map((e, i) => h('tr', { key: i }, h('td', {}, fmtTs(e.ts)), h('td', {}, Badge({ children: e.event || '?', tone: 'neutral' })), h('td', {}, e.phase || ''), h('td', {}, String(e.pid || '')), h('td', {}, String(e.dur_ms || '')))))));
-}
-
-// ---------------------------------------------------------------------------
 // PRD EDITOR / MUTABLES EDITOR
 // ---------------------------------------------------------------------------
 const PRD_STATUSES = ['pending', 'in_progress', 'resolved', 'blocked'];
@@ -1036,45 +953,6 @@ export async function LifecycleControl(setBody) {
       Btn({ children: 'Transition', onClick: () => lifecycleAct('transition', {}) }),
       Btn({ children: 'Instruction', onClick: () => lifecycleAct('instruction', {}) }),
       Btn({ children: 'Residual Scan', onClick: () => lifecycleAct('residual-scan', {}) })));
-}
-
-// ---------------------------------------------------------------------------
-// RS TOOLS
-// ---------------------------------------------------------------------------
-export async function RsTools() {
-  const r = await api('/api/rs-tools', { scoped: true });
-  if (r.error) return Empty('Failed to load rs-tools: ' + r.error);
-  const rm = r.recallMisses || { total: 0, byQuery: [] };
-  const rs = r.recallScores || { total: 0, histogram: [] };
-  const modes = r.recallModes || { total: 0, modes: [] };
-  const embed = r.embedFailures || { total: 0, byStep: [] };
-  const rejects = r.classifierRejects || { total: 0, byReason: [] };
-  const leverage = r.memoryLeverage || { rows: [] };
-  const noData = !r.eventCount;
-  if (noData) return Empty('No rs-learn events recorded for this project cwd yet.');
-  return h('div', {},
-    StatsGrid({ items: [
-      { val: r.eventCount, lbl: 'events (this cwd)' },
-      { val: rm.total, lbl: 'recall misses' },
-      { val: rs.total, lbl: 'recall scores' },
-      { val: embed.total, lbl: 'embed failures' },
-      { val: rejects.total, lbl: 'classifier rejects' },
-    ] }),
-    h('div', { class: 'gm-flex-row gm-mt-12' },
-      h('div', { class: 'ds-panel' }, h('h2', {}, 'Recall Score Histogram'),
-        ...(rs.histogram.length ? rs.histogram.map(b => BarRow({ label: b.bucket, value: String(b.count), pct: rs.total ? Math.round(b.count / rs.total * 100) : 0 })) : [Empty('no scored recalls')])),
-      h('div', { class: 'ds-panel' }, h('h2', {}, 'Recall Modes'),
-        ...(modes.modes.length ? modes.modes.map(m => BarRow({ label: m.mode, value: `${m.count} (${m.pct}%)`, pct: m.pct })) : [Empty('no recall-mode events')]))),
-    h('div', { class: 'gm-flex-row gm-mt-12' },
-      h('div', { class: 'ds-panel' }, h('h2', {}, 'Recall Misses by Query'),
-        ...(rm.byQuery.length ? rm.byQuery.slice(0, 10).map(q => BarRow({ label: q.query.slice(0, 40), value: String(q.count) })) : [Empty('no misses')])),
-      h('div', { class: 'ds-panel' }, h('h2', {}, 'Classifier Rejects'),
-        ...(rejects.byReason.length ? rejects.byReason.map(rr => BarRow({ label: rr.reason, value: String(rr.count) })) : [Empty('no rejects')]))),
-    h('div', { class: 'ds-panel gm-mt-12' }, h('h2', {}, 'Memory Leverage (7d)'),
-      leverage.rows.length ? h('table', { class: 'gm-table' },
-        h('tr', {}, h('th', {}, 'session'), h('th', {}, 'memorized'), h('th', {}, 'recalled back'), h('th', {}, 'leverage %')),
-        ...leverage.rows.map((row, i) => h('tr', { key: i }, h('td', {}, row.sess), h('td', {}, String(row.memorized)), h('td', {}, String(row.recalled_back)), h('td', {}, row.leveragePct + '%'))))
-        : Empty('no memorize/recall activity in the last 7 days')));
 }
 
 // ---------------------------------------------------------------------------
