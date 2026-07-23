@@ -219,9 +219,14 @@ assert(Array.isArray(projectsResp.projects), '/api/projects returns projects arr
 // phase, plus a real plugkit instruction.served event on project A's own watcher.log so
 // recentEventsForCwd's per-cwd activity index has something to surface. Project C (no
 // next-step.md, no matching-cwd events beyond its earlier dispatch.end marker) exercises the
-// zero-events/no-phase branch in the same request.
+// zero-events/no-phase branch in the same request. The instruction body is deliberately >500
+// chars -- readLivePhaseState previously hard-capped instruction_excerpt at body.slice(0, 500),
+// silently clipping every real-world instruction (which routinely run several KB); this
+// regression-tests that the fix actually serves the full body, not just a longer-but-still-
+// truncated one.
+const longInstructionBody = 'test instruction line.\n'.repeat(30); // 24 * 30 = 720 chars, > 500
 fs.writeFileSync(path.join(projA.proj, '.gm', 'next-step.md'),
-  '# Next step\n\nPhase: PLAN\nUpdated: ' + Date.now() + '\n\n---\n\n# PLAN\n\ntest instruction body\n');
+  '# Next step\n\nPhase: PLAN\nUpdated: ' + Date.now() + '\n\n---\n\n# PLAN\n\n' + longInstructionBody);
 const sessMarker = 'cwd-test-sess-' + Date.now();
 fs.appendFileSync(projA.logFp, `evt: ${JSON.stringify({ ts: Date.now(), sub: 'plugkit', event: 'instruction.served', sess: sessMarker, phase: 'PLAN', prd_pending: 2, cwd: projA.proj })}\n`);
 // Give the fanout tailer a moment to ingest the freshly-appended line into store.events.
@@ -232,6 +237,10 @@ assert(Array.isArray(liveStateResp.projects), '/api/projects/live-state returns 
 const liveA = liveStateResp.projects.find(p => path.resolve(p.cwd) === projA.proj);
 assert(liveA, 'project A present in live-state response');
 assert.strictEqual(liveA.phase, 'PLAN', 'project A live phase read from next-step.md');
+assert(liveA.instruction_excerpt.endsWith(longInstructionBody),
+  `instruction_excerpt must contain the FULL untruncated body (got ${liveA.instruction_excerpt.length} chars, expected it to end with the ${longInstructionBody.length}-char body)`);
+assert(liveA.instruction_excerpt.length > 500,
+  `instruction_excerpt must exceed the old 500-char cap to prove it is no longer truncated (got ${liveA.instruction_excerpt.length})`);
 assert(Array.isArray(liveA.recent_events), 'project A recent_events is an array');
 assert(liveA.recent_events.some(n => n.kind === 'instruction' && n.phase === 'PLAN' && n.prd_pending === 2),
   `project A recent_events missing the instruction.served node (got ${JSON.stringify(liveA.recent_events)})`);

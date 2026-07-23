@@ -278,7 +278,13 @@ export function readLivePhaseState(cwd) {
       phase: phase || null,
       skill: heading ? (PHASE_HEADING_TO_SKILL[heading] || null) : null,
       instruction_heading: heading,
-      instruction_excerpt: body.slice(0, 500),
+      // Full served instruction body, untruncated -- next-step.md instructions routinely run
+      // several KB (real PLAN/EXECUTE prose observed multi-KB in production), and clipping to
+      // an arbitrary char count silently hid most of the actual instruction from the observer.
+      // The GUI drilldown's <pre> already scrolls (max-height + overflow:auto), so there is no
+      // rendering reason to cap this server-side; the row-level preview does its own short
+      // client-side slice for the list view, independent of this field.
+      instruction_excerpt: body,
       updated_ts,
       stale: updated_ts === null ? true : (Date.now() - updated_ts) > threshold,
       present: true,
