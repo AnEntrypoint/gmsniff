@@ -64,3 +64,7 @@ Exit codes: 0 = success (zero-match queries included), 2 = usage error; uncaught
 - `node test.js` runs the single mock-free, real-services integration test (real temp log dirs, real watchers, real SSE). Extend this file for new coverage; there is no test framework and no parallel suite by design.
 - `gui/ds/` is vendored byte-for-byte from the sibling `../anentrypoint-design` repo via `npm run sync:ds`; never hand-edit files under it.
 - Pushing to `main` auto-bumps the patch version and publishes to npm via GitHub Actions; do not hand-bump `package.json`.
+
+## Donations
+
+BTC: `15FLMay4of9rk4jK2davzzL4HDdGQtscGX`
