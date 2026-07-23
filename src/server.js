@@ -245,7 +245,10 @@ function readMemoryGraph(cwd) {
         else if (m[1] === 'updated') updated = Number(m[2].trim()) || null;
       }
     }
-    nodes.push({ key, text: body.trim().slice(0, 500), namespace: ns, mtime: updated || created });
+    // CRLF-authored memory files (confirmed live: this repo's own .gm/memories/*.md are CRLF)
+    // otherwise leave embedded \r bytes in every returned node's text -- normalize the body's
+    // own line endings the same way stripGlyphs/parseCodeInsight already does for .codeinsight.
+    nodes.push({ key, text: body.replace(/\r\n/g, '\n').trim().slice(0, 500), namespace: ns, mtime: updated || created });
   }
   return { nodes, edges: [], note: nodes.length ? undefined : 'no memory files found in .gm/memories for this project' };
 }
