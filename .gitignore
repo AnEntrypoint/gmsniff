@@ -64,3 +64,4 @@ node_modules/
 .agentplug-kv/
 *.stackdump
 .gm/claim-audit-fired
+.gm/.gm-continue-count
