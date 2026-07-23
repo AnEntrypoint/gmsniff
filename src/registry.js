@@ -394,16 +394,31 @@ export function discoverProjects(events, { extraRoots = [] } = {}) {
 // Exported (not just isKnownVerb) so a capabilities/introspection surface (server.js's
 // GET /api/capabilities) can enumerate the exact allowlist an agentic caller's /api/lifecycle
 // POST is validated against, rather than that list being duplicated/hardcoded a second place.
+// Kept in sync against ../gm (gm-plugkit) authoritative source: the orchestrator-verb match in
+// rs-plugkit/crates/plugkit-core/src/orchestrator/mod.rs::is_orchestrator_verb plus the
+// dispatch-verb match in rs-plugkit/crates/plugkit-core/src/wasm_dispatch/verbs.rs. Do not add
+// a verb name here without a corresponding match arm in one of those two real sources --
+// phantom entries pass isKnownVerb() but always dispatch to "unknown verb" downstream.
 export const VERB_ALLOWLIST = new Set([
+  // orchestrator verbs (is_orchestrator_verb)
   'instruction', 'transition', 'prd-add', 'prd-resolve', 'mutable-add', 'mutable-resolve',
-  'residual-scan', 'codesearch', 'recall', 'browser', 'exec_js', 'phase-status',
-  'git_status', 'git_log', 'git_diff', 'git_show', 'git_branch', 'git_add', 'git_commit',
-  'git_finalize', 'git_push', 'git_checkout', 'git_fetch', 'git_rm', 'git_revert', 'git_reset',
-  'memorize-fire', 'memorize-prune',
-  'auto-recall', 'bash', 'branch_status', 'close', 'discipline-note', 'exec', 'fetch',
-  'filter', 'fs_read', 'fs_write', 'health', 'kill-port', 'kv', 'lang', 'learn',
-  'learn-debug', 'learn-status', 'memorize', 'memorize-continue', 'mutable-list',
-  'prd-list', 'recall_kv', 'task-list', 'task-spawn', 'task-stop',
+  'mutable-list', 'prd-list', 'residual-scan', 'auto-recall', 'phase-status',
+  'memorize-fire', 'memorize-continue', 'discipline-note',
+  'task-spawn', 'task-list', 'task-stop', 'task-output',
+  'fsm-vendor', 'claim-audit', 'submodule-check',
+  // dispatch-verb match arms (verbs.rs)
+  'fs_read', 'fs_write', 'fs_readdir', 'fs_stat', 'fetch', 'env_get',
+  'kv_get', 'kv_put', 'kv_query', 'exec_js', 'lang', 'browser', 'health',
+  'sql_open', 'sql_close', 'sql_list_dbs', 'sql_exec', 'sql_query', 'sql_smoke',
+  'sql_serialize', 'sql_deserialize', 'codeinsight_index', 'codesearch',
+  'memorize', 'memorize-prune', 'recall',
+  'bash', 'branch_status', 'git_status', 'git_push', 'git_add', 'git_commit',
+  'git_finalize', 'git_log', 'git_diff', 'git_show', 'git_fetch', 'git_branch',
+  'git_checkout', 'git_rm', 'git_revert', 'git_reset',
+  'forget', 'discipline', 'close', 'filter', 'status',
+  'learn', // retired: verbs.rs match arm always errors, but it IS a real recognized dispatch target
+  // lang-runner verbs (shell_exec dispatch)
+  'python', 'powershell', 'ssh', 'go', 'rust', 'c', 'cpp', 'java', 'deno',
 ]);
 
 const VERB_SHAPE = /^[a-zA-Z0-9_-]+$/;

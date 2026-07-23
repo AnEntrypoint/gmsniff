@@ -557,11 +557,26 @@ function closeSkillDrilldown(setBody) {
   setBody();
 }
 
+// Renders one recentEventsForCwd() node (processTree's own node shape) as a single output-feed
+// row -- same kind/phase/id vocabulary ConversationHistory already uses, so a project's recent
+// activity reads consistently whether viewed from Skill Layout or Process Tree.
+function outputFeedRow(n, i) {
+  return h('div', { key: i, class: 'gm-list-row' },
+    h('span', { class: 'ts gm-mr-8' }, fmtTs(n.ts)),
+    h('strong', {}, n.kind),
+    n.phase ? h('span', { class: 'gm-pill gm-ml-6' }, n.phase) : null,
+    n.id ? h('span', { class: 'gm-pill gm-ml-6' }, n.id) : null,
+    n.deviation ? h('span', { class: 'gm-pill gm-ml-6', style: 'color:var(--flame,#f85149);' }, n.deviation) : null,
+    n.reason ? h('span', { class: 'gm-ml-6', style: 'opacity:0.7;' }, String(n.reason)) : null,
+    n.prd_pending != null ? h('span', { class: 'gm-ml-6', style: 'opacity:0.7;' }, `prd_pending=${n.prd_pending}`) : null);
+}
+
 export function SkillDrilldownDialog(setBody) {
   const s = skillDrilldownState;
   if (!s.open || !s.project) return null;
   const p = s.project;
   const tierTone = TIER_TONE[p.instruction_tier] || TIER_TONE.default;
+  const recentEvents = p.recent_events || [];
   const body = h('div', {},
     h('div', { class: 'gm-mb-12' },
       Pill({ children: p.phase || 'no phase' }),
@@ -577,10 +592,14 @@ export function SkillDrilldownDialog(setBody) {
       ? h('p', { class: 'gm-text-danger' }, 'next-step.md present but could not be parsed (partial write or malformed content).')
       : !p.present
         ? Empty('No active agent -- next-step.md not found for this project.')
-        : h('pre', { class: 'gm-code-block', style: 'white-space:pre-wrap; max-height:400px; overflow:auto;' }, esc(p.instruction_excerpt || '')));
+        : h('pre', { class: 'gm-code-block', style: 'white-space:pre-wrap; max-height:400px; overflow:auto;' }, esc(p.instruction_excerpt || '')),
+    h('h2', { class: 'gm-mt-10' }, `Recent output${p.recent_sess ? ' (session ' + String(p.recent_sess).slice(0, 20) + ')' : ''}`),
+    recentEvents.length
+      ? h('div', { style: 'max-height:300px; overflow:auto;' }, ...recentEvents.map(outputFeedRow))
+      : Empty(p.recent_sess ? 'No recent dispatch events for this session.' : 'No session activity recorded for this project yet.'));
   return Dialog({
     title: (p.cwd || '').split(/[\\/]/).filter(Boolean).pop() || p.cwd,
-    open: true, dismissible: true, ariaLabel: 'Instruction drilldown',
+    open: true, dismissible: true, ariaLabel: 'Instruction and output drilldown',
     onClose: () => closeSkillDrilldown(setBody),
     actions: [{ label: 'Close', onClick: () => closeSkillDrilldown(setBody) }],
     children: body,
@@ -604,8 +623,20 @@ function skillLayoutRow(p, setBody) {
         p.instruction_tier ? h('span', { class: 'gm-ml-6', style: `color:${tierTone};` }, TIER_LABEL[p.instruction_tier] || p.instruction_tier) : null)),
     p.present ? PhaseWalk({ reached }) : null,
     p.skill ? h('div', { class: 'gm-mt-4', style: 'opacity:0.75;' }, 'skill: ' + esc(p.skill) + (p.instruction_key ? ' / ' + esc(p.instruction_key) : '')) : null,
-    p.instruction_excerpt ? h('div', { class: 'gm-mt-4', style: 'opacity:0.6; font-size:0.85em;' }, esc(p.instruction_excerpt.slice(0, 140)) + (p.instruction_excerpt.length > 140 ? '...' : '')) : null);
+    p.instruction_excerpt ? h('div', { class: 'gm-mt-4', style: 'opacity:0.6; font-size:0.85em;' }, esc(p.instruction_excerpt.slice(0, 140)) + (p.instruction_excerpt.length > 140 ? '...' : '')) : null,
+    p.recent_events && p.recent_events.length
+      ? h('div', { class: 'gm-mt-4', style: 'opacity:0.55; font-size:0.8em;' },
+          'output: ' + p.recent_events.slice(0, 2).map(n => n.kind + (n.phase ? ':' + n.phase : '')).join(', '))
+      : null);
 }
+
+// Same glance-cap shape Dashboard's "Projects now" table already uses (app.js/panels.js
+// GLANCE_MAX): alive projects -- the live-agent signal this panel exists for -- always show
+// in full; dead-watcher rows fill remaining slots up to the cap with an explicit hidden count,
+// never a silent truncation. discoverProjects already sorts alive-first so slice() preserves
+// that priority. Only applied to the unfiltered view -- an active filter searches every
+// discovered project, not just the glance window.
+const SKILL_LAYOUT_GLANCE_MAX = 20;
 
 export async function SkillLayout(setBody) {
   const r = await api('/api/projects/live-state');
@@ -618,6 +649,11 @@ export async function SkillLayout(setBody) {
     ? projects.filter(p => [(p.cwd || ''), (p.phase || ''), (p.skill || ''), (p.instruction_key || '')].some(f => f.toLowerCase().includes(filterVal)))
     : projects;
 
+  const aliveCount = filtered.filter(p => p.alive).length;
+  const glanceLimit = Math.max(SKILL_LAYOUT_GLANCE_MAX, aliveCount);
+  const shown = filterVal ? filtered : filtered.slice(0, glanceLimit);
+  const hiddenCount = filtered.length - shown.length;
+
   return h('div', {},
     h('h2', {}, 'Skill Layout / Live Agents'),
     Toolbar(
@@ -626,9 +662,9 @@ export async function SkillLayout(setBody) {
         value: skillLayoutState.filter,
         oninput: (e) => { skillLayoutState.filter = e.target.value; setBody(); },
       })),
-    h('p', { class: 'gm-mt-4', style: 'opacity:0.7;' }, `${filtered.length} of ${projects.length} projects`),
-    filtered.length
-      ? h('div', { class: 'gm-mt-10' }, ...filtered.map(p => skillLayoutRow(p, setBody)))
+    h('p', { class: 'gm-mt-4', style: 'opacity:0.7;' }, `${shown.length} of ${projects.length} projects${hiddenCount > 0 ? ` (${hiddenCount} more dead watchers hidden -- filter to find them)` : ''}`),
+    shown.length
+      ? h('div', { class: 'gm-mt-10' }, ...shown.map(p => skillLayoutRow(p, setBody)))
       : Empty('No projects match this filter.'),
     SkillDrilldownDialog(setBody));
 }

@@ -27,7 +27,7 @@ const NAV = {
 };
 
 const ui = {
-  panel: 'overview',
+  panel: 'skill-layout',
   connState: 'connecting',
   devTotal: 0,
   treeSess: '',
@@ -437,8 +437,14 @@ function connectSSE() {
       if (typeof ev.event === 'string' && ev.event.startsWith('deviation.')) refreshDeviationBadge();
       if (ui.panel === 'deviations' && typeof ev.event === 'string' && ev.event.startsWith('deviation.')) renderBody();
       if (ui.panel === 'sessions') renderBody();
+      // Skill Layout's instruction+output feed only changes on plugkit dispatch/phase events
+      // (not every raw log line -- e.g. hook/exec noise from an unrelated subsystem would
+      // otherwise force a full projects/live-state re-fetch on every tick), so gate the
+      // re-render to the same event family project.phase-changed already uses.
+      if (ui.panel === 'skill-layout' && ev._sub === 'plugkit') renderBody();
     } catch (_) {}
   });
+  sse.addEventListener('project.phase-changed', () => { if (ui.panel === 'skill-layout') renderBody(); });
   sse.onerror = () => {
     ui.connState = 'reconnecting'; renderShell();
     try { sse.close(); } catch (_) {}

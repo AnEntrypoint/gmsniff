@@ -132,6 +132,7 @@ const fanoutSrv = await createServer({ logDir: fs.mkdtempSync(path.join(os.tmpdi
 const fanoutReceived = [];
 let fanoutHello = false;
 const projectEvents = [];
+let projC; // assigned inside the promise body below, read after it resolves (dynamic-rediscovery block)
 await new Promise((resolve, reject) => {
   const req = http.get(fanoutSrv.url + '/api/stream', res => {
     let buf = '';
@@ -181,7 +182,7 @@ await new Promise((resolve, reject) => {
     assert.strictEqual(path.resolve(evSpoof.cwd), projB.proj, 'spoofed cwd field must be overridden by the real discovered project B cwd, not the claimed project A cwd');
 
     // Dynamic rediscovery: a third project appears on disk after the fanout already started.
-    const projC = makeProject('proj-c');
+    projC = makeProject('proj-c');
     process.env.GM_SPOOL_DIRS = [projA.proj, projB.proj, projC.proj].join(path.delimiter);
     const addedDl = Date.now() + 3000;
     while (Date.now() < addedDl && !projectEvents.some(p => p.event === 'project.added' && path.resolve(p.data.cwd) === projC.proj)) {
@@ -212,6 +213,33 @@ await new Promise((resolve, reject) => {
 // /api/projects surfaces watching=true for a fanout-covered project (boot detection/surfacing).
 const projectsResp = await (await fetch(fanoutSrv.url + '/api/projects')).json();
 assert(Array.isArray(projectsResp.projects), '/api/projects returns projects array');
+
+// --- Skill Layout output feed (recent_sess/recent_events on /api/projects/live-state) ---
+// Real gm-plugkit .gm/next-step.md shape for project A so readLivePhaseState finds a live
+// phase, plus a real plugkit instruction.served event on project A's own watcher.log so
+// recentEventsForCwd's per-cwd activity index has something to surface. Project C (no
+// next-step.md, no matching-cwd events beyond its earlier dispatch.end marker) exercises the
+// zero-events/no-phase branch in the same request.
+fs.writeFileSync(path.join(projA.proj, '.gm', 'next-step.md'),
+  '# Next step\n\nPhase: PLAN\nUpdated: ' + Date.now() + '\n\n---\n\n# PLAN\n\ntest instruction body\n');
+const sessMarker = 'cwd-test-sess-' + Date.now();
+fs.appendFileSync(projA.logFp, `evt: ${JSON.stringify({ ts: Date.now(), sub: 'plugkit', event: 'instruction.served', sess: sessMarker, phase: 'PLAN', prd_pending: 2, cwd: projA.proj })}\n`);
+// Give the fanout tailer a moment to ingest the freshly-appended line into store.events.
+await new Promise(r => setTimeout(r, 500));
+
+const liveStateResp = await (await fetch(fanoutSrv.url + '/api/projects/live-state')).json();
+assert(Array.isArray(liveStateResp.projects), '/api/projects/live-state returns projects array');
+const liveA = liveStateResp.projects.find(p => path.resolve(p.cwd) === projA.proj);
+assert(liveA, 'project A present in live-state response');
+assert.strictEqual(liveA.phase, 'PLAN', 'project A live phase read from next-step.md');
+assert(Array.isArray(liveA.recent_events), 'project A recent_events is an array');
+assert(liveA.recent_events.some(n => n.kind === 'instruction' && n.phase === 'PLAN' && n.prd_pending === 2),
+  `project A recent_events missing the instruction.served node (got ${JSON.stringify(liveA.recent_events)})`);
+assert.strictEqual(liveA.recent_sess, sessMarker, 'project A recent_sess matches the session that produced the most recent event');
+const liveC = liveStateResp.projects.find(p => path.resolve(p.cwd) === projC.proj);
+assert(liveC, 'project C present in live-state response');
+assert.strictEqual(liveC.recent_sess, null, 'project C (no sess-tagged events) has null recent_sess, not a crash');
+assert.deepStrictEqual(liveC.recent_events, [], 'project C recent_events is an empty array, not undefined/null');
 
 await fanoutSrv.close();
 if (prevSpoolDirs === undefined) delete process.env.GM_SPOOL_DIRS; else process.env.GM_SPOOL_DIRS = prevSpoolDirs;

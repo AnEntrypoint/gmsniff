@@ -339,7 +339,12 @@ class Store {
     // readLivePhaseState's own mtime-gated cache means each tick is a cheap statSync per
     // project in the common no-change case -- polling here, push to the client via SSE.
     this._lastPhaseSig = new Map(); // cwd -> `${phase}|${instruction_heading}|${updated_ts}`
+    // Skip the tick body entirely when nobody is listening: discoverProjects (real synchronous
+    // statSync/readFileSync per discovered project) has no reason to run just to broadcast to
+    // zero SSE clients -- live-witnessed this session as a real contributor to the event loop
+    // getting starved under a populated multi-project log even with the GUI closed.
     this._phasePollTimer = setInterval(() => {
+      if (this.sseClients.size === 0) return;
       for (const cwd of discoverProjects(this.events).map(p => p.cwd)) {
         this._maybeBroadcastPhaseChange(cwd);
       }
@@ -587,6 +592,16 @@ class Store {
     if (!sess) return { sess: null, nodes: [], gaps: [] };
     const match = sess === '(no-session)' ? '' : sess;
     const evs = this.events.filter(e => (e.sess || '') === match).slice().sort((a,b)=>(a.ts||'').localeCompare(b.ts||''));
+    return this._processTreeFromEvents(sess, evs);
+  }
+
+  // Node-classification core shared by processTree (filters this.events fresh, for the
+  // Process Tree/Conversation History panels' explicit single-session queries) and
+  // recentEventsForCwd (reads from the pre-built _buildCwdActivityIndex, for the Skill Layout
+  // multi-project sweep) -- one implementation of the instruction/transition/prd/mutable/
+  // deviation node shape, never two copies to keep in sync. `evs` must already be this
+  // session's events in chronological order.
+  _processTreeFromEvents(sess, evs) {
     const PHASES = ['PLAN','EXECUTE','EMIT','VERIFY','CONSOLIDATE','COMPLETE'];
     const nodes = [];
     const gaps = [];
@@ -635,6 +650,46 @@ class Store {
       gaps.unshift({ ts: firstWrite.ts, kind: 'no-instruction-dispatched', detail: firstWrite });
     }
     return { sess, nodes, gaps, phase_reached: PHASES.map(p => evs.some(e => (e._sub === 'plugkit' && (e.event === 'phase.transitioned' || e.event === 'instruction.served') && e.phase === p))) };
+  }
+
+  // Builds { cwdKey -> latestSess, sess -> events[] } in ONE pass over this.events, for
+  // recentEventsForCwdBatch below. /api/projects/live-state calls that once per request and
+  // reuses the index across every discovered project -- the naive per-project O(events) scan
+  // this replaced (git-blame: recentEventsForCwd) made a single live-state request O(projects *
+  // events), which on a real multi-project multi-million-event log measurably blocked the
+  // single-threaded event loop long enough to starve every other connection (SSE clients
+  // included) for the duration -- live-witnessed as the local GUI server going fully
+  // unresponsive under a real browser tab + the 2.5s phase-poll timer during this session.
+  _buildCwdActivityIndex() {
+    const latestSessByCwd = new Map(); // normalized cwd -> {sess, ts}
+    const eventsBySess = new Map(); // sess -> events[] (insertion order == events array order)
+    for (const e of this.events) {
+      if (!e.sess) continue;
+      let arr = eventsBySess.get(e.sess);
+      if (!arr) { arr = []; eventsBySess.set(e.sess, arr); }
+      arr.push(e);
+      if (!e.cwd) continue;
+      const norm = String(e.cwd).replace(/\\/g, '/').toLowerCase();
+      const cur = latestSessByCwd.get(norm);
+      if (!cur || (e.ts && e.ts > cur.ts)) latestSessByCwd.set(norm, { sess: e.sess, ts: e.ts || '' });
+    }
+    return { latestSessByCwd, eventsBySess };
+  }
+
+  // Recent activity for one project's most-recently-active session, for the Skill Layout
+  // drilldown's output-alongside-instruction view: reuses processTree's own per-event node
+  // classification (instruction/transition/prd-add/prd-resolve/mutable-add/mutable-resolve/
+  // deviation) via processTreeFromEvents below, scoped to whichever session last touched this
+  // cwd per the shared index, capped to the most recent `limit` nodes (newest first). Callers
+  // build the index once (_buildCwdActivityIndex) and pass it in -- never re-scans this.events.
+  recentEventsForCwd(cwd, index, limit = 20) {
+    if (!cwd) return { sess: null, nodes: [] };
+    const norm = String(cwd).replace(/\\/g, '/').toLowerCase();
+    const best = index.latestSessByCwd.get(norm);
+    if (!best) return { sess: null, nodes: [] };
+    const evs = index.eventsBySess.get(best.sess) || [];
+    const { nodes } = this._processTreeFromEvents(best.sess, evs);
+    return { sess: best.sess, nodes: nodes.slice(-limit).reverse() };
   }
 
   search(q, { sub, limit = 100 } = {}) {
@@ -935,7 +990,7 @@ const API_ROUTES = [
   { path: '/api/browser-sessions', method: 'GET', params: ['cwd'], response: '{cwd, sessions, ports, sessionsFileFound, portsFileFound}' },
   { path: '/api/lifecycle/response', method: 'GET', params: ['cwd', 'verb', 'file'], response: '{ok, cwd, verb, file, response} | 404 if not yet written' },
   { path: '/api/stream', method: 'GET', params: [], response: 'text/event-stream SSE: event/data frames of kind "event"|"error"|"hello"|"project.added"|"project.removed"|"project.phase-changed"' },
-  { path: '/api/projects/live-state', method: 'GET', params: [], response: '{projects: [{cwd, alive, phase, skill, instruction_key, instruction_heading, instruction_excerpt, instruction_tier, instruction_source_file, updated_ts, stale}]}' },
+  { path: '/api/projects/live-state', method: 'GET', params: [], response: '{projects: [{cwd, alive, phase, skill, instruction_key, instruction_heading, instruction_excerpt, instruction_tier, instruction_source_file, updated_ts, stale, recent_sess, recent_events: [{ts, kind, phase, ...}]}]}' },
 ];
 
 export function createServer({ logDir = DEFAULT_LOG_DIR, port = 0, host = '127.0.0.1' } = {}) {
@@ -997,10 +1052,12 @@ export function createServer({ logDir = DEFAULT_LOG_DIR, port = 0, host = '127.0
       }
       if (p === '/api/projects/live-state') {
         const base = discoverProjects(store.events);
+        const activityIndex = store._buildCwdActivityIndex();
         const projects = base.map(proj => {
           const phaseState = readLivePhaseState(proj.cwd);
           const key = phaseState.instruction_heading ? phaseState.instruction_heading.toLowerCase().replace('update-docs', 'update_docs') : null;
           const tier = phaseState.present ? resolveInstructionTier(proj.cwd, key) : { tier: 'default', file_path: null, source_repo: null };
+          const recent = store.recentEventsForCwd(proj.cwd, activityIndex, 20);
           return {
             cwd: proj.cwd, alive: proj.alive,
             phase: phaseState.phase, skill: phaseState.skill,
@@ -1008,6 +1065,7 @@ export function createServer({ logDir = DEFAULT_LOG_DIR, port = 0, host = '127.0
             instruction_excerpt: phaseState.instruction_excerpt,
             instruction_tier: tier.tier, instruction_source_file: tier.file_path, instruction_source_repo: tier.source_repo,
             updated_ts: phaseState.updated_ts, stale: phaseState.stale, present: phaseState.present, unparseable: !!phaseState.unparseable,
+            recent_sess: recent.sess, recent_events: recent.nodes,
           };
         });
         return send(res, 200, { projects });

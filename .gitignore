@@ -59,3 +59,8 @@ node_modules/
 # <<< plugkit managed
 .gm/pw-sock-*/
 .gm/*.log
+.gm/gm.db
+.gm/browser-chrome-profile-*/
+.agentplug-kv/
+*.stackdump
+.gm/claim-audit-fired
