@@ -85,7 +85,7 @@ function rsToolsMemoryLeverage(evs, days = 7, sess) {
     }
   }
   for (const e of filtered) {
-    if (e._sub !== 'rs_learn' || e.event !== 'recall') continue;
+    if (e._sub !== 'memory' || e.event !== 'recall') continue;
     const k = e.sess || '(no-session)';
     const s = bySess.get(k);
     if (!s) continue;
@@ -101,7 +101,7 @@ function rsToolsMemoryLeverage(evs, days = 7, sess) {
 }
 
 function rsToolsEmbedFailures(evs) {
-  const structured = evs.filter(e => e.event === 'embed_fail' || (e._sub === 'rs_learn' && e.event === 'embed_fail'));
+  const structured = evs.filter(e => e.event === 'embed_fail' || (e._sub === 'memory' && e.event === 'embed_fail'));
   const byStep = new Map();
   for (const e of structured) {
     const step = e.step || '?';
@@ -447,7 +447,7 @@ class Store {
   }
 
   recallStats() {
-    const evs = this.events.filter(e => e._sub === 'rs_learn' && e.event === 'recall');
+    const evs = this.events.filter(e => e._sub === 'memory' && e.event === 'recall');
     const hits = evs.filter(e => e.hit).length;
     const misses = evs.filter(e => !e.hit).length;
     const avgDur = evs.length ? Math.round(evs.reduce((s, e) => s + (e.dur_ms || 0), 0) / evs.length) : 0;

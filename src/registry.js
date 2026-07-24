@@ -427,7 +427,9 @@ export const VERB_ALLOWLIST = new Set([
   'forget', 'discipline', 'close', 'filter', 'status',
   'learn', // retired: verbs.rs match arm always errors, but it IS a real recognized dispatch target
   // lang-runner verbs (shell_exec dispatch)
-  'python', 'powershell', 'ssh', 'go', 'rust', 'c', 'cpp', 'java', 'deno',
+  'powershell', 'ps1', 'ssh', 'go', 'rust', 'c', 'cpp', 'java', 'deno',
+  // Recognized verbs (verbs.rs match arms, though they return errors)
+  'wait', 'sleep',
 ]);
 
 const VERB_SHAPE = /^[a-zA-Z0-9_-]+$/;

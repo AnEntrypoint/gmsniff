@@ -26,7 +26,7 @@ const FLAG_DEFS = [
   { name: 'after', type: 'string', desc: 'alias for --since' },
   { name: 'until', type: 'string', desc: 'ISO date, epoch ms, or relative Ns/Nm/Nh/Nd/Nw; alias --before' },
   { name: 'before', type: 'string', desc: 'alias for --until' },
-  { name: 'sub', type: 'multi', desc: 'filter by subsystem (plugkit, hook, exec, rs_learn, ...); repeat = OR' },
+  { name: 'sub', type: 'multi', desc: 'filter by subsystem (plugkit, hook, bootstrap, memory, ...); repeat = OR' },
   { name: 'event', type: 'multi', desc: 'filter by event type (dispatch.end, deviation.gate-deny, ...); repeat = OR' },
   { name: 'sess', type: 'multi', desc: 'filter by session id prefix; repeat = OR' },
   { name: 'exclude-sess', type: 'multi', desc: 'exclude session id prefix; repeat = exclude any' },
@@ -221,7 +221,7 @@ FILTERS (repeat = OR within a flag, AND across flags)
   --grep <re>            text regex; repeat = AND
   --igrep <re>           exclude if regex matches
   --invert               invert the filter result
-  --sub <name>           subsystem (plugkit, hook, exec, rs_learn, …)
+  --sub <name>           subsystem (plugkit, hook, bootstrap, memory, ...)
   --event <name>         event type (dispatch.end, deviation.gate-deny, …)
   --sess <id>            session id; repeat = OR
   --exclude-sess <id>    exclude session id prefix; repeat = exclude any
@@ -309,8 +309,7 @@ function buildFilter(opts) {
 }
 
 const SUB_COLORS = {
-  plugkit: 31, hook: 35, exec: 34, rs_learn: 32, rs_codeinsight: 33,
-  rs_search: 33, bootstrap: 36, plugkit_wrapper: 32, 'acp-launcher': 35,
+  plugkit: 31, hook: 35, memory: 32, bootstrap: 36,
 };
 function color(s, code) {
   if (process.env.NO_COLOR || !process.stdout.isTTY) return s;
@@ -628,33 +627,25 @@ function listSessions(all) {
 // expects next (every gate denial names its recovery verb — surface it so a reader does not have
 // to remember the mapping).
 const DEVIATION_META = {
-  'deviation.mid-chain-stall': { sev: 'warn', recover: 'instruction' },
   'deviation.long-gap-no-instruction': { sev: 'warn', recover: 'instruction' },
   'deviation.long-gap-retry-without-instruction': { sev: 'warn', recover: 'instruction' },
   'deviation.residual-premature': { sev: 'warn', recover: 'prd-resolve|prd-add' },
   'deviation.prd-anti-shape': { sev: 'warn', recover: 'prd-add (split into |F|=1 rows)' },
   'deviation.gate-deny': { sev: 'info', recover: '(named in reason)' },
   'deviation.prd-resolve-unknown-id': { sev: 'warn', recover: 'prd-add (correct id)' },
-  'deviation.client-edit-no-witness': { sev: 'critical', recover: 'browser' },
-  'deviation.browser-witness-missing': { sev: 'critical', recover: 'browser' },
-  'deviation.browser-witness-hash-mismatch': { sev: 'critical', recover: 'browser' },
-  'deviation.complete-without-ci-validation': { sev: 'critical', recover: 'git_status + CI-wait' },
-  'deviation.consolidate-without-residual-scan': { sev: 'critical', recover: 'residual-scan' },
-  'deviation.complete-without-residual-scan': { sev: 'critical', recover: 'residual-scan' },
   'deviation.push-dirty': { sev: 'critical', recover: 'git_status + commit' },
   'deviation.complete-chain-poll': { sev: 'info', recover: 'stop (chain terminal)' },
   'deviation.bash-git-bypass': { sev: 'warn', recover: 'git verbs' },
-  // Confirmed against real ../gm rs-plugkit source (gates.rs, orchestrator/prd.rs, lib.rs) and
-  // real gm-log data (see AGENTS.md source-of-truth note) -- previously unmodeled here.
   'deviation.prd-add-no-id': { sev: 'warn', recover: 'prd-add (pass id, or a slugifiable subject/title/description)' },
   'deviation.platform-search-drift': { sev: 'warn', recover: 'codesearch|recall (not raw Grep/Glob mid-chain)' },
   'deviation.await-result-violation': { sev: 'critical', recover: 'memorize-continue (pipeline suspended, only this verb advances state)' },
   'deviation.unsolicited-doc-created': { sev: 'warn', recover: '(fs_write to an unlisted top-level doc path -- confirm intentional)' },
   'deviation.stuck-loop-escalation': { sev: 'critical', recover: 'prd-add (name the stuck state) then wfgy-method, never bare-retry the same transition' },
-  'deviation.browser-profile-collision': { sev: 'warn', recover: 'browser (session reset/new -- profile dir contention)' },
   'deviation.push-non-main-branch': { sev: 'warn', recover: 'git_branch (consolidate to main per CLAUDE.md invariant)' },
   'deviation.push-rebase-conflict': { sev: 'critical', recover: 'resolving-merge-conflicts then git_push' },
   'deviation.push-remote-outpaces': { sev: 'warn', recover: 'git_fetch + re-resolve before git_push' },
+  'deviation.spool-poll': { sev: 'warn', recover: 'instruction (spool polling detected -- use plugkit verbs, never sleep+cat loops)' },
+  'deviation.prd-resolve-duplicate-witness': { sev: 'warn', recover: 'prd-resolve (write distinct witness per row, never copy-paste)' },
 };
 const SEV_COLOR = { critical: 31, warn: 33, info: 36 };
 // A foreign session is tagged cwd-<hash> by the hook layer; an own session carries a real
