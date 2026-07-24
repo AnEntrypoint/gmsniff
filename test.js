@@ -255,6 +255,67 @@ if (prevSpoolDirs === undefined) delete process.env.GM_SPOOL_DIRS; else process.
 delete process.env.GM_FANOUT_REDISCOVER_MS;
 fs.rmSync(fanoutRoot, { recursive: true, force: true });
 
+// -- Formal verification: schema versioning, resource bounds, new monitoring endpoints --
+assert.strictEqual(snap.schemaVersion, 'v1', 'snapshot carries schema version');
+assert(typeof snap.evictedCount === 'number', 'snapshot has evictedCount');
+assert(typeof snap.maxEvents === 'number', 'snapshot has maxEvents');
+assert(snap.maxEvents > 0, 'maxEvents is positive');
+
+const spoolQueue = await get('/api/spool-queue');
+assert(Array.isArray(spoolQueue.queues), 'spool-queue has queues array');
+assert.strictEqual(spoolQueue.schemaVersion, 'v1', 'spool-queue has schema version');
+
+const watcherVersions = await get('/api/watcher-versions');
+assert(Array.isArray(watcherVersions.projects), 'watcher-versions has projects array');
+assert.strictEqual(watcherVersions.schemaVersion, 'v1', 'watcher-versions has schema version');
+
+const instructionTiers = await get('/api/instruction-tiers');
+assert(typeof instructionTiers.byTier === 'object', 'instruction-tiers has byTier object');
+assert(typeof instructionTiers.byTier.vendored === 'number', 'byTier.vendored is a number');
+assert(typeof instructionTiers.byTier['source-synced'] === 'number', 'byTier.source-synced is a number');
+assert(typeof instructionTiers.byTier.default === 'number', 'byTier.default is a number');
+assert.strictEqual(instructionTiers.schemaVersion, 'v1', 'instruction-tiers has schema version');
+
+// Per-event schema version on a live SSE event
+const schemaDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gmsniff-schema-'));
+const schemaDay = new Date().toISOString().slice(0, 10);
+fs.mkdirSync(path.join(schemaDir, schemaDay), { recursive: true });
+const schemaFile = path.join(schemaDir, schemaDay, 'plugkit.jsonl');
+fs.writeFileSync(schemaFile, '');
+const schemaSrv = await createServer({ logDir: schemaDir, port: 0 });
+const schemaReceived = [];
+await new Promise((resolve, reject) => {
+  const req = http.get(schemaSrv.url + '/api/stream', res => {
+    let buf = '';
+    res.on('data', chunk => {
+      buf += chunk.toString('utf8');
+      let idx;
+      while ((idx = buf.indexOf('\n\n')) !== -1) {
+        const frame = buf.slice(0, idx); buf = buf.slice(idx + 2);
+        let data = '';
+        for (const l of frame.split('\n')) if (l.startsWith('data: ')) data += l.slice(6);
+        if (data) { try { schemaReceived.push(JSON.parse(data)); } catch {} }
+      }
+    });
+    res.on('error', reject);
+  });
+  req.on('error', reject);
+  (async () => {
+    await new Promise(r => setTimeout(r, 500));
+    const marker = 'SCHEMA_TEST_' + Date.now();
+    fs.appendFileSync(schemaFile, JSON.stringify({ ts: new Date().toISOString(), event: 'schema.test', pid: process.pid, marker }) + '\n');
+    const dl = Date.now() + 3000;
+    while (Date.now() < dl && !schemaReceived.some(e => e.marker === marker)) await new Promise(r => setTimeout(r, 100));
+    const ev = schemaReceived.find(e => e.marker === marker);
+    assert(ev, 'schema test event received via SSE');
+    assert.strictEqual(ev._schema, 'v1', 'live SSE event carries _schema: v1');
+    req.destroy();
+    resolve();
+  })().catch(reject);
+});
+await schemaSrv.close();
+fs.rmSync(schemaDir, { recursive: true, force: true });
+
 await close();
 
 // CLI information tiering: --help leads QUICK START -> DAILY -> DIAGNOSTICS; --schema carries tier fields.
@@ -263,4 +324,4 @@ assert(helpOut.indexOf('QUICK START') > -1 && helpOut.indexOf('QUICK START') < h
 const schemaOut = JSON.parse(spawnSync(process.execPath, ['src/cli.js', '--schema'], { encoding: 'utf8' }).stdout);
 assert(schemaOut.subcommands.every(s => typeof s.tier === 'string'), 'schema subcommand tier');
 
-console.log(`gmsniff OK — ${snap.total} events across ${days.length} days · live-feedback verified · multi-project fanout verified`);
+console.log(`gmsniff OK — ${snap.total} events across ${days.length} days · live-feedback verified · multi-project fanout verified · formal-spec verified`);

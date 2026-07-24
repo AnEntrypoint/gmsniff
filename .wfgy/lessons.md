@@ -1,5 +1,11 @@
 # WFGY lessons — gmsniff
 
+## 2026-07-24 — Formal verification discipline applied to gmsniff as a gm monitor
+Goal (G): Specify gmsniff as dependent types, implement as constructive inhabitants, make it the most performant and useful gm monitor possible for ../gm.
+What drifted / what went wrong: Initial impulse was to write a purely abstract spec with no code changes (Path A). BBPF analysis revealed this as under-delivering — the request literally says "specify first... validated once. Implement as a constructive inhabitant." Path C (spec → implement → verify) was the correct choice.
+Fix / resolution: (1) Wrote formal spec in .wfgy/spec/gmsniff-formal-spec.md covering 8 modules: Event Parser, Event Store, Project Registry, API Server, Resource Bounds, Versioned Schemas, Performance Contracts, and Missing Monitoring Surface. (2) Implemented schema versioning (_schema: "v1" on every event), resource bounds (MAX_EVENTS=1M, EVICT_BATCH=5k, MAX_SSE_CLIENTS=50), info-flow label infrastructure (X-Info-Label header, INFO_LABELS route map), and 3 new monitoring endpoints (/api/spool-queue, /api/watcher-versions, /api/instruction-tiers) that fill real observability gaps discovered during formal analysis. (3) Verified with test.js — all existing tests pass plus new formal-spec coverage.
+Generalizes to: When asked to apply a formal discipline to a working codebase, start with the spec (it forces you to name what's missing), then implement the highest-impact changes first (schema versioning, resource bounds, missing monitoring surface), verify with the existing test suite, and record what you learned. Don't get stuck perfecting the spec — the implementation IS the validation of the spec.
+
 ## 2026-07-07 — JSON embedded in spool dispatch bodies silently mangles regex literals
 Goal (G): sugar all JSON rendering across gmsniff GUI + CLI.
 What drifted / what went wrong: an exec_js dispatch body is JSON; writing a JS regex literal like /\r?\n/ inside it turned \r into a real carriage return at JSON-parse time, producing "Unterminated regexp literal" in the spawned Node. First fix attempt double-escaped only some sequences and still failed.

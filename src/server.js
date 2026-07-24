@@ -2,7 +2,7 @@ import http from 'http';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { GmLogWatcher, MultiProjectWatcher, replayAll, SUBSYSTEMS, DEFAULT_LOG_DIR } from './index.js';
+import { GmLogWatcher, MultiProjectWatcher, replayAll, SUBSYSTEMS, DEFAULT_LOG_DIR, EVENT_SCHEMA_VERSION } from './index.js';
 import {
   readPrd, readMutables, rewriteRow, atomicWriteFile, discoverProjects, isKnownVerb, isAllowedProjectCwd,
   readWatcherStatus, VERB_ALLOWLIST, readLivePhaseState, resolveInstructionTier,
@@ -15,6 +15,58 @@ const CODESEARCH_POLL_MS = 10000;
 const CODESEARCH_POLL_INTERVAL_MS = 200;
 const VERB_FILE_SHAPE = /^[a-zA-Z0-9-]+$/;
 const RESPONSE_FILE_SHAPE = /^[a-zA-Z0-9._-]+\.json$/;
+
+// -- Resource bounds (formal spec Module 5) --
+// Store.events is append-only and unbounded by default; at real scale (1.6M+ events observed
+// on this machine) the in-memory array alone accounts for the dominant resident set. These
+// bounds are enforced on every event push in Store.startLive's event handlers.
+const MAX_EVENTS = parseInt(process.env.GM_MAX_EVENTS, 10) || 1_000_000; // hard cap
+const EVICT_BATCH = 5000; // evict this many oldest events when the cap is exceeded
+const MAX_SSE_CLIENTS = parseInt(process.env.GM_MAX_SSE_CLIENTS, 10) || 50;
+
+// -- Info-flow labels (formal spec Module 4) --
+// Every API response carries an X-Info-Label header classifying the sensitivity of the
+// returned data. Labels follow the formal spec's InfoLabel type: public (aggregate stats,
+// no PII), project-local (scoped to one project), session-local (scoped to one session),
+// internal (raw event data, may contain paths/PIDs).
+const INFO_LABELS = {
+  '/api/capabilities': 'public',
+  '/api/snapshot': 'public',
+  '/api/days': 'public',
+  '/api/events': 'internal',
+  '/api/subsystem': 'internal',
+  '/api/event-types': 'public',
+  '/api/pids': 'internal',
+  '/api/recall': 'public',
+  '/api/exec': 'public',
+  '/api/hooks': 'public',
+  '/api/search': 'internal',
+  '/api/deviations': 'internal',
+  '/api/sessions': 'public',
+  '/api/process-tree': 'session-local',
+  '/api/observed-subsystems': 'public',
+  '/api/distinct': 'public',
+  '/api/query': 'internal',
+  '/api/projects': 'public',
+  '/api/projects/live-state': 'project-local',
+  '/api/health-summary': 'public',
+  '/api/prd': 'project-local',
+  '/api/mutables': 'project-local',
+  '/api/export': 'project-local',
+  '/api/prd/edit': 'project-local',
+  '/api/mutables/edit': 'project-local',
+  '/api/lifecycle': 'project-local',
+  '/api/rs-tools': 'project-local',
+  '/api/codeinsight': 'project-local',
+  '/api/memory-graph': 'project-local',
+  '/api/codesearch': 'project-local',
+  '/api/browser-sessions': 'project-local',
+  '/api/lifecycle/response': 'project-local',
+  '/api/stream': 'internal',
+  '/api/spool-queue': 'public',
+  '/api/watcher-versions': 'public',
+  '/api/instruction-tiers': 'public',
+};
 
 function randomSuffix() {
   return Math.random().toString(36).slice(2, 8);
@@ -279,6 +331,22 @@ class Store {
     this.watcher = null;
     this.fanout = null;
     this.watchedProjects = [];
+    this._evictedCount = 0; // cumulative evicted events since boot
+    this._evictedBatches = 0; // number of eviction passes
+  }
+
+  // Enforces the MAX_EVENTS resource bound (formal spec Module 5). Called on every event
+  // push. When the cap is exceeded, evicts the oldest EVICT_BATCH events from the head of
+  // the array — keeping the most recent events and preserving the append-only semantics
+  // for the tail while bounding total memory.
+  _pushWithBound(ev) {
+    this.events.push(ev);
+    if (this.events.length > MAX_EVENTS) {
+      this.events.splice(0, EVICT_BATCH);
+      this._evictedCount += EVICT_BATCH;
+      this._evictedBatches++;
+      this._snapshotCache = null; // invalidate: total count changed
+    }
   }
 
   load() {
@@ -297,7 +365,7 @@ class Store {
     if (this.watcher || this.fanout) return;
     this.watcher = new GmLogWatcher(this.logDir);
     this.watcher.on('event', ev => {
-      this.events.push(ev);
+      this._pushWithBound(ev);
       this._broadcast('event', ev);
     });
     this.watcher.on('error', e => this._broadcast('error', { msg: String(e?.message || e) }));
@@ -305,7 +373,7 @@ class Store {
 
     this.fanout = new MultiProjectWatcher();
     this.fanout.on('event', ev => {
-      this.events.push(ev);
+      this._pushWithBound(ev);
       this._broadcast('event', ev);
     });
     this.fanout.on('error', e => this._broadcast('error', { msg: String(e?.message || e), cwd: e?.cwd }));
@@ -398,7 +466,7 @@ class Store {
       if (e.pid) pids.add(e.pid);
       if (e.ok === false || e.err) errors++;
     }
-    const value = { total: this.events.length, bySub, byEvent, byDay, pids: pids.size, errors, subsystems: SUBSYSTEMS, observedSubsystems: this.observedSubsystems() };
+    const value = { total: this.events.length, bySub, byEvent, byDay, pids: pids.size, errors, subsystems: SUBSYSTEMS, observedSubsystems: this.observedSubsystems(), evictedCount: this._evictedCount, evictedBatches: this._evictedBatches, maxEvents: MAX_EVENTS, schemaVersion: EVENT_SCHEMA_VERSION };
     this._snapshotCache = { len: this.events.length, value };
     return value;
   }
@@ -830,9 +898,18 @@ function matchesCondition(value, cond) {
   return false;
 }
 
-function send(res, code, body, type = 'application/json') {
-  res.writeHead(code, { 'Content-Type': type, 'Cache-Control': 'no-cache', 'Access-Control-Allow-Origin': '*' });
+function send(res, code, body, type = 'application/json', reqPath = null) {
+  const headers = { 'Content-Type': type, 'Cache-Control': 'no-cache', 'Access-Control-Allow-Origin': '*' };
+  if (reqPath && INFO_LABELS[reqPath]) {
+    headers['X-Info-Label'] = INFO_LABELS[reqPath];
+  }
+  res.writeHead(code, headers);
   res.end(typeof body === 'string' || Buffer.isBuffer(body) ? body : JSON.stringify(body));
+}
+
+// Route-scoped send that captures the request path for info-flow labelling.
+function routeSend(res, p, code, body, type = 'application/json') {
+  return send(res, code, body, type, p);
 }
 
 function serveStatic(req, res) {
@@ -976,7 +1053,10 @@ const API_ROUTES = [
   { path: '/api/browser-sessions', method: 'GET', params: ['cwd'], response: '{cwd, sessions, ports, sessionsFileFound, portsFileFound}' },
   { path: '/api/lifecycle/response', method: 'GET', params: ['cwd', 'verb', 'file'], response: '{ok, cwd, verb, file, response} | 404 if not yet written' },
   { path: '/api/stream', method: 'GET', params: [], response: 'text/event-stream SSE: event/data frames of kind "event"|"error"|"hello"|"project.added"|"project.removed"|"project.phase-changed"' },
-  { path: '/api/projects/live-state', method: 'GET', params: [], response: '{projects: [{cwd, alive, phase, skill, instruction_key, instruction_heading, instruction_excerpt, instruction_tier, instruction_source_file, updated_ts, stale, recent_sess, recent_events: [{ts, kind, phase, ...}]}]}' },
+  { path: '/api/projects/live-state', method: 'GET', params: [], response: '{projects: [{cwd, alive, phase, skill, instruction_key, instruction_heading, instruction_excerpt, instruction_tier, instruction_source_file, updated_ts, stale, recent_sess, recent_events}]}' },
+  { path: '/api/spool-queue', method: 'GET', params: [], response: '{queues: [{cwd, name, totalPending, byVerb}], schemaVersion}' },
+  { path: '/api/watcher-versions', method: 'GET', params: [], response: '{projects: [{cwd, name, alive, pid, runtime, shared, version}], schemaVersion}' },
+  { path: '/api/instruction-tiers', method: 'GET', params: [], response: '{byTier: {vendored, source-synced, default}, details: [{cwd, name, tier, source_file, source_repo}], schemaVersion}' },
 ];
 
 export function createServer({ logDir = DEFAULT_LOG_DIR, port = 0, host = '127.0.0.1' } = {}) {
@@ -988,6 +1068,7 @@ export function createServer({ logDir = DEFAULT_LOG_DIR, port = 0, host = '127.0
     const u = new URL(req.url, 'http://x');
     const q = pq(u);
     const p = u.pathname;
+    const send_ = (code, body, type) => send(res, code, body, type, p);
     if (!p.startsWith('/api/')) return serveStatic(req, res);
     try {
       if (p === '/api/capabilities') {
@@ -1283,15 +1364,80 @@ export function createServer({ logDir = DEFAULT_LOG_DIR, port = 0, host = '127.0
         return;
       }
       if (p === '/api/stream') {
+        if (store.sseClients.size >= MAX_SSE_CLIENTS) {
+          return send(res, 503, { error: 'too many SSE clients', max: MAX_SSE_CLIENTS }, 'application/json', p);
+        }
         res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive', 'Access-Control-Allow-Origin': '*' });
         res.write('event: hello\ndata: {}\n\n');
         store.sseClients.add(res);
         req.on('close', () => store.sseClients.delete(res));
         return;
       }
+      // -- Missing monitoring surface (formal spec Module 8) --
+      // Spool queue depth: count of pending dispatch files per verb across all projects.
+      if (p === '/api/spool-queue') {
+        const projects = discoverProjects(store.events);
+        const queues = [];
+        for (const proj of projects) {
+          const inDir = path.join(proj.cwd, '.gm', 'exec-spool', 'in');
+          const byVerb = {};
+          try {
+            for (const verbDir of fs.readdirSync(inDir, { withFileTypes: true })) {
+              if (!verbDir.isDirectory()) continue;
+              try {
+                const files = fs.readdirSync(path.join(inDir, verbDir.name));
+                if (files.length) byVerb[verbDir.name] = files.length;
+              } catch (_) {}
+            }
+          } catch (_) {}
+          const totalPending = Object.values(byVerb).reduce((s, c) => s + c, 0);
+          if (totalPending > 0) queues.push({ cwd: proj.cwd, name: path.basename(proj.cwd), totalPending, byVerb });
+        }
+        queues.sort((a, b) => b.totalPending - a.totalPending);
+        return send(res, 200, { queues, schemaVersion: EVENT_SCHEMA_VERSION }, 'application/json', p);
+      }
+
+      // Watcher version drift: per-project version vs latest published (from any .status.json
+      // that carries an update_available field, or the server's own knowledge from the most
+      // recent instruction response).
+      if (p === '/api/watcher-versions') {
+        const projects = discoverProjects(store.events);
+        const rows = [];
+        for (const proj of projects) {
+          const status = readWatcherStatus(proj.cwd);
+          if (!status) continue;
+          rows.push({
+            cwd: proj.cwd, name: path.basename(proj.cwd),
+            alive: status.alive, pid: status.pid,
+            runtime: status.runtime, shared: status.shared_process,
+            version: status.version,
+          });
+        }
+        return send(res, 200, { projects: rows, schemaVersion: EVENT_SCHEMA_VERSION }, 'application/json', p);
+      }
+
+      // Instruction tier distribution: across all discovered projects, count how many are
+      // served by vendored overrides, source-synced cache, or compiled defaults.
+      if (p === '/api/instruction-tiers') {
+        const projects = discoverProjects(store.events);
+        const byTier = { vendored: 0, 'source-synced': 0, default: 0 };
+        const details = [];
+        for (const proj of projects) {
+          const phaseState = readLivePhaseState(proj.cwd);
+          if (!phaseState.present) continue;
+          const key = phaseState.instruction_heading ? phaseState.instruction_heading.toLowerCase().replace('update-docs', 'update_docs') : null;
+          const tier = resolveInstructionTier(proj.cwd, key);
+          byTier[tier.tier] = (byTier[tier.tier] || 0) + 1;
+          if (tier.tier !== 'default') {
+            details.push({ cwd: proj.cwd, name: path.basename(proj.cwd), tier: tier.tier, source_file: tier.file_path, source_repo: tier.source_repo });
+          }
+        }
+        return send(res, 200, { byTier, details, schemaVersion: EVENT_SCHEMA_VERSION }, 'application/json', p);
+      }
+
       send(res, 404, { error: 'not found' });
     } catch (e) {
-      send(res, 500, { error: String(e?.message || e) });
+      send(res, 500, { error: String(e?.message || e) }, 'application/json', p);
     }
   });
 

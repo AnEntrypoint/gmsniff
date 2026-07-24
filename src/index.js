@@ -11,6 +11,11 @@ import { EventEmitter } from 'events';
 // -- removed. 'memory' added: rs-plugkit orchestrator/recall.rs tags every recall event
 // sub:"memory", confirmed live (hundreds/day in real logs) and previously unmodeled here.
 export const SUBSYSTEMS = ['plugkit', 'hook', 'bootstrap', 'memory'];
+
+// Schema version stamped on every parsed event — consumers can reject events with unknown
+// schema versions rather than silently misinterpreting a shape change. Bumped whenever the
+// event envelope shape (ts, event, _sub, _day, _fp, _src, cwd) changes in a non-additive way.
+export const EVENT_SCHEMA_VERSION = 'v1';
 export function discoverSubsystems(logDir) {
   const out = new Set();
   if (!fs.existsSync(logDir)) return [...out];
@@ -162,7 +167,7 @@ export class GmLogWatcher extends EventEmitter {
   _line(raw, sub, day, fp) {
     let obj;
     try { obj = JSON.parse(raw); } catch { return; }
-    const ev = { ...obj, ts: normalizeTs(obj.ts), _sub: sub, _day: day, _fp: fp };
+    const ev = { ...obj, ts: normalizeTs(obj.ts), _sub: sub, _day: day, _fp: fp, _schema: EVENT_SCHEMA_VERSION };
     if (!ev.event) ev.event = obj.phase || obj.action || obj.kind || obj.type || '?';
     this.emit('event', ev);
     this.emit(`sub:${sub}`, ev);
@@ -201,7 +206,7 @@ export function replayWatcherLog(fp, cwd) {
     // cwd is always the discovered file's own project dir, never o.cwd from the log line's
     // JSON body -- trusting log content for attribution would let a crafted watcher.log line
     // claim an arbitrary cwd outside the discovered project registry (security scoping).
-    const ev = { ...o, ts, cwd, _sub: sub, _day: ts.slice(0, 10), _fp: fp, _src: 'watcher.log' };
+    const ev = { ...o, ts, cwd, _sub: sub, _day: ts.slice(0, 10), _fp: fp, _src: 'watcher.log', _schema: EVENT_SCHEMA_VERSION };
     if (!ev.event) ev.event = o.phase || o.action || o.kind || o.type || '?';
     events.push(ev);
   }
@@ -320,7 +325,7 @@ class ProjectLogTailer extends EventEmitter {
     const ts = normalizeTs(o.ts);
     // cwd is always this tailer's own discovered project cwd, never o.cwd from the log
     // line's JSON body -- see replayWatcherLog's identical hardening for the rationale.
-    const ev = { ...o, ts, cwd: this.cwd, _sub: sub, _day: ts.slice(0, 10), _fp: this._fp, _src: 'watcher.log' };
+    const ev = { ...o, ts, cwd: this.cwd, _sub: sub, _day: ts.slice(0, 10), _fp: this._fp, _src: 'watcher.log', _schema: EVENT_SCHEMA_VERSION };
     if (!ev.event) ev.event = o.phase || o.action || o.kind || o.type || '?';
     this.emit('event', ev);
     this.emit(`sub:${sub}`, ev);
@@ -424,7 +429,7 @@ export function replayAll(logDir = DEFAULT_LOG_DIR, opts = {}) {
             if (!l.trim()) continue;
             try {
               const o = JSON.parse(l);
-              const ev = { ...o, ts: normalizeTs(o.ts), _sub: sub, _day: day };
+              const ev = { ...o, ts: normalizeTs(o.ts), _sub: sub, _day: day, _schema: EVENT_SCHEMA_VERSION };
               if (!ev.event) ev.event = o.phase || o.action || o.kind || o.type || '?';
               events.push(ev);
             } catch {}

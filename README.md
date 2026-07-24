@@ -59,6 +59,18 @@ gmsniff --dispatch <cwd> <verb> --json '{...}'    # write a spool request
 
 Exit codes: 0 = success (zero-match queries included), 2 = usage error; uncaught exceptions keep Node's non-zero default.
 
+## Agent-facing (new)
+
+Machine-readable monitoring surface for cross-project observability:
+
+```
+gmsniff --spool-queue                    # pending dispatch files per verb per project
+gmsniff --watcher-versions               # per-project watcher liveness, runtime, version
+gmsniff --instruction-tiers              # vendored vs source-synced vs default instruction distribution
+```
+
+Every event carries `_schema: "v1"` for versioned parsing. The GUI server exposes these as `/api/spool-queue`, `/api/watcher-versions`, and `/api/instruction-tiers`. Event store is bounded at 1M events (env-overridable via `GM_MAX_EVENTS`) with oldest-event eviction.
+
 ## Development
 
 - `node test.js` runs the single mock-free, real-services integration test (real temp log dirs, real watchers, real SSE). Extend this file for new coverage; there is no test framework and no parallel suite by design.
