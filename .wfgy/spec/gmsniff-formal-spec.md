@@ -230,6 +230,13 @@ labelOf /api/process-tree = session-local
 labelOf /api/prd          = project-local
 labelOf /api/mutables     = project-local
 labelOf /api/stream       = internal
+labelOf /api/spool-queue        = public
+labelOf /api/watcher-versions   = public
+labelOf /api/instruction-tiers  = public
+labelOf /api/stuck-projects     = public
+labelOf /api/throughput         = public
+labelOf /api/memory-store-health = public
+labelOf /api/codeinsight-age    = public
 ```
 
 ## Module 5: Resource Bounds
@@ -281,13 +288,119 @@ fanout-complexity : List Project → Complexity
 fanout-complexity ps = O(|ps|) handles, O(total events) memory
 ```
 
-## Module 8: Missing Monitoring Surface (discovered via formal analysis)
+## Module 8: Monitoring Surface (discovered via formal analysis, now implemented)
 
-The following gaps exist between what gm produces and what gmsniff surfaces:
+All six gaps identified in the initial formal analysis are now closed:
 
-1. **Spool queue depth**: `.gm/exec-spool/in/` directory file count per project — how many pending dispatches?
-2. **Response latency**: `.gm/exec-spool/out/` response time distribution — how fast is the watcher?
-3. **Memory store health**: `.gm/rs-learn.db` and `.gm/memories/` growth rate, file count, total size
-4. **CodeInsight age**: `.codeinsight` file mtime vs now — how stale is the index?
-5. **Watcher version drift**: per-project plugkit version vs latest published — who's behind?
-6. **Instruction tier distribution**: across all projects, how many are vendored vs source-synced vs default?
+1. ✅ **Spool queue depth** → `GET /api/spool-queue` — per-project pending dispatch count by verb
+2. ✅ **Memory store health** → `GET /api/memory-store-health` — `.gm/memories/` file count + size, `.gm/rs-learn.db` size per project
+3. ✅ **CodeInsight age** → `GET /api/codeinsight-age` — `.codeinsight` mtime staleness ranked across projects
+4. ✅ **Watcher version drift** → `GET /api/watcher-versions` — per-project runtime/version vs latest
+5. ✅ **Instruction tier distribution** → `GET /api/instruction-tiers` — vendored/source-synced/default counts
+6. ✅ **Event throughput** → `GET /api/throughput` — ingestion rate over 1m/5m/15m/1h/24h windows with per-subsystem breakdown
+
+## Module 9: Stuck-State Detection
+
+```
+StuckIssue : Set where
+  dead-watcher        : StuckIssue  — process not alive but project has next-step.md
+  stale-phase         : StuckIssue  — phase unchanged > STUCK_PHASE_MINUTES (default 15)
+  prd-backlog         : StuckIssue  — prd_pending > STUCK_PRD_PENDING_THRESHOLD (default 10)
+  high-deviation-rate : StuckIssue  — deviationRate > STUCK_DEVIATION_RATE_THRESHOLD (default 5/min)
+  stale-heartbeat     : StuckIssue  — no events > HEALTH_STALE_MS (default 5min)
+```
+
+### Pre/Post: `stuckProjects : Store → List StuckProject`
+
+```
+stuckProjects : Store → List StuckProject
+  post: result sorted by severity descending
+  post: each entry has cwd, name, severity (sum of issue weights), and issues[]
+  invariant: severity is dead-watcher(3) + stale-phase(2) + prd-backlog(2) + high-deviation-rate(1) + stale-heartbeat(1)
+  invariant: never throws — all project reads are defensive
+  performance: O(discoverProjects) + O(healthSummary) — same O(events) pass reused
+```
+
+### Endpoint: `GET /api/stuck-projects`
+
+```
+getStuckProjects : Request → HttpResponse
+  post: response is a JSON array of StuckProject, sorted by severity desc
+  info-label: public
+```
+
+## Module 10: Throughput Metrics
+
+```
+ThroughputWindow : Set where
+  m1  : ThroughputWindow  — 1 minute
+  m5  : ThroughputWindow  — 5 minutes
+  m15 : ThroughputWindow  — 15 minutes
+  h1  : ThroughputWindow  — 1 hour
+  h24 : ThroughputWindow  — 24 hours
+
+Throughput : Set where
+  mkThroughput : (total : Nat) → (rates : Map ThroughputWindow Rate) → Throughput
+
+Rate : Set where
+  mkRate : (count : Nat) → (perMinute : Float) → (bySub : Map Subsystem Nat) → Rate
+```
+
+### Pre/Post: `throughputMetrics : Store → Throughput`
+
+```
+throughputMetrics : Store → Throughput
+  post: rates[window].count is the number of events in that window
+  post: rates[window].perMinute = count / windowMinutes
+  post: rates[window].bySub is a complete subsystem → count breakdown
+  invariant: single O(events) pass — all windows computed in one traversal
+  invariant: never throws
+```
+
+### Endpoint: `GET /api/throughput`
+
+```
+getThroughput : Request → HttpResponse
+  post: response carries schemaVersion
+  info-label: public
+```
+
+## Module 11: Total Parsers (Proof-Assistant Invariant)
+
+The proof-assistant invariant "total parser (Accepted A | Rejected R, never exception)" is applied
+to every parser that touches external input:
+
+```
+ParseResult A : Set where
+  Accepted : (value : A) → ParseResult A
+  Rejected : (reason : String) → ParseResult A
+```
+
+### Pre/Post: `parseCodeInsight : Text → ParseResult CodeInsight`
+
+```
+parseCodeInsight : Text → ParseResult CodeInsight
+  pre:  text is a string (may be empty or malformed)
+  post: result is Accepted(value) ∨ Rejected(reason)
+  invariant: never throws — every code path returns a ParseResult
+  invariant: Accepted(value) ⇒ value.summary.files ≠ null (header line matched)
+  invariant: Rejected with descriptive reason for empty input, no header match, or parse error
+```
+
+### Pre/Post: `readMemoryGraph : Cwd → MemoryGraph`
+
+```
+readMemoryGraph : Cwd → MemoryGraph
+  post: result.nodes is always an array (empty on missing directory or no .md files)
+  post: result.edges is always [] (no edge convention in current corpus)
+  invariant: never throws — returns {nodes:[], edges:[], note:...} on any error
+```
+
+### Pre/Post: `parseYamlRows : Text → List YamlRow`
+
+```
+parseYamlRows : Text → List YamlRow
+  post: result is always an array (empty on null/undefined/empty input)
+  invariant: never throws — every code path returns []
+  invariant: row boundary is ANY top-level `- <field>: ...` line, not just `- id:`
+```

@@ -543,21 +543,53 @@ const PHASE_TONE = {
   PLAN: 'var(--sky, #79c0ff)', EXECUTE: 'var(--accent, #58a6ff)', EMIT: 'var(--purple, #bc8cff)',
   VERIFY: 'var(--yellow, #d29922)', CONSOLIDATE: 'var(--orange, #ffa657)', COMPLETE: 'var(--green, #3fb950)',
 };
-const TIER_TONE = { vendored: 'var(--orange, #ffa657)', 'source-synced': 'var(--purple, #bc8cff)', default: 'var(--fg-muted, #8b949e)' };
-const TIER_LABEL = { vendored: 'vendored override', 'source-synced': 'source-synced', default: 'compiled default' };
+const TIER_TONE = {
+  vendored: 'var(--orange, #ffa657)', 'source-synced': 'var(--purple, #bc8cff)',
+  default: 'var(--fg-muted, #8b949e)', 'auto-provisioned': 'var(--sky, #79c0ff)',
+};
+const TIER_LABEL = {
+  vendored: 'vendored override', 'source-synced': 'source-synced',
+  default: 'compiled default', 'auto-provisioned': 'auto-provisioned (unedited)',
+};
+
+// A project whose instruction_tier is "default" but instruction_auto_provisioned is true has a
+// REAL file on disk (gm-plugkit's bootstrap sync materialized it there), byte-identical to the
+// last-known-shipped default -- genuinely still the compiled default in effect, not a per-project
+// customization, but a DIFFERENT situation from "no file at all" that a reader would otherwise
+// conflate with a true vendored override if this weren't distinguished (the false-positive class
+// resolveInstructionTier's own manifest-hash check exists to eliminate at the data layer -- this
+// is the corresponding display-layer distinction, using its own 4th visual state rather than
+// collapsing back into a plain "compiled default" pill that would hide the file's real presence).
+function effectiveTierKey(p) {
+  return (p.instruction_tier === 'default' && p.instruction_auto_provisioned) ? 'auto-provisioned' : p.instruction_tier;
+}
 
 const skillLayoutState = { filter: '' };
-const skillDrilldownState = { open: false, project: null };
+const skillDrilldownState = { open: false, project: null, vendored: null, vendoredLoading: false };
 
 function openSkillDrilldown(project, setBody) {
   skillDrilldownState.open = true;
   skillDrilldownState.project = project;
+  skillDrilldownState.vendored = null;
+  skillDrilldownState.vendoredLoading = true;
   setBody();
+  api('/api/vendored-settings?cwd=' + encodeURIComponent(project.cwd)).then((r) => {
+    // The drilldown may have been closed or switched to a different project while this in-flight
+    // fetch was still pending -- discard a now-stale response rather than overwriting whatever the
+    // dialog is showing now (same "don't let a slow request clobber newer state" discipline
+    // openSessionDetail already follows for its own tree/deviations fetch).
+    if (!skillDrilldownState.open || skillDrilldownState.project !== project) return;
+    skillDrilldownState.vendored = r.error ? null : r;
+    skillDrilldownState.vendoredLoading = false;
+    setBody();
+  });
 }
 
 function closeSkillDrilldown(setBody) {
   skillDrilldownState.open = false;
   skillDrilldownState.project = null;
+  skillDrilldownState.vendored = null;
+  skillDrilldownState.vendoredLoading = false;
   setBody();
 }
 
@@ -575,11 +607,43 @@ function outputFeedRow(n, i) {
     n.prd_pending != null ? h('span', { class: 'gm-ml-6', style: 'opacity:0.7;' }, `prd_pending=${n.prd_pending}`) : null);
 }
 
+// Formats an entries[] row (label, path, present, size, mtime_ts) from /api/vendored-settings as
+// one compact line -- present-only entries reach here (the endpoint already filters), so this is
+// purely a display formatter, never a presence check.
+function vendoredSettingRow(e) {
+  return h('div', { key: e.label, class: 'gm-list-row', style: 'font-size:0.85em;' },
+    h('span', { class: 'gm-pill gm-mr-6' }, e.label),
+    h('span', { style: 'font-family:monospace; opacity:0.75; word-break:break-all;' }, esc(e.path)),
+    e.size != null ? h('span', { class: 'gm-ml-6', style: 'opacity:0.6;' }, `${e.size}B`) : null,
+    e.mtime_ts ? h('span', { class: 'gm-ml-6', style: 'opacity:0.6;' }, fmtTs(e.mtime_ts)) : null);
+}
+
+// fsm-vendor's own real customization surface (see registry.js's discoverVendoredSettings for the
+// full scope: phase-prose .md files, fsm/graph.json -- genuinely load-bearing, can redefine
+// phases/edges/gates wholesale -- fsm/predicates.md, hooks/*.js, browser-config.json, daemon-
+// project-config.json) -- a WIDER, separately-tracked set from the single instruction_tier pill
+// above (that one only ever resolves the CURRENTLY-SERVED phase key's gates/residual auto-sync
+// state). Renders its own loading/empty/populated states rather than folding into the tier pill,
+// since "this project has run fsm-vendor at all" and "here is specifically which phase's prose is
+// currently active" are two different questions an observer can reasonably ask independently.
+function vendoredSettingsSection(vendored, loading) {
+  if (loading) return h('div', { class: 'gm-mb-12', style: 'opacity:0.6;' }, 'Loading vendored settings...');
+  if (!vendored || !vendored.vendored) return null;
+  return h('div', { class: 'gm-mb-12' },
+    h('div', { class: 'gm-flex-between' },
+      h('strong', {}, `Vendored settings (${vendored.file_count} file${vendored.file_count === 1 ? '' : 's'})`),
+      vendored.has_custom_graph
+        ? h('span', { class: 'gm-pill', style: 'color:var(--orange, #ffa657);' }, 'custom FSM graph')
+        : null),
+    h('div', { class: 'gm-mt-4', style: 'max-height:180px; overflow:auto;' }, ...vendored.entries.map(vendoredSettingRow)));
+}
+
 export function SkillDrilldownDialog(setBody) {
   const s = skillDrilldownState;
   if (!s.open || !s.project) return null;
   const p = s.project;
-  const tierTone = TIER_TONE[p.instruction_tier] || TIER_TONE.default;
+  const tierKey = effectiveTierKey(p);
+  const tierTone = TIER_TONE[tierKey] || TIER_TONE.default;
   const recentEvents = p.recent_events || [];
   // Split-pane: instruction (left) and its output feed (right) visible simultaneously --
   // an observer reading recent output no longer loses the instruction out of view, and vice
@@ -591,9 +655,10 @@ export function SkillDrilldownDialog(setBody) {
       p.stale ? Pill({ children: 'stale' }) : null,
       !p.alive ? Pill({ children: 'stopped' }) : null),
     h('div', { class: 'gm-mb-12', style: `color:${tierTone}; font-weight:600;` },
-      TIER_LABEL[p.instruction_tier] || p.instruction_tier,
+      TIER_LABEL[tierKey] || tierKey,
       p.instruction_source_file ? h('div', { class: 'gm-mt-4', style: 'font-weight:400; font-family:monospace; font-size:0.85em; word-break:break-all;' }, esc(p.instruction_source_file)) : null,
       p.instruction_source_repo ? h('div', { class: 'gm-mt-4', style: 'font-weight:400;' }, 'synced from: ' + esc(p.instruction_source_repo)) : null),
+    vendoredSettingsSection(s.vendored, s.vendoredLoading),
     h('div', { class: 'gm-split-pane' },
       h('div', { class: 'gm-split-col' },
         h('h2', { class: 'gm-mt-10' }, 'Served instruction (' + (p.instruction_key || 'unknown') + ')'),
@@ -619,7 +684,8 @@ export function SkillDrilldownDialog(setBody) {
 function skillLayoutRow(p, setBody) {
   const phaseIdx = DEFAULT_PHASES.indexOf(p.phase);
   const reached = DEFAULT_PHASES.map((_, i) => phaseIdx >= 0 && i <= phaseIdx);
-  const tierTone = TIER_TONE[p.instruction_tier] || TIER_TONE.default;
+  const tierKey = effectiveTierKey(p);
+  const tierTone = TIER_TONE[tierKey] || TIER_TONE.default;
   const name = (p.cwd || '').split(/[\\/]/).filter(Boolean).pop() || p.cwd;
   return h('div', {
     class: 'ds-session-row', key: p.cwd, role: 'button', tabindex: '0',
@@ -630,12 +696,12 @@ function skillLayoutRow(p, setBody) {
       h('strong', {}, name),
       h('span', {},
         !p.alive ? Pill({ children: 'stopped' }) : (p.present ? Pill({ children: p.phase || '(no phase)' }) : Pill({ children: 'no active agent' })),
-        p.instruction_tier ? h('span', { class: 'gm-ml-6', style: `color:${tierTone};` }, TIER_LABEL[p.instruction_tier] || p.instruction_tier) : null)),
+        p.instruction_tier ? h('span', { class: 'gm-ml-6', style: `color:${tierTone};` }, TIER_LABEL[tierKey] || tierKey) : null)),
     p.present ? PhaseWalk({ reached }) : null,
     p.skill ? h('div', { class: 'gm-mt-4', style: 'opacity:0.75;' }, 'skill: ' + esc(p.skill) + (p.instruction_key ? ' / ' + esc(p.instruction_key) : '')) : null,
     p.instruction_excerpt ? h('div', { class: 'gm-mt-4', style: 'opacity:0.6; font-size:0.85em;' },
         (p.instruction_excerpt.length > 140
-          ? h('span', {}, esc(p.instruction_excerpt.slice(0, 140)) + '... ', h('em', { style: 'opacity:0.8;' }, '(preview -- click for full instruction)')
+          ? h('span', {}, esc(p.instruction_excerpt.slice(0, 140)) + '... ', h('em', { style: 'opacity:0.8;' }, '(preview -- click for full instruction)'))
           : esc(p.instruction_excerpt))) : null,
     p.recent_events && p.recent_events.length
       ? h('div', { class: 'gm-mt-4', style: 'opacity:0.55; font-size:0.8em;' },

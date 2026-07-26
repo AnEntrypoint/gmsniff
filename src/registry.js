@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import crypto from 'crypto';
 
 // Shared .gm/prd.yml + .gm/mutables.yml structured parsing, and multi-project
 // discovery/registry logic. Extracted so both cli.js and server.js reuse the
@@ -298,18 +299,92 @@ export function readLivePhaseState(cwd) {
   return value;
 }
 
+// gm-plugkit's bootstrap.ensureInstructionsBundle() auto-provisions .gm/instructions/gates/*.md
+// and .gm/instructions/residual/*.md from its own compiled instructions/ source tree on EVERY
+// daemon boot -- this is normal, universal, zero-signal state, not a deliberate per-project
+// customization. It tracks what it last wrote via .gm/.instructions-shipped-manifest.json (a
+// sha256-per-relative-path map): a local file whose hash still matches its manifest entry is
+// exactly what was auto-copied and never touched since, and reporting that as a "vendored
+// override" is a false positive that would fire for every single gm-bootstrapped project (the
+// bug this function exists to fix -- see AGENTS.md's own "auto-provisioned defaults are not real
+// overrides" note). A local file whose hash DIVERGES from its manifest entry is the opposite
+// signal: ensureInstructionsBundle's own write_if_absent_or_forced-equivalent logic explicitly
+// PRESERVES a user edit across a bundle update rather than overwriting it (staging the new
+// default alongside as `<key>.md.new` instead) -- that divergence is the real, load-bearing
+// evidence of a deliberate override, independent of whether the file's *current* content happens
+// to still equal some other reference text.
+let _manifestCache = new Map(); // cwd -> {mtimeMs, manifest}
+function readShippedManifest(cwd) {
+  const manifestPath = path.join(cwd, '.gm', '.instructions-shipped-manifest.json');
+  let stat;
+  try { stat = fs.statSync(manifestPath); } catch (_) { return null; }
+  const cached = _manifestCache.get(cwd);
+  if (cached && cached.mtimeMs === stat.mtimeMs) return cached.manifest;
+  let manifest = null;
+  try { manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')); } catch (_) { manifest = null; }
+  _manifestCache.set(cwd, { mtimeMs: stat.mtimeMs, manifest });
+  return manifest;
+}
+
+function sha256Hex(buf) {
+  return crypto.createHash('sha256').update(buf).digest('hex');
+}
+
+// The manifest is a flat map keyed by the file's path RELATIVE to .gm/instructions, written with
+// the host OS's own path separator (observed as backslash on Windows, e.g. "gates\\long-gap-no-
+// instruction.md") -- probe both separator forms so this reads correctly cross-platform whether
+// the manifest was produced on the machine gmsniff is running on or a different one (a synced
+// .gm/ directory, a shared dev environment, CI artifacts inspected after the fact).
+function manifestHashFor(manifest, relPath) {
+  if (!manifest) return undefined;
+  return manifest[relPath] ?? manifest[relPath.split('/').join('\\')] ?? manifest[relPath.split('\\').join('/')];
+}
+
+// Is `filePath` (an absolute path under .gm/instructions/) exactly what ensureInstructionsBundle
+// last auto-provisioned -- i.e. genuinely untouched since the daemon copied it, not a real
+// per-project customization? Returns false (treat as a real override) whenever this can't be
+// determined either way -- manifest missing, no entry for this specific file, or a read error --
+// since under-reporting a real override as "still default" would hide genuine local
+// customization from the observer, the opposite failure mode this function exists to prevent.
+function matchesAutoProvisionedDefault(cwd, filePath) {
+  const manifest = readShippedManifest(cwd);
+  if (!manifest) return false;
+  const relPath = path.relative(path.join(cwd, '.gm', 'instructions'), filePath);
+  const shippedHash = manifestHashFor(manifest, relPath);
+  if (!shippedHash) return false;
+  let localHash;
+  try { localHash = sha256Hex(fs.readFileSync(filePath)); } catch (_) { return false; }
+  return localHash === shippedHash;
+}
+
 // Resolves which of the three prose.rs::resolve() tiers is actually serving a given
 // instruction key for this project: (1) .gm/instructions/<key>.md, a per-project vendored
-// override that always wins; (2) .gm/instructions/source.json + a matching
+// override that always wins -- EXCEPT when that file's content still matches the manifest's
+// last-known auto-provisioned hash, in which case it is genuinely still the compiled default,
+// just materialized to disk by ensureInstructionsBundle rather than baked into the wasm guest
+// (see matchesAutoProvisionedDefault above); (2) .gm/instructions/source.json + a matching
 // .gm/instructions-source-cache/<key>.md, synced from a configured source repo; (3) neither,
 // meaning the compiled default baked into the wasm guest is what's actually serving it. Covers
-// both the phase-prose keys (plan/execute/emit/verify/consolidate/update_docs/entry/browser)
-// and the gate/residual namespace (gates/<name>, residual/<name>), which resolve through the
-// identical chain per AGENTS.md.
+// both the phase-prose keys (plan/execute/emit/verify/consolidate/update_docs/entry/browser,
+// written only by the fsm-vendor verb -- gm-plugkit's own auto-sync source tree carries no
+// phase-level .md files, confirmed by reading it directly, so a phase key found on disk is
+// ALWAYS fsm-vendor-sourced and therefore always a genuine per-project customization point, with
+// no manifest-match short-circuit even if a stale manifest entry happens to exist for it) and the
+// gate/residual namespace (gates/<name>, residual/<name>), which resolve through the identical
+// chain per AGENTS.md but ARE auto-synced by ensureInstructionsBundle and therefore DO need the
+// manifest check.
+const AUTO_SYNCED_NAMESPACES = new Set(['gates', 'residual']);
 export function resolveInstructionTier(cwd, key) {
   if (!key) return { tier: 'default', file_path: null, source_repo: null };
   const vendoredPath = path.join(cwd, '.gm', 'instructions', `${key}.md`);
-  if (fs.existsSync(vendoredPath)) return { tier: 'vendored', file_path: vendoredPath, source_repo: null };
+  if (fs.existsSync(vendoredPath)) {
+    const namespace = key.includes('/') ? key.split('/')[0] : null;
+    const isAutoSyncedNamespace = namespace && AUTO_SYNCED_NAMESPACES.has(namespace);
+    if (isAutoSyncedNamespace && matchesAutoProvisionedDefault(cwd, vendoredPath)) {
+      return { tier: 'default', file_path: null, source_repo: null, auto_provisioned: true };
+    }
+    return { tier: 'vendored', file_path: vendoredPath, source_repo: null };
+  }
 
   try {
     const sourceJsonPath = path.join(cwd, '.gm', 'instructions', 'source.json');
@@ -324,6 +399,63 @@ export function resolveInstructionTier(cwd, key) {
   // to the compiled default -- the per-key cache miss, not the presence of source.json alone,
   // is what determines the real serving tier.
   return { tier: 'default', file_path: null, source_repo: null };
+}
+
+// The fsm-vendor verb (rs-plugkit's fsm_vendor::handle_vendor) writes a WIDER, DIFFERENT surface
+// than ensureInstructionsBundle's own gates/residual auto-sync: the full phase-prose set
+// (plan/execute/emit/verify/consolidate/update_docs/entry/browser -- these are ONLY ever written
+// by fsm-vendor, gm-plugkit's own auto-sync source tree carries none of them, confirmed by
+// reading it directly), the FSM graph itself (fsm/graph.json, genuinely load-bearing -- can
+// redefine phases/edges/gates wholesale, not documentation), a compiled-predicates reference
+// (fsm/predicates.md), an example jit-hook (hooks/example.js), and two example config files
+// (browser-config.json, daemon-project-config.json) at .gm/ directly, not under .gm/instructions/.
+// None of these are covered by the sha256 shipped-manifest (that mechanism belongs to
+// ensureInstructionsBundle alone) -- fsm-vendor's own write_if_absent_or_forced is a one-shot,
+// absence-gated write with no ongoing drift-tracking of its own, so presence here always means a
+// deliberate local customization surface exists, even if a given file's content still happens to
+// equal the compiled default it was seeded from (the project now OWNS that file going forward,
+// unlike the gates/residual auto-sync case). This function has NO false-positive risk to guard
+// against the way resolveInstructionTier did -- it only reports real, currently-present files.
+const FSM_VENDOR_PHASE_KEYS = ['plan', 'execute', 'emit', 'verify', 'consolidate', 'update_docs', 'entry', 'browser'];
+export function discoverVendoredSettings(cwd) {
+  const instructionsDir = path.join(cwd, '.gm', 'instructions');
+  const statOrNull = (p) => { try { return fs.statSync(p); } catch (_) { return null; } };
+  const entryFor = (relLabel, absPath) => {
+    const st = statOrNull(absPath);
+    return { label: relLabel, path: absPath, present: !!st, size: st ? st.size : null, mtime_ts: st ? st.mtimeMs : null };
+  };
+
+  const phases = FSM_VENDOR_PHASE_KEYS.map((key) => entryFor(key, path.join(instructionsDir, `${key}.md`)));
+  const fsmGraph = entryFor('fsm/graph.json', path.join(instructionsDir, 'fsm', 'graph.json'));
+  const fsmPredicates = entryFor('fsm/predicates.md', path.join(instructionsDir, 'fsm', 'predicates.md'));
+  const hookExample = entryFor('hooks/example.js', path.join(instructionsDir, 'hooks', 'example.js'));
+  const browserConfig = entryFor('browser-config.json', path.join(cwd, '.gm', 'browser-config.json'));
+  const daemonProjectConfig = entryFor('daemon-project-config.json', path.join(cwd, '.gm', 'daemon-project-config.json'));
+
+  // Real hooks beyond the shipped example.js: any other .js file under .gm/instructions/hooks/,
+  // since a project can add as many jit hooks as its graph.json's gates array references.
+  const hooksDir = path.join(instructionsDir, 'hooks');
+  let customHooks = [];
+  try {
+    customHooks = fs.readdirSync(hooksDir, { withFileTypes: true })
+      .filter((e) => e.isFile() && e.name.endsWith('.js') && e.name !== 'example.js')
+      .map((e) => entryFor(`hooks/${e.name}`, path.join(hooksDir, e.name)));
+  } catch (_) {}
+
+  const allEntries = [...phases, fsmGraph, fsmPredicates, hookExample, ...customHooks, browserConfig, daemonProjectConfig];
+  const presentEntries = allEntries.filter((e) => e.present);
+
+  // A live-editable graph.json is the single highest-signal indicator that this project is
+  // actually EXERCISING fsm-vendor's real customization surface (a different phase set, rewired
+  // edges, a policy override) rather than just having leftover example files from a one-time run
+  // -- surfaced as its own flag so a caller can badge/prioritize it distinctly from "some vendored
+  // file exists".
+  return {
+    vendored: presentEntries.length > 0,
+    has_custom_graph: fsmGraph.present,
+    file_count: presentEntries.length,
+    entries: presentEntries,
+  };
 }
 
 function canon(p) {

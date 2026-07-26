@@ -5,7 +5,7 @@ import { fileURLToPath } from 'url';
 import { GmLogWatcher, MultiProjectWatcher, replayAll, SUBSYSTEMS, DEFAULT_LOG_DIR, EVENT_SCHEMA_VERSION } from './index.js';
 import {
   readPrd, readMutables, rewriteRow, atomicWriteFile, discoverProjects, isKnownVerb, isAllowedProjectCwd,
-  readWatcherStatus, VERB_ALLOWLIST, readLivePhaseState, resolveInstructionTier,
+  readWatcherStatus, VERB_ALLOWLIST, readLivePhaseState, resolveInstructionTier, discoverVendoredSettings,
 } from './registry.js';
 
 const MAX_QUERY_LEN = 4096;
@@ -66,6 +66,10 @@ const INFO_LABELS = {
   '/api/spool-queue': 'public',
   '/api/watcher-versions': 'public',
   '/api/instruction-tiers': 'public',
+  '/api/stuck-projects': 'public',
+  '/api/throughput': 'public',
+  '/api/memory-store-health': 'public',
+  '/api/codeinsight-age': 'public',
 };
 
 function randomSuffix() {
@@ -175,49 +179,59 @@ function stripGlyphs(s) {
   return String(s == null ? '' : s).replace(/[^\x00-\x7F]/g, '').replace(/\s+/g, ' ').trim();
 }
 
+// Total parser: returns {accepted:true, value:{summary,entries,items}} | {accepted:false, reason:String}.
+// Never throws — every code path returns a discriminated result. This is the proof-assistant
+// invariant "total parser (Accepted A | Rejected R, never exception)" applied to the
+// .codeinsight format. Callers match on `.accepted` instead of wrapping in try/catch.
 function parseCodeInsight(text) {
-  // CRLF-safe: strip a trailing \r per line up front so every downstream
-  // "^...$" regex (section headers, header line) matches on Windows-authored
-  // .codeinsight files exactly like it does on LF-only ones -- JS regex `$`
-  // (no /m or /s flag) does not match before a bare trailing \r, so without
-  // this every section on a CRLF file silently dropped to zero entries.
-  const lines = text.split('\n').map(l => l.endsWith('\r') ? l.slice(0, -1) : l);
-  const headerRe = /^#\s*(\d+)f\s+([\d.]+)k?L\s+(\d+)fn\s+(\d+)cls\s+cx([\d.]+)/;
-  let summary = { files: null, lines: null, functions: null, classes: null, avgComplexity: null };
-  let headerLineIdx = -1;
-  for (let i = 0; i < lines.length; i++) {
-    const m = lines[i].match(headerRe);
-    if (m) {
-      summary = {
-        files: parseInt(m[1], 10),
-        lines: Math.round(parseFloat(m[2]) * (/[\d.]+k?L/.test(m[0]) && m[0].includes('kL') ? 1000 : 1)),
-        functions: parseInt(m[3], 10),
-        classes: parseInt(m[4], 10),
-        avgComplexity: parseFloat(m[5]),
-      };
-      headerLineIdx = i;
-      break;
+  if (typeof text !== 'string' || !text.trim()) return { accepted: false, reason: 'empty or non-string input' };
+  try {
+    // CRLF-safe: strip a trailing \r per line up front so every downstream
+    // "^...$" regex (section headers, header line) matches on Windows-authored
+    // .codeinsight files exactly like it does on LF-only ones -- JS regex `$`
+    // (no /m or /s flag) does not match before a bare trailing \r, so without
+    // this every section on a CRLF file silently dropped to zero entries.
+    const lines = text.split('\n').map(l => l.endsWith('\r') ? l.slice(0, -1) : l);
+    const headerRe = /^#\s*(\d+)f\s+([\d.]+)k?L\s+(\d+)fn\s+(\d+)cls\s+cx([\d.]+)/;
+    let summary = { files: null, lines: null, functions: null, classes: null, avgComplexity: null };
+    let headerLineIdx = -1;
+    for (let i = 0; i < lines.length; i++) {
+      const m = lines[i].match(headerRe);
+      if (m) {
+        summary = {
+          files: parseInt(m[1], 10),
+          lines: Math.round(parseFloat(m[2]) * (/[\d.]+k?L/.test(m[0]) && m[0].includes('kL') ? 1000 : 1)),
+          functions: parseInt(m[3], 10),
+          classes: parseInt(m[4], 10),
+          avgComplexity: parseFloat(m[5]),
+        };
+        headerLineIdx = i;
+        break;
+      }
     }
-  }
-  const entries = [];
-  let currentSection = null;
-  let sectionLines = [];
-  const flush = () => {
-    if (currentSection) entries.push({ section: stripGlyphs(currentSection), content: sectionLines.join('\n').trim() });
-    sectionLines = [];
-  };
-  for (let i = headerLineIdx + 1; i < lines.length; i++) {
-    const line = lines[i];
-    const secM = line.match(/^##\s*(.+)$/);
-    if (secM) {
-      flush();
-      currentSection = secM[1];
-      continue;
+    if (summary.files === null) return { accepted: false, reason: 'no header line matched in .codeinsight content' };
+    const entries = [];
+    let currentSection = null;
+    let sectionLines = [];
+    const flush = () => {
+      if (currentSection) entries.push({ section: stripGlyphs(currentSection), content: sectionLines.join('\n').trim() });
+      sectionLines = [];
+    };
+    for (let i = headerLineIdx + 1; i < lines.length; i++) {
+      const line = lines[i];
+      const secM = line.match(/^##\s*(.+)$/);
+      if (secM) {
+        flush();
+        currentSection = secM[1];
+        continue;
+      }
+      if (currentSection) sectionLines.push(line);
     }
-    if (currentSection) sectionLines.push(line);
+    flush();
+    return { accepted: true, value: { summary, entries, items: extractCodeInsightItems(entries, summary) } };
+  } catch (e) {
+    return { accepted: false, reason: `parse error: ${e?.message || e}` };
   }
-  flush();
-  return { summary, entries, items: extractCodeInsightItems(entries, summary) };
 }
 
 // -- per-file treemap items: the real .codeinsight digest has no structured per-file
@@ -446,6 +460,7 @@ class Store {
       instruction_heading: phaseState.instruction_heading,
       instruction_excerpt: phaseState.instruction_excerpt,
       instruction_tier: tier.tier, instruction_source_file: tier.file_path, instruction_source_repo: tier.source_repo,
+      instruction_auto_provisioned: !!tier.auto_provisioned,
       updated_ts: phaseState.updated_ts, stale: phaseState.stale,
     });
   }
@@ -1013,6 +1028,164 @@ function healthSummary(store) {
   return out;
 }
 
+// -- Stuck-project detection (formal spec Module 8 extension) --
+// Scans all discovered projects and flags: stale phase (>N min unchanged), dead watcher,
+// growing PRD backlog (pending > threshold), and high deviation rate. Returns a ranked list
+// with a composite severity score so an operator can triage at a glance.
+const STUCK_PHASE_MINUTES = parseInt(process.env.GM_STUCK_PHASE_MINUTES, 10) || 15;
+const STUCK_PRD_PENDING_THRESHOLD = parseInt(process.env.GM_STUCK_PRD_THRESHOLD, 10) || 10;
+const STUCK_DEVIATION_RATE_THRESHOLD = parseFloat(process.env.GM_STUCK_DEVIATION_RATE, 10) || 5.0;
+
+function stuckProjects(store) {
+  const projects = discoverProjects(store.events);
+  const now = Date.now();
+  const health = healthSummary(store);
+  const healthByCwd = new Map(health.map(h => [h.cwd, h]));
+  const out = [];
+  for (const proj of projects) {
+    const issues = [];
+    let severity = 0;
+    const hr = healthByCwd.get(proj.cwd);
+    const phaseState = readLivePhaseState(proj.cwd);
+
+    // Dead watcher: process not alive (severity 3)
+    if (!proj.alive && phaseState.present) {
+      issues.push({ kind: 'dead-watcher', detail: 'watcher process not alive but project has next-step.md' });
+      severity += 3;
+    }
+
+    // Stale phase: phase hasn't changed in > STUCK_PHASE_MINUTES (severity 2)
+    if (phaseState.present && phaseState.updated_ts && phaseState.phase) {
+      const phaseAge = now - phaseState.updated_ts;
+      if (phaseAge > STUCK_PHASE_MINUTES * 60_000) {
+        issues.push({
+          kind: 'stale-phase',
+          detail: `phase ${phaseState.phase} unchanged for ${Math.round(phaseAge / 60_000)}min`,
+          phase: phaseState.phase,
+          ageMinutes: Math.round(phaseAge / 60_000),
+        });
+        severity += 2;
+      }
+    }
+
+    // Growing PRD backlog (severity 2)
+    if (proj.prd_pending > STUCK_PRD_PENDING_THRESHOLD) {
+      issues.push({
+        kind: 'prd-backlog',
+        detail: `${proj.prd_pending} pending PRD rows (threshold: ${STUCK_PRD_PENDING_THRESHOLD})`,
+        pending: proj.prd_pending,
+        total: proj.prd_total,
+      });
+      severity += 2;
+    }
+
+    // High deviation rate (severity 1)
+    if (hr && hr.deviationRate > STUCK_DEVIATION_RATE_THRESHOLD) {
+      issues.push({
+        kind: 'high-deviation-rate',
+        detail: `${hr.deviationRate.toFixed(1)} deviations/min`,
+        rate: hr.deviationRate,
+      });
+      severity += 1;
+    }
+
+    // Stale heartbeat: no events in > HEALTH_STALE_MS (severity 1)
+    if (hr && hr.staleSeconds && hr.staleSeconds > HEALTH_STALE_MS / 1000) {
+      issues.push({
+        kind: 'stale-heartbeat',
+        detail: `no events for ${Math.round(hr.staleSeconds / 60)}min`,
+        staleSeconds: hr.staleSeconds,
+      });
+      severity += 1;
+    }
+
+    if (issues.length) out.push({ cwd: proj.cwd, name: path.basename(proj.cwd), severity, issues });
+  }
+  out.sort((a, b) => b.severity - a.severity);
+  return out;
+}
+
+// -- Event throughput metrics (formal spec Module 8 extension) --
+// Computes ingestion rate over configurable windows (1m, 5m, 15m, 1h, 24h) plus a per-subsystem
+// breakdown for the most recent window. Single O(events) pass, same pattern as healthSummary.
+function throughputMetrics(store) {
+  const now = Date.now();
+  const windows = { '1m': 60_000, '5m': 300_000, '15m': 900_000, '1h': 3_600_000, '24h': 86_400_000 };
+  const counts = {};
+  const bySub = {};
+  for (const key of Object.keys(windows)) { counts[key] = 0; bySub[key] = {}; }
+  let total = 0;
+  for (const e of store.events) {
+    const t = typeof e.ts === 'number' ? e.ts : (e.ts ? Date.parse(e.ts) : 0);
+    if (!t) continue;
+    total++;
+    for (const [key, ms] of Object.entries(windows)) {
+      if (now - t <= ms) {
+        counts[key]++;
+        bySub[key][e._sub] = (bySub[key][e._sub] || 0) + 1;
+      }
+    }
+  }
+  const rates = {};
+  for (const [key, ms] of Object.entries(windows)) {
+    const minutes = ms / 60_000;
+    rates[key] = { count: counts[key], perMinute: +(counts[key] / minutes).toFixed(1), bySub: bySub[key] };
+  }
+  return { total, rates, schemaVersion: EVENT_SCHEMA_VERSION };
+}
+
+// -- Memory store health (formal spec Module 8, item 3) --
+// Reads .gm/memories/ and .gm/rs-learn.db for each discovered project, returning file count,
+// total size, and growth rate proxy (no mtime-based rate since we only sample once).
+function memoryStoreHealth(store) {
+  const projects = discoverProjects(store.events);
+  const out = [];
+  for (const proj of projects) {
+    const memoriesDir = path.join(proj.cwd, '.gm', 'memories');
+    const dbPath = path.join(proj.cwd, '.gm', 'rs-learn.db');
+    let memoriesCount = 0, memoriesSize = 0, dbSize = null;
+    try {
+      for (const f of fs.readdirSync(memoriesDir)) {
+        if (!f.endsWith('.md')) continue;
+        try { const s = fs.statSync(path.join(memoriesDir, f)); memoriesCount++; memoriesSize += s.size; } catch (_) {}
+      }
+    } catch (_) {}
+    try { dbSize = fs.statSync(dbPath).size; } catch (_) {}
+    const totalSize = memoriesSize + (dbSize || 0);
+    if (memoriesCount || dbSize !== null) {
+      out.push({ cwd: proj.cwd, name: path.basename(proj.cwd), memoriesCount, memoriesSize, dbSize, totalSize });
+    }
+  }
+  out.sort((a, b) => b.totalSize - a.totalSize);
+  return { projects: out, schemaVersion: EVENT_SCHEMA_VERSION };
+}
+
+// -- CodeInsight age (formal spec Module 8, item 4) --
+// Reads .codeinsight mtime for each discovered project, returning staleness (seconds since
+// last update) and a ranked list. A stale codeinsight means the index is out of date.
+function codeInsightAge(store) {
+  const projects = discoverProjects(store.events);
+  const now = Date.now();
+  const out = [];
+  for (const proj of projects) {
+    const ciPath = path.join(proj.cwd, '.codeinsight');
+    let mtimeMs = null, ageSeconds = null, summary = null;
+    try {
+      const stat = fs.statSync(ciPath);
+      mtimeMs = stat.mtimeMs;
+      ageSeconds = Math.max(0, Math.floor((now - stat.mtimeMs) / 1000));
+      const text = fs.readFileSync(ciPath, 'utf-8');
+      const parsed = parseCodeInsight(text);
+      if (parsed.accepted) summary = parsed.value.summary;
+    } catch (_) {}
+    if (mtimeMs !== null) {
+      out.push({ cwd: proj.cwd, name: path.basename(proj.cwd), mtimeMs, ageSeconds, summary });
+    }
+  }
+  out.sort((a, b) => b.ageSeconds - a.ageSeconds);
+  return { projects: out, schemaVersion: EVENT_SCHEMA_VERSION };
+}
+
 // Declarative route manifest -- single source of truth served by GET /api/capabilities so an
 // agentic HTTP caller (or the GUI) can introspect every route/method/param/response-shape
 // without hardcoding route knowledge duplicated from this file. Kept directly above the
@@ -1053,11 +1226,18 @@ const API_ROUTES = [
   { path: '/api/browser-sessions', method: 'GET', params: ['cwd'], response: '{cwd, sessions, ports, sessionsFileFound, portsFileFound}' },
   { path: '/api/lifecycle/response', method: 'GET', params: ['cwd', 'verb', 'file'], response: '{ok, cwd, verb, file, response} | 404 if not yet written' },
   { path: '/api/stream', method: 'GET', params: [], response: 'text/event-stream SSE: event/data frames of kind "event"|"error"|"hello"|"project.added"|"project.removed"|"project.phase-changed"' },
-  { path: '/api/projects/live-state', method: 'GET', params: [], response: '{projects: [{cwd, alive, phase, skill, instruction_key, instruction_heading, instruction_excerpt, instruction_tier, instruction_source_file, updated_ts, stale, recent_sess, recent_events}]}' },
+  { path: '/api/projects/live-state', method: 'GET', params: [], response: '{projects: [{cwd, alive, phase, skill, instruction_key, instruction_heading, instruction_excerpt, instruction_tier, instruction_source_file, instruction_auto_provisioned, updated_ts, stale, recent_sess, recent_events}]}. instruction_tier is one of "vendored" (a real per-project override -- content diverges from what ensureInstructionsBundle last auto-provisioned, or the file is fsm-vendor-sourced with no auto-sync ambiguity at all), "source-synced", or "default". instruction_auto_provisioned is true only when tier="default" but a file is nonetheless present on disk, byte-identical to gm-plugkit\'s own last-known-shipped hash for it (materialized by the bootstrap sync, not baked into the wasm guest, and NOT a real customization -- distinguish this from a genuine "no file at all" default when displaying).' },
   { path: '/api/spool-queue', method: 'GET', params: [], response: '{queues: [{cwd, name, totalPending, byVerb}], schemaVersion}' },
   { path: '/api/watcher-versions', method: 'GET', params: [], response: '{projects: [{cwd, name, alive, pid, runtime, shared, version}], schemaVersion}' },
-  { path: '/api/instruction-tiers', method: 'GET', params: [], response: '{byTier: {vendored, source-synced, default}, details: [{cwd, name, tier, source_file, source_repo}], schemaVersion}' },
+  { path: '/api/instruction-tiers', method: 'GET', params: [], response: '{byTier: {vendored, source-synced, default, auto_provisioned}, details: [{cwd, name, tier, source_file, source_repo, auto_provisioned?}], schemaVersion}. auto_provisioned is a sub-count of default (real defaults materialized to disk by the bootstrap sync, not a fourth tier) -- byTier.default already includes every auto-provisioned project.' },
+  { path: '/api/vendored-settings', method: 'GET', params: ['cwd?'], response: 'without cwd: {projects: [{cwd, name, vendored, has_custom_graph, file_count, entries}], schemaVersion} -- every project that has run the fsm-vendor verb at least once. with cwd: {cwd, vendored, has_custom_graph, file_count, entries: [{label, path, present, size, mtime_ts}], schemaVersion} for that one project. Covers the fsm-vendor verb\'s own real customization surface (phase-prose .md files, fsm/graph.json, fsm/predicates.md, hooks/*.js, browser-config.json, daemon-project-config.json) -- a WIDER, separately-tracked set from the gates/residual auto-sync instruction-tiers endpoint above, with no false-positive risk since every entry here is a real file whose presence always means a deliberate local customization surface exists (fsm-vendor is absence-gated, one-shot, never auto-overwritten).' },
+  { path: '/api/stuck-projects', method: 'GET', params: [], response: '[{cwd, name, severity, issues: [{kind, detail, ...}]}]' },
+  { path: '/api/throughput', method: 'GET', params: [], response: '{total, rates: {window: {count, perMinute, bySub}}, schemaVersion}' },
+  { path: '/api/memory-store-health', method: 'GET', params: [], response: '{projects: [{cwd, name, memoriesCount, memoriesSize, dbSize, totalSize}], schemaVersion}' },
+  { path: '/api/codeinsight-age', method: 'GET', params: [], response: '{projects: [{cwd, name, mtimeMs, ageSeconds, summary}], schemaVersion}' },
 ];
+
+export { parseCodeInsight };
 
 export function createServer({ logDir = DEFAULT_LOG_DIR, port = 0, host = '127.0.0.1' } = {}) {
   const store = new Store(logDir);
@@ -1131,6 +1311,7 @@ export function createServer({ logDir = DEFAULT_LOG_DIR, port = 0, host = '127.0
             instruction_key: key, instruction_heading: phaseState.instruction_heading,
             instruction_excerpt: phaseState.instruction_excerpt,
             instruction_tier: tier.tier, instruction_source_file: tier.file_path, instruction_source_repo: tier.source_repo,
+            instruction_auto_provisioned: !!tier.auto_provisioned,
             updated_ts: phaseState.updated_ts, stale: phaseState.stale, present: phaseState.present, unparseable: !!phaseState.unparseable,
             recent_sess: recent.sess, recent_events: recent.nodes,
           };
@@ -1268,7 +1449,9 @@ export function createServer({ logDir = DEFAULT_LOG_DIR, port = 0, host = '127.0
         let text;
         try { text = fs.readFileSync(file, 'utf-8'); }
         catch (e) { return send(res, 404, { error: '.codeinsight not found for this project', detail: e.message }); }
-        return send(res, 200, { cwd: scope.cwd, ...parseCodeInsight(text) });
+        const parsed = parseCodeInsight(text);
+        if (!parsed.accepted) return send(res, 422, { error: 'unparseable .codeinsight', reason: parsed.reason });
+        return send(res, 200, { cwd: scope.cwd, ...parsed.value });
       }
       if (p === '/api/memory-graph') {
         const scope = resolveScopedCwd(store, q.cwd);
@@ -1420,7 +1603,11 @@ export function createServer({ logDir = DEFAULT_LOG_DIR, port = 0, host = '127.0
       // served by vendored overrides, source-synced cache, or compiled defaults.
       if (p === '/api/instruction-tiers') {
         const projects = discoverProjects(store.events);
-        const byTier = { vendored: 0, 'source-synced': 0, default: 0 };
+        // auto_provisioned is a sub-count of `default` (a real default, just materialized to disk
+        // by ensureInstructionsBundle rather than compiled into the wasm guest), not a fourth tier
+        // -- byTier.default already includes every auto-provisioned project, so a consumer summing
+        // byTier values still gets the correct total; auto_provisioned is purely additive detail.
+        const byTier = { vendored: 0, 'source-synced': 0, default: 0, auto_provisioned: 0 };
         const details = [];
         for (const proj of projects) {
           const phaseState = readLivePhaseState(proj.cwd);
@@ -1428,11 +1615,55 @@ export function createServer({ logDir = DEFAULT_LOG_DIR, port = 0, host = '127.0
           const key = phaseState.instruction_heading ? phaseState.instruction_heading.toLowerCase().replace('update-docs', 'update_docs') : null;
           const tier = resolveInstructionTier(proj.cwd, key);
           byTier[tier.tier] = (byTier[tier.tier] || 0) + 1;
+          if (tier.auto_provisioned) byTier.auto_provisioned++;
           if (tier.tier !== 'default') {
             details.push({ cwd: proj.cwd, name: path.basename(proj.cwd), tier: tier.tier, source_file: tier.file_path, source_repo: tier.source_repo });
+          } else if (tier.auto_provisioned) {
+            details.push({ cwd: proj.cwd, name: path.basename(proj.cwd), tier: 'default', auto_provisioned: true, source_file: null, source_repo: null });
           }
         }
         return send(res, 200, { byTier, details, schemaVersion: EVENT_SCHEMA_VERSION }, 'application/json', p);
+      }
+
+      // fsm-vendor's own real customization surface (phase prose, fsm/graph.json, hooks,
+      // browser-config.json, daemon-project-config.json) -- a WIDER, separately-tracked set from
+      // resolveInstructionTier's gates/residual auto-sync coverage above (see
+      // discoverVendoredSettings's own header comment in registry.js for why these two surfaces
+      // don't share a detection mechanism). ?cwd=<path> drills into one project's own file list;
+      // omitted, returns a per-project summary across every discovered project for a Dashboard-
+      // style glance (which projects have actually exercised fsm-vendor at all, and which of those
+      // have a genuinely custom FSM graph vs just leftover example files).
+      if (p === '/api/vendored-settings') {
+        if (q.cwd) {
+          const scoped = resolveScopedCwd(store, q.cwd);
+          if (!scoped.ok) return send(res, 400, { error: scoped.error });
+          return send(res, 200, { cwd: scoped.cwd, ...discoverVendoredSettings(scoped.cwd), schemaVersion: EVENT_SCHEMA_VERSION }, 'application/json', p);
+        }
+        const projects = discoverProjects(store.events);
+        const rows = projects
+          .map((proj) => ({ cwd: proj.cwd, name: path.basename(proj.cwd), ...discoverVendoredSettings(proj.cwd) }))
+          .filter((r) => r.vendored);
+        return send(res, 200, { projects: rows, schemaVersion: EVENT_SCHEMA_VERSION }, 'application/json', p);
+      }
+
+      // -- Stuck-project detection: which projects need operator attention? --
+      if (p === '/api/stuck-projects') {
+        return send(res, 200, stuckProjects(store), 'application/json', p);
+      }
+
+      // -- Event throughput: ingestion rate over configurable time windows --
+      if (p === '/api/throughput') {
+        return send(res, 200, throughputMetrics(store), 'application/json', p);
+      }
+
+      // -- Memory store health: .gm/memories/ + .gm/rs-learn.db growth --
+      if (p === '/api/memory-store-health') {
+        return send(res, 200, memoryStoreHealth(store), 'application/json', p);
+      }
+
+      // -- CodeInsight age: staleness of .codeinsight across projects --
+      if (p === '/api/codeinsight-age') {
+        return send(res, 200, codeInsightAge(store), 'application/json', p);
       }
 
       send(res, 404, { error: 'not found' });

@@ -316,6 +316,41 @@ await new Promise((resolve, reject) => {
 await schemaSrv.close();
 fs.rmSync(schemaDir, { recursive: true, force: true });
 
+// -- Stuck-project detection --
+const stuck = await get('/api/stuck-projects');
+assert(Array.isArray(stuck), 'stuck-projects is array');
+
+// -- Event throughput --
+const throughput = await get('/api/throughput');
+assert(typeof throughput.total === 'number', 'throughput.total is number');
+assert(typeof throughput.rates === 'object', 'throughput.rates is object');
+assert(typeof throughput.rates['1m'] === 'object', 'throughput has 1m window');
+assert(typeof throughput.rates['1m'].perMinute === 'number', 'throughput 1m has perMinute');
+assert.strictEqual(throughput.schemaVersion, 'v1', 'throughput has schema version');
+
+// -- Memory store health --
+const memHealth = await get('/api/memory-store-health');
+assert(Array.isArray(memHealth.projects), 'memory-store-health has projects array');
+assert.strictEqual(memHealth.schemaVersion, 'v1', 'memory-store-health has schema version');
+
+// -- CodeInsight age --
+const ciAge = await get('/api/codeinsight-age');
+assert(Array.isArray(ciAge.projects), 'codeinsight-age has projects array');
+assert.strictEqual(ciAge.schemaVersion, 'v1', 'codeinsight-age has schema version');
+
+// -- Total parser: parseCodeInsight discriminated union --
+import { parseCodeInsight } from './src/server.js';
+const empty = parseCodeInsight('');
+assert.strictEqual(empty.accepted, false, 'parseCodeInsight rejects empty string');
+assert(typeof empty.reason === 'string', 'parseCodeInsight rejection has reason');
+const malformed = parseCodeInsight('just some text\nno header here');
+assert.strictEqual(malformed.accepted, false, 'parseCodeInsight rejects malformed input');
+const valid = parseCodeInsight('# 10f 1.5kL 20fn 3cls cx2.5\n## Code Organization\nsrc/foo.js:100L');
+assert.strictEqual(valid.accepted, true, 'parseCodeInsight accepts valid input');
+assert.strictEqual(valid.value.summary.files, 10, 'parseCodeInsight parses file count');
+assert.strictEqual(valid.value.summary.functions, 20, 'parseCodeInsight parses function count');
+assert(Array.isArray(valid.value.entries), 'parseCodeInsight entries is array');
+
 await close();
 
 // CLI information tiering: --help leads QUICK START -> DAILY -> DIAGNOSTICS; --schema carries tier fields.
@@ -324,4 +359,4 @@ assert(helpOut.indexOf('QUICK START') > -1 && helpOut.indexOf('QUICK START') < h
 const schemaOut = JSON.parse(spawnSync(process.execPath, ['src/cli.js', '--schema'], { encoding: 'utf8' }).stdout);
 assert(schemaOut.subcommands.every(s => typeof s.tier === 'string'), 'schema subcommand tier');
 
-console.log(`gmsniff OK — ${snap.total} events across ${days.length} days · live-feedback verified · multi-project fanout verified · formal-spec verified`);
+console.log(`gmsniff OK — ${snap.total} events across ${days.length} days · live-feedback verified · multi-project fanout verified · formal-spec verified · stuck-state+throughput+memory-health+codeinsight-age verified · total-parser verified`);
