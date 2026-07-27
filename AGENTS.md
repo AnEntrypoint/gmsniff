@@ -32,11 +32,12 @@ Any comment pass must be provably behavior-preserving: run `node test.js` and re
 
 **A comment pass is also a dead-code audit.** Prose describing what a function is *for* makes an uncalled function look load-bearing. Removing it exposes the truth: seven dead surfaces were found this way here, the sharpest being a `loadState` helper whose comment called itself "the through-line of this rework" and claimed every panel built one, while it had zero call sites. The prose asserted an architecture the code did not have.
 
-Three verification traps, each of which produced a false pass in this repo:
+Four verification traps, each of which produced a false pass in this repo:
 
 - **`node --check` cannot catch a partial rename.** It parses without resolving identifiers, so a name left undeclared by a half-finished rename reads as clean and fails only at runtime. Verify a rename by *executing* the module.
 - **A browser witness that merely navigates can re-run stale modules from Chrome's memory cache**, reporting "unchanged" for code you just edited. Force a cache-defeating reload before reading the DOM.
 - **A scripted whole-file rewrite from a stale buffer silently reverts another writer's work.** After every scripted edit, grep for the identifiers it was supposed to introduce and treat their absence as a clobber, not as success.
+- **The `browser` verb runs its body inside the page, so a `page.evaluate` witness fails in a way that reads as "the verb is broken".** The body is browser-context JS with bare `document`/`window` access and a plain `return`; only the `url=`/`timeout=` prefix lines are parsed by the watcher. A body referencing Playwright's `page` object returns `ReferenceError: page is not defined` under `cdp-eval`, which looks identical to an unavailable browser surface — one session burned eight retries on it and recorded a false external blocker, then verified every client-side change through `curl` and `node --check` instead. Use `await new Promise(r => setTimeout(r, ms))` rather than `page.waitForTimeout`, and wait on the out-file appearing rather than concluding the watcher died, because a real dispatch takes seconds.
 
 ## Report measurements, never bake in a verdict
 
