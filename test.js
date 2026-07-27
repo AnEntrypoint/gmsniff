@@ -960,4 +960,147 @@ assert(schemaOut.subcommands.every(s => typeof s.tier === 'string'), 'schema sub
   fs.rmSync(failRoot, { recursive: true, force: true });
 }
 
+// ---- client-side invariants -------------------------------------------------------------
+// /api/project-signals is pinned above against ever attaching a severity, but until now
+// NOTHING covered the client -- which is exactly how a ten-term attention score and a
+// row-dropping filter reached gui/ while the server was locked down. gui/shared.js's exports
+// are pure functions over a row and need no DOM, so they are asserted here directly, against
+// the same module the browser loads.
+{
+  const sh = await import('./gui/shared.js');
+
+  // The rule from AGENTS.md: order freely, surface the cause, never omit. attentionScore is
+  // allowed to RANK because it ranks a complete list and states its reasons; it must never
+  // become a filter. A row scoring zero with no reasons is still a row.
+  const quietAgent = { row: { present: true, phase: 'EXECUTE', activity: 'unknown' } };
+  const quiet = sh.attentionScore(quietAgent, Date.now());
+  assert.strictEqual(typeof quiet.score, 'number', 'attentionScore returns a real number for a quiet agent');
+  assert(Array.isArray(quiet.reasons), 'attentionScore always returns a reasons array');
+  assert.strictEqual(quiet.reasons.length, 0, 'a quiet agent has no invented reasons attached');
+
+  // Every contributing condition must ride along as a NAMED reason. A ranked list whose
+  // reasons are hidden degrades back into a bare severity number and fails the rule again.
+  const blockedAgent = {
+    row: { present: true, phase: 'VERIFY', activity: 'idle' },
+    gates: { blocked: true, blockers: [{ gate: 'prd-all-closed' }, { gate: 'worktree-clean' }] },
+    devTrend: { trend: 'rising', recent: 4 },
+    burndown: { trend: 'accumulating', delta: 7 },
+  };
+  const blocked = sh.attentionScore(blockedAgent, Date.now());
+  assert(blocked.score > quiet.score, 'a blocked agent ranks above a quiet one');
+  assert(blocked.reasons.length >= 3, 'every contributing condition states itself as a reason');
+  assert(blocked.reasons.some(r => r.includes('prd-all-closed') && r.includes('worktree-clean')),
+    'the blocking reason NAMES the gates behind it, never just a score');
+  assert(blocked.reasons.some(r => r.includes('4')), 'the deviation reason carries its measured count');
+  assert(blocked.reasons.some(r => r.includes('7')), 'the PRD reason carries its measured delta');
+  for (const r of blocked.reasons) {
+    for (const verdict of ['critical', 'severe', 'degraded', 'unhealthy', 'bad']) {
+      assert.strictEqual(r.toLowerCase().includes(verdict), false,
+        `attention reason "${r}" must state a measurement, never the verdict word "${verdict}"`);
+    }
+  }
+
+  // A nullable measurement must not invert its own meaning. staleSeconds == null is "no events
+  // EVER recorded" -- the most silent project there is -- and default numeric coercion sorted
+  // it as zero seconds silent, putting the most suspicious row last.
+  const neverSeen = { cwd: 'C:/dev/never', staleSeconds: null, deviationRate: 0 };
+  const quietFor2h = { cwd: 'C:/dev/quiet', staleSeconds: 7200, deviationRate: 0 };
+  const justSpoke = { cwd: 'C:/dev/fresh', staleSeconds: 5, deviationRate: 0 };
+  const sorted = [justSpoke, quietFor2h, neverSeen].sort(sh.longestSilentFirst);
+  assert.strictEqual(sorted[0].cwd, 'C:/dev/never',
+    'a project with NO events ever sorts as most-silent, not as zero seconds silent');
+  assert.strictEqual(sorted[2].cwd, 'C:/dev/fresh', 'the freshest project sorts last');
+  // The tie-break is a real second measurement, not an invented weight.
+  const tieA = { cwd: 'C:/dev/a', staleSeconds: 100, deviationRate: 9 };
+  const tieB = { cwd: 'C:/dev/b', staleSeconds: 100, deviationRate: 1 };
+  assert.strictEqual([tieB, tieA].sort(sh.longestSilentFirst)[0].cwd, 'C:/dev/a',
+    'equal silence falls through to the measured deviation rate');
+
+  // liveness reports what the server classified; it must never upgrade a row on the
+  // shared-daemon `alive` flag, which read identically for all 63 projects.
+  assert.strictEqual(sh.liveness({ present: true, phase: 'EXECUTE', activity: 'abandoned', alive: true }), 'dead',
+    'a shared-daemon alive:true never overrides a per-project abandoned classification');
+  assert.strictEqual(sh.liveness({ present: true, phase: 'EXECUTE', activity: 'dispatching' }), 'active',
+    'the server-published activity is authoritative');
+  assert.strictEqual(sh.liveness({ present: false }), 'none', 'a directory with no gm state is not an agent');
+  assert.strictEqual(sh.liveness({ present: true, phase: 'PLAN' }), 'unknown',
+    'an unclassifiable row is honestly unknown, never assumed active');
+
+  // agentAges keeps two ages that answer two different questions apart. Collapsing them hides
+  // the wedged case: long in-phase but fresh last-event is working; both long is stuck.
+  const ages = sh.agentAges({ in_phase_ms: 600000, last_event_ms: 1000, instruction_served_ms: 900000 }, null, Date.now());
+  assert.strictEqual(ages.sinceEnteringPhase, 600000, 'in-phase age is reported as its own measurement');
+  assert.strictEqual(ages.sinceLastEvent, 1000, 'last-event age is never merged into the in-phase age');
+  assert.notStrictEqual(ages.sinceEnteringPhase, ages.sinceLastEvent, 'the two ages stay distinct');
+  const noAges = sh.agentAges({}, null, Date.now());
+  assert.strictEqual(noAges.sinceLastEvent, null,
+    'an unmeasurable age is null, never 0 -- "no events observed" is not "0ms ago"');
+
+  // ageMs clamps a future timestamp rather than rendering a negative age.
+  const now = Date.now();
+  assert.strictEqual(sh.ageMs(now + 60000, now), 0, 'a future ts from another machine clamps to zero, never negative');
+  assert.strictEqual(sh.ageMs(null, now), null, 'an absent ts is null, not zero');
+  assert.strictEqual(sh.ageMs('not-a-date', now), null, 'an unparseable ts is null, not NaN');
+
+  // phaseDivergence reports BOTH sides of one comparison, so the flag and the phases it names
+  // can never come from separately-derived fields.
+  const diverged = sh.phaseDivergence({ phase_served: 'PLAN', phase_authoritative: 'EXECUTE' });
+  assert.deepStrictEqual(diverged, { served: 'PLAN', actual: 'EXECUTE' }, 'divergence names both phases');
+  assert.strictEqual(sh.phaseDivergence({ phase_served: 'PLAN', phase_authoritative: 'PLAN' }), null,
+    'agreement is not a divergence');
+  assert.strictEqual(sh.authoritativePhase({ phase_served: 'PLAN', phase_authoritative: 'EXECUTE' }), 'EXECUTE',
+    'turn-state.json wins over next-step.md prose on the client too');
+
+  // A project whose FSM graph redefines the phases must not be forced back onto the six-phase
+  // literal; a phase the fallback does not know still appears in the walk.
+  assert.deepStrictEqual(sh.phaseUniverse({ phases: ['A', 'B'] }), ['A', 'B'], 'a row carrying its own phases wins');
+  assert(sh.phaseUniverse({ phase: 'TRIAGE' }).includes('TRIAGE'),
+    'a real phase outside the fallback is added rather than dropped from the walk');
+
+  // verbDurations reports the real distribution. A median standing alone cannot distinguish
+  // 1.2x from 40x, which is why p95 and max ride with it.
+  const durs = sh.verbDurations([
+    { kind: 'dispatch', verb: 'recall', ms: 10 }, { kind: 'dispatch', verb: 'recall', ms: 20 },
+    { kind: 'dispatch', verb: 'recall', ms: 300 }, { kind: 'dispatch', verb: 'codesearch', ms: 5 },
+    { kind: 'instruction', verb: 'ignored', ms: 999 },
+  ]);
+  const recallStats = durs.find(d => d.verb === 'recall');
+  assert.strictEqual(recallStats.count, 3, 'only dispatch rows with a real ms are counted');
+  assert.strictEqual(recallStats.max, 300, 'the max is reported alongside the median');
+  assert.strictEqual(durs.some(d => d.verb === 'ignored'), false, 'a non-dispatch row is not timed as a verb');
+
+  // prdBurndown must say "unknown" rather than guess a trend from a single point.
+  assert.strictEqual(sh.prdBurndown([{ kind: 'instruction', prd_pending: 5, ts: 1 }]).trend, 'unknown',
+    'one data point is not a trend');
+  assert.strictEqual(sh.prdBurndown([
+    { kind: 'instruction', prd_pending: 9, ts: 1 }, { kind: 'instruction', prd_pending: 2, ts: 2 },
+  ]).trend, 'converging', 'a falling pending count is converging');
+  assert.strictEqual(sh.prdBurndown([]).trend, 'unknown', 'no points is unknown, never "flat"');
+
+  // deviationTrend compares halves of the observed window; with under two points it must not
+  // manufacture a direction.
+  assert.strictEqual(sh.deviationTrend([]).count, 0, 'no deviations counts zero');
+  assert.strictEqual(sh.deviationTrend([{ kind: 'deviation', ts: new Date().toISOString() }]).trend, 'flat',
+    'a single deviation is not a rising trend');
+
+  // resolveInflight pairs strictly on `task` and ages a start out, because dispatch.start's ts
+  // is the EMPTY STRING in real data (45 starts against 2721 ends) -- a naive unmatched-start
+  // scan reports dozens of agents as running forever.
+  const stillOpen = sh.resolveInflight([
+    { kind: 'dispatch', verb: 'recall', task: '1', inflight: true, ts: new Date().toISOString() },
+    { kind: 'dispatch', verb: 'recall', task: '1' },
+    { kind: 'dispatch', verb: 'browser', task: '2', inflight: true, ts: new Date().toISOString() },
+  ], Date.now());
+  assert.strictEqual(stillOpen.length, 1, 'a start matched by its end is not reported in-flight');
+  assert.strictEqual(stillOpen[0].verb, 'browser', 'the genuinely open dispatch is the one reported');
+  const blankTs = sh.resolveInflight([{ kind: 'dispatch', verb: 'x', task: '9', inflight: true, ts: '' }], Date.now());
+  assert.strictEqual(blankTs[0].ageMs, null, 'a start with a blank ts reports unknown duration, not a fabricated age');
+  assert.strictEqual(blankTs[0].abandoned, false, 'an unageable start is never declared abandoned');
+
+  // gui/live-agents.js is deliberately NOT imported here: it imports `webjsx` and the `ds/`
+  // importmap alias, so a try/catch around the import would silently skip every assertion
+  // inside it and report green -- an assertion that never runs is worse than none. Only
+  // gui/shared.js is asserted, because only it is genuinely loadable outside a browser.
+}
+
 console.log(`gmsniff OK — ${snap.total} events across ${days.length} days · live-feedback verified · multi-project fanout verified · formal-spec verified · stuck-state+throughput+memory-health+codeinsight-age verified · total-parser verified · watcher-log-total-parse+source-priority+correlation+project-state verified`);
