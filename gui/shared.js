@@ -1,5 +1,10 @@
-import { api } from './data.js';
-
+// ./data.js is imported lazily, inside the one function that fetches, rather
+// than at module scope. Everything else exported here is a pure function over a
+// row, and a static import would drag in data.js's `ds/` bare specifier -- a
+// browser-importmap alias Node cannot resolve -- making this module
+// unloadable outside a browser and its pure functions untestable. That is
+// exactly how a ten-term attention score and a row-dropping filter reached the
+// client with no test covering either.
 export function basename(cwd) {
   if (!cwd) return '(unknown)';
   return String(cwd).replace(/[\\/]+$/, '').split(/[\\/]/).filter(Boolean).pop() || String(cwd);
@@ -16,6 +21,7 @@ export function verbAllowlist() { return caps.verbs || SEED_VERBS_UNTIL_CAPABILI
 export function subsystemList() { return caps.subs || SEED_SUBS_UNTIL_CAPABILITIES_LAND; }
 
 export async function loadCapabilities() {
+  const { api } = await import('./data.js');
   const r = await api('/api/capabilities');
   if (r && !r.error) {
     if (Array.isArray(r.verbAllowlist) && r.verbAllowlist.length) caps.verbs = r.verbAllowlist;

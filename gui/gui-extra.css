@@ -244,6 +244,21 @@
   background: color-mix(in srgb, var(--warn, #d29922) 12%, var(--panel-bg)); }
 .gm-stream-note-x { margin-left:auto; background:none; border:none; color:inherit; cursor:pointer; font:inherit; }
 
+/* Opt-in state-change signal. The pulse is a brief border/background lift on an
+   already-present strip rather than a new element appearing, so an arriving
+   frame never reflows the panel under a reader's cursor. */
+.gm-notify { display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:6px 14px; margin-bottom:10px;
+  border:1px solid var(--border); border-radius:6px; font-size:12px;
+  transition: border-color .25s ease, background-color .25s ease; }
+.gm-notify-scope { color: var(--muted, #8b949e); }
+.gm-notify-count { margin-left:auto; font-variant-numeric: tabular-nums; }
+.gm-notify.is-pulsing { border-color: var(--accent, #58a6ff);
+  background: color-mix(in srgb, var(--accent, #58a6ff) 14%, var(--panel-bg)); }
+
+@media (prefers-reduced-motion: reduce) {
+  .gm-notify { transition: none; }
+}
+
 @media (max-width: 900px) {
   .gm-feed-scroll, .gm-instruction-body { max-height:40vh; }
 }

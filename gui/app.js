@@ -3,6 +3,7 @@ import { AppShell, Topbar, Side, Status, Chip, Btn } from 'ds/components/shell.j
 import { Alert, Spinner } from 'ds/components/content.js';
 import { ThemeToggle } from 'ds/components/theme-toggle.js';
 import { CommandPalette } from 'ds/components/overlay-primitives.js';
+import { Toggle } from 'ds/components/form-primitives.js';
 import { state, loadProjects, api, toast } from './data.js';
 import {
   Dashboard, ByDay, LiveStream, pushLiveEntry, AllEvents, SubsystemPanel,
@@ -224,7 +225,7 @@ function healthMeasurements(r) {
 // Sorts by silence, then by deviation rate, so a project with no events ever
 // (staleSeconds == null) sorts to the top rather than reading as zero seconds
 // silent -- the absence of a measurement is not a measurement of zero.
-function longestSilentFirst(a, b) {
+export function longestSilentFirst(a, b) {
   const silenceOf = (r) => (r.staleSeconds == null ? Infinity : r.staleSeconds);
   return (silenceOf(b) - silenceOf(a)) || ((b.deviationRate || 0) - (a.deviationRate || 0));
 }
@@ -372,7 +373,7 @@ function renderShell() {
         Chip({ tone: ui.connState === 'live' ? 'positive' : (ui.connState === 'reconnecting' ? 'warn' : 'neutral'), children: ui.connState }),
         ThemeToggle({ compact: true }))),
     side,
-    main: [HealthBanner(), StreamNote(), bodyContainer],
+    main: [StateChangeSignal(), HealthBanner(), StreamNote(), bodyContainer],
     status: Status({ left: ['gmsniff'], right: [state.cwd || '(own root)', statusGlance()].filter(Boolean) }),
   });
   webjsx.applyDiff(root, app);
@@ -565,22 +566,117 @@ const SSE_SUBSCRIPTIONS = [
   { panel: 'deviations', wants: (ev) => (isDeviation(ev) ? REFETCH_FROM_SERVER : IGNORE_FRAME) },
 ];
 
-// A title-bar counter while the tab is hidden is what makes gmsniff useful
-// unattended.
-let unseenWhileHiddenCount = 0;
+// An observer cannot watch a screen continuously, so the three state changes
+// worth interrupting for -- a phase transition, a deviation, a gate denial --
+// raise a title-bar count and a pulse on the panel. Opt-in and persisted like
+// the nav's advanced toggle, because an unattended signal the reader never
+// asked for is noise.
+//
+// Deliberately NOT the Notification API: it demands an OS permission prompt,
+// and a local observability tool that asks for one on first paint reads as
+// hostile. The title bar is already visible in the tab strip.
+const NOTIFY_STORAGE_KEY = 'gmsniff.notify.stateChanges';
+const NOTIFY_ON = 'on';
+const NOTIFY_OFF = 'off';
+
+// Whitelist-validated exactly like NAV_ADVANCED: a corrupt stored value or an
+// unavailable localStorage both land on OFF rather than silently opting the
+// reader in.
+let notifyStateChanges = (() => {
+  try { return localStorage.getItem(NOTIFY_STORAGE_KEY) === NOTIFY_ON; } catch (_) { return false; }
+})();
+
+function setNotifyStateChanges(on) {
+  notifyStateChanges = !!on;
+  try { localStorage.setItem(NOTIFY_STORAGE_KEY, notifyStateChanges ? NOTIFY_ON : NOTIFY_OFF); } catch (_) {}
+  if (!notifyStateChanges) clearStateChangeSignal();
+  renderShell();
+}
+
+const GATE_DENY_DEVIATION = 'gate-deny';
+const DEVIATION_EVENT_PREFIX_LEN = DEVIATION_EVENT_PREFIX.length;
+
+// The measurement, never a verdict: "spoint EXECUTE->VERIFY" and
+// "casey deviation.gate-deny" say what happened and to whom. No severity word,
+// no ranking, no "critical" -- the reader judges.
+export function describeStateChange(ev) {
+  if (!ev || typeof ev.event !== 'string') return null;
+  const who = basename(ev.cwd);
+  if (ev.event === 'phase.transitioned') {
+    const from = ev.from || '?';
+    const to = ev.phase || '?';
+    return `${who} ${from}->${to}`;
+  }
+  if (ev.event.startsWith(DEVIATION_EVENT_PREFIX)) {
+    const kind = ev.event.slice(DEVIATION_EVENT_PREFIX_LEN);
+    // A gate denial is called out as itself rather than folded into the generic
+    // deviation line, because it is the one an observer most often waits on.
+    if (kind === GATE_DENY_DEVIATION) return `${who} deviation.gate-deny`;
+    return `${who} deviation.${kind}`;
+  }
+  return null;
+}
+
+const STATE_CHANGE_LOG_RETAINED = 20;
+const PULSE_CLEAR_MS = 4000;
+
+const stateChangeSignal = { count: 0, recent: [], pulse: false };
+let pulseTimer = null;
 const BASE_TITLE = document.title;
 
-function noteStateChange(ev) {
-  const notable = isDeviation(ev) || ev.event === 'phase.transitioned';
-  if (!notable) return;
-  if (document.visibilityState === 'hidden') {
-    unseenWhileHiddenCount++;
-    document.title = `(${unseenWhileHiddenCount}) ${BASE_TITLE}`;
-  }
+function clearStateChangeSignal() {
+  stateChangeSignal.count = 0;
+  stateChangeSignal.recent = [];
+  stateChangeSignal.pulse = false;
+  document.title = BASE_TITLE;
 }
+
+// Counts EVERY notable frame, not only those arriving while the tab is hidden:
+// a reader looking at a different panel is just as unable to see a transition
+// on the agents list as one on another tab.
+function noteStateChange(ev) {
+  if (!notifyStateChanges) return;
+  const described = describeStateChange(ev);
+  if (!described) return;
+  stateChangeSignal.count++;
+  stateChangeSignal.recent.unshift(described);
+  if (stateChangeSignal.recent.length > STATE_CHANGE_LOG_RETAINED) stateChangeSignal.recent.pop();
+  document.title = `(${stateChangeSignal.count}) ${BASE_TITLE}`;
+  stateChangeSignal.pulse = true;
+  if (pulseTimer) clearTimeout(pulseTimer);
+  pulseTimer = setTimeout(() => { stateChangeSignal.pulse = false; renderShell(); }, PULSE_CLEAR_MS);
+  renderShell();
+}
+
+// Returning to the tab is the acknowledgement: the count exists to tell a reader
+// what they missed while away, so it resets once they are back.
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') { unseenWhileHiddenCount = 0; document.title = BASE_TITLE; }
+  if (document.visibilityState === 'visible' && stateChangeSignal.count) clearStateChangeSignal();
 });
+
+// Names the three frame families it counts, so a reader enabling it knows
+// exactly what will interrupt them, and states the newest measurement inline
+// rather than only in the tab title.
+function StateChangeSignal() {
+  const newest = stateChangeSignal.recent[0] || null;
+  return h('div', {
+    class: 'gm-notify' + (stateChangeSignal.pulse ? ' is-pulsing' : ''),
+    'data-gm-notify': notifyStateChanges ? NOTIFY_ON : NOTIFY_OFF,
+  },
+    Toggle({
+      checked: notifyStateChanges,
+      label: 'signal state changes',
+      ariaLabel: 'signal phase transitions, deviations and gate denials',
+      onChange: setNotifyStateChanges,
+    }),
+    h('span', { class: 'gm-notify-scope' }, 'phase transitions · deviations · gate denials'),
+    notifyStateChanges && stateChangeSignal.count
+      ? h('span', {
+          class: 'gm-notify-count', role: 'status', 'aria-live': 'polite',
+          title: stateChangeSignal.recent.join('\n'),
+        }, `${stateChangeSignal.count} since you last looked${newest ? ' -- newest: ' + newest : ''}`)
+      : null);
+}
 
 const RECONNECT_DELAY_INITIAL_MS = 1000;
 const RECONNECT_DELAY_MAX_MS = 15000;
@@ -699,6 +795,8 @@ async function boot() {
     parseHash, hashForState, syncHash, liveStreamDebugSnapshot, isAdvancedPanel,
     getNavAdvanced: () => navAdvanced, statusGlance,
     liveState, agentKey, openDrilldown, closeDrilldown, scheduleRender,
+    describeStateChange, noteStateChange, stateChangeSignal,
+    getNotifyStateChanges: () => notifyStateChanges, setNotifyStateChanges,
   };
 
   // BOOT PAINTS BEFORE IT FETCHES. Measured in real Chrome against this
