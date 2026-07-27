@@ -50,6 +50,8 @@ So: report the measurement **and how old it is**, for **every** project, and let
 
 **Reporting another system's classification is not minting your own.** `DEVIATION_META` maps each gm deviation kind to the recovery verb gm itself documents, and gm writes a `severity` field into its own `prd.yml` rows; passing those through is reporting gm's facts. Inventing a severity gmsniff computed is not.
 
+**A nullable measurement can invert its own meaning in a comparator.** The health banner sorted `staleSeconds == null` — "no events ever" — as *zero seconds silent*, so the most suspicious project sorted last. Any sort, min/max or average over a field that can be null needs an explicit decision: absent means zero, means `Infinity`, or must be excluded and reported separately. Never let the default numeric coercion decide.
+
 ## Liveness has three distinct meanings
 
 Keep them separate; substituting one for another is the recurring bug.

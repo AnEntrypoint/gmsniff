@@ -1,9 +1,3 @@
-// All gmsniff panels, built from anentrypoint-design's webjsx factories
-// (shell.js primitives + data-density.js dense widgets) plus small local
-// gm-* CSS classes (gui-extra.css) for table/toolbar/query chrome the design
-// system doesn't ship. Every panel returns a vnode tree; app.js re-renders
-// the active panel's container on data load / SSE events / interval ticks.
-
 import * as webjsx from 'webjsx';
 import { Chip, Badge, Pill, Btn } from 'ds/components/shell.js';
 import { PhaseWalk, BarRow, StatsGrid, SessionRow, DevRow, LiveLog } from 'ds/components/data-density.js';
@@ -15,12 +9,6 @@ import { HonestState, ScopedPanelState } from './honest-state.js';
 
 const h = webjsx.createElement;
 
-// The panel filter/action strip. This was a local `.gm-toolbar` div carrying a
-// comment claiming ds "doesn't ship" this shape -- factually wrong: ds
-// editor-primitives.js exports ToolbarRow with the identical rest-arg signature
-// (`ToolbarRow(...actions)`), explicitly documented there as covering the exact
-// case gmsniff hand-rolled. Now delegated, so the row gets ds's real toolbar
-// semantics (role="toolbar", wrapping layout) instead of a bare div.
 const Toolbar = ToolbarRow;
 
 export const SUB_COLORS = {
@@ -35,19 +23,18 @@ function colorFor(sub) {
   return `hsl(${hue % 360}, 60%, 65%)`;
 }
 
-// Every panel's zero-state routes through HonestState so "nothing happened",
-// "nothing loaded" and "nothing matched" can never collapse into one silent
-// message. Kept as a thin named wrapper so the ~30 existing call sites read the
-// same, while each now has to say WHICH zero it is.
 function Empty(text, kind = 'empty', hint) { return HonestState({ kind, text, hint }); }
 function Failed(what, error) {
   return HonestState({ kind: 'error', text: `Could not load ${what}.`, hint: String(error) });
 }
 
-// Human-readable single-line sugar for an event payload: key=value pairs
-// instead of raw JSON punctuation. Used for table-cell summaries and the
-// live-stream preview (LiveLogEntry renders preview as plain text); expanded
-// views render full highlighted JSON via the ds JsonViewer.
+const ELLIPSIS = '...';
+const MAX_VALUE_CHARS = 60;
+
+function truncateWithEllipsis(s, maxLen) {
+  return s.length > maxLen ? s.slice(0, maxLen - ELLIPSIS.length) + ELLIPSIS : s;
+}
+
 function asKeyValueLine(obj, maxLen = 200) {
   const parts = [];
   for (const [k, v] of Object.entries(obj)) {
@@ -55,34 +42,23 @@ function asKeyValueLine(obj, maxLen = 200) {
     if (v == null) sv = String(v);
     else if (typeof v === 'object') { try { sv = JSON.stringify(v); } catch { sv = String(v); } }
     else sv = String(v);
-    if (sv.length > 60) sv = sv.slice(0, 57) + '...';
-    parts.push(k + '=' + sv);
+    parts.push(k + '=' + truncateWithEllipsis(sv, MAX_VALUE_CHARS));
     if (parts.join('  ').length >= maxLen) break;
   }
-  const s = parts.join('  ');
-  return s.length > maxLen ? s.slice(0, maxLen - 3) + '...' : s;
+  return truncateWithEllipsis(parts.join('  '), maxLen);
 }
 
-// ---------------------------------------------------------------------------
-// DASHBOARD
-// ---------------------------------------------------------------------------
 export async function Dashboard({ onNav, devTotal, health } = {}) {
   const snap = await api('/api/snapshot');
   if (snap.error) return Empty('Failed to load snapshot: ' + snap.error);
   if (Array.isArray(snap.observedSubsystems) && snap.observedSubsystems.length) {
     mergeObservedSubsystems(snap.observedSubsystems);
   }
-  // Daily-first glance: what is happening right now, before any histogram.
-  // Everything here is client-held already (state.projects from boot,
-  // devTotal/health from app.js's shared 10s poller) -- no new endpoints.
   const healthByCwd = new Map((health || []).map(r => [r.cwd, r]));
-  // Glance stays glanceable: alive projects always show (they ARE the daily
-  // signal); dead-watcher dirs fill remaining slots up to the cap. The cut is
-  // stated explicitly below -- never a silent truncation. /api/projects
-  // already sorts alive-first, so slice() preserves that priority.
-  const GLANCE_MAX = 15;
+  const GLANCE_MIN_ROWS = 15;
   const aliveCount = state.projects.filter(p => p.alive).length;
-  const glanceProjects = state.projects.slice(0, Math.max(GLANCE_MAX, aliveCount));
+  const glanceRowLimitNeverCuttingAnAliveProject = Math.max(GLANCE_MIN_ROWS, aliveCount);
+  const glanceProjects = state.projects.slice(0, glanceRowLimitNeverCuttingAnAliveProject);
   const glanceHidden = state.projects.length - glanceProjects.length;
   const projRows = glanceProjects.map(p => {
     const hr = healthByCwd.get(p.cwd);
@@ -146,9 +122,6 @@ export async function Dashboard({ onNav, devTotal, health } = {}) {
       h('div', { class: 'ds-panel' }, h('h2', {}, 'Top Events'), ...evRows)));
 }
 
-// ---------------------------------------------------------------------------
-// BY DAY
-// ---------------------------------------------------------------------------
 export async function ByDay() {
   const days = await api('/api/days');
   if (!Array.isArray(days) || !days.length) return Empty('No day-bucketed data yet.');
@@ -159,62 +132,43 @@ export async function ByDay() {
         ...subsystemList().map(s => h('td', {}, String(d.bySub[s] || '')))))));
 }
 
-// ---------------------------------------------------------------------------
-// LIVE STREAM
-// ---------------------------------------------------------------------------
+const LIVE_BUFFER_MAX_ENTRIES = 2000;
+const LIVE_VISIBLE_MAX_ROWS = 500;
 let liveEntries = [];
-// Pause gates only the autoscroll-on-new-event behavior: paused events still
-// append to liveEntries (so nothing is lost / the buffer stays complete),
-// they just don't yank the view to the bottom, and liveNewCount tracks how
-// many arrived while paused so the toolbar can show an "N new" indicator.
-let livePaused = false;
-let liveNewCount = 0;
-// Multi-project filter: null = show every discovered project's events (the
-// whole point of the system-wide fanout); a cwd string narrows to just that
-// project, same set /api/projects returns so the dropdown always matches
-// reality instead of a hand-maintained project list.
+let liveAutoscrollPaused = false;
+let liveEntriesArrivedWhilePaused = 0;
 let liveProjectFilter = null;
-// Monotonic, never-reused row key. `liveEntries.length` was used as the key previously, but
-// that value freezes at 2000 the instant the buffer starts shifting (push then immediate shift
-// nets a constant post-push length) -- every entry pushed after the first 2000 collided on the
-// same key (2000), and webjsx's keyed applyDiff reconciles same-key nodes as in-place updates
-// to ONE DOM node rather than distinct rows. Measured live under a real 2000+ event backlog:
-// the log rendered only a handful of distinct rows (colliding keys collapsing thousands of
-// pushes onto a few keyed nodes) while burning heavy diff/reflow cost repeatedly updating those
-// same collided nodes in place -- the dominant real cause of observed LiveStream jank (fps~1)
-// under load, distinct from and larger than the server-side discoverProjects/healthSummary
-// costs fixed alongside this. A module-level counter that only ever increments removes the
-// collision regardless of how many entries are ever pushed or shifted.
-let liveEntrySeq = 0;
-// Debug accessor -- the module-level liveEntries/liveProjectFilter/liveEntrySeq state had no
-// window.* exposure, so diagnosing a live-panel rendering anomaly required guessing from DOM
-// snapshots alone. Read-only snapshot (never returns the live array/mutable references) so a
-// caller can inspect but not corrupt push/shift ordering from the console.
+// Measured under a real 2000+ event backlog: keying rows by `liveEntries.length` froze the key
+// at the buffer cap once shifting began, collapsing thousands of pushes onto a handful of keyed
+// DOM nodes that webjsx then re-diffed in place -- LiveStream ran at ~1fps. A never-reused
+// counter is what removes the collision.
+let liveEntryKeySeq = 0;
+
 export function liveStreamDebugSnapshot() {
   return {
     liveEntriesLength: liveEntries.length,
-    liveEntrySeq,
+    liveEntrySeq: liveEntryKeySeq,
     liveProjectFilter,
-    livePaused,
-    liveNewCount,
+    livePaused: liveAutoscrollPaused,
+    liveNewCount: liveEntriesArrivedWhilePaused,
     lastEntries: liveEntries.slice(-5),
   };
 }
 export function pushLiveEntry(ev) {
   const payload = { ...ev };
   delete payload._sub; delete payload._day; delete payload._fp;
-  liveEntries.push({ key: liveEntrySeq++, ts: fmtTs(ev.ts), sub: ev._sub, tone: colorFor(ev._sub || ''), event: ev.event || '?', preview: asKeyValueLine(payload, 200), cwd: ev.cwd || null });
-  if (liveEntries.length > 2000) liveEntries.shift();
-  if (livePaused) liveNewCount++;
+  liveEntries.push({ key: liveEntryKeySeq++, ts: fmtTs(ev.ts), sub: ev._sub, tone: colorFor(ev._sub || ''), event: ev.event || '?', preview: asKeyValueLine(payload, 200), cwd: ev.cwd || null });
+  if (liveEntries.length > LIVE_BUFFER_MAX_ENTRIES) liveEntries.shift();
+  if (liveAutoscrollPaused) liveEntriesArrivedWhilePaused++;
 }
 export function LiveStream({ connState = 'connecting' } = {}, setBody) {
   const toneMap = { live: 'positive', reconnecting: 'warn', connecting: 'neutral', closed: 'danger' };
   const pauseBtn = Btn({
-    children: livePaused ? `Resume${liveNewCount ? ` (${liveNewCount} new)` : ''}` : 'Pause',
-    variant: livePaused ? 'primary' : 'ghost',
+    children: liveAutoscrollPaused ? `Resume${liveEntriesArrivedWhilePaused ? ` (${liveEntriesArrivedWhilePaused} new)` : ''}` : 'Pause',
+    variant: liveAutoscrollPaused ? 'primary' : 'ghost',
     onClick: () => {
-      livePaused = !livePaused;
-      if (!livePaused) liveNewCount = 0; // resume snaps to bottom (autoScroll) and clears the indicator
+      liveAutoscrollPaused = !liveAutoscrollPaused;
+      if (!liveAutoscrollPaused) liveEntriesArrivedWhilePaused = 0;
       if (setBody) setBody();
     },
   });
@@ -226,7 +180,7 @@ export function LiveStream({ connState = 'connecting' } = {}, setBody) {
     h('option', { value: '' }, `all projects (${cwds.length})`),
     ...cwds.map(cwd => h('option', { key: cwd, value: cwd }, basename(cwd))));
   const filtered = liveProjectFilter ? liveEntries.filter(e => e.cwd === liveProjectFilter) : liveEntries;
-  const tagged = filtered.slice(-500).map(e => ({ ...e, sub: e.cwd ? `${basename(e.cwd)}/${e.sub}` : e.sub }));
+  const tagged = filtered.slice(-LIVE_VISIBLE_MAX_ROWS).map(e => ({ ...e, sub: e.cwd ? `${basename(e.cwd)}/${e.sub}` : e.sub }));
   return h('div', { class: 'ds-panel gm-p-8' },
     h('div', { class: 'gm-row-between' },
       h('h2', { class: 'gm-m-0' }, 'Live Stream'),
@@ -234,22 +188,17 @@ export function LiveStream({ connState = 'connecting' } = {}, setBody) {
         Chip({ tone: toneMap[connState] || 'neutral', children: connState }),
         projectSelect,
         Toolbar(pauseBtn))),
-    tagged.length ? LiveLog({ entries: tagged, autoScroll: !livePaused }) : Empty(liveProjectFilter ? 'No live events yet for this project.' : 'No live events received yet.'));
+    tagged.length ? LiveLog({ entries: tagged, autoScroll: !liveAutoscrollPaused }) : Empty(liveProjectFilter ? 'No live events yet for this project.' : 'No live events received yet.'));
 }
 
-// ---------------------------------------------------------------------------
-// ALL EVENTS / SEARCH / SUBSYSTEM (shared table renderer)
-// ---------------------------------------------------------------------------
-// Per-table-instance sort state, keyed by the caller-supplied tableId so
-// AllEvents/SubsystemPanel/SessionDetailDialog/etc each remember their own
-// current sort column/direction independently. Column key 'sub' addresses
-// the synthetic leading badge column (r._sub), any other key addresses r[key].
-const eventTableSortState = new Map();
+const SUBSYSTEM_BADGE_COLUMN_KEY = 'sub';
+const sortStateByTableId = new Map();
+
 function sortRows(rows, sortSpec) {
   if (!sortSpec || !sortSpec.key) return rows;
   const { key, dir } = sortSpec;
   const mul = dir === 'asc' ? 1 : -1;
-  const valueOf = (r) => (key === 'sub' ? (r._sub || '') : r[key]);
+  const valueOf = (r) => (key === SUBSYSTEM_BADGE_COLUMN_KEY ? (r._sub || '') : r[key]);
   return [...rows].sort((a, b) => {
     const av = valueOf(a), bv = valueOf(b);
     if (av === undefined || av === null) return bv === undefined || bv === null ? 0 : mul;

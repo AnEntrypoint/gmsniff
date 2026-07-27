@@ -814,3 +814,11 @@
   text: 'Run a whole-tree sweep for the same pattern the user named: any code deciding something is an error and then acting on that decision -- invented severity scores, thresholds that omit data from a result set, ok/degraded/critical labels standing in for the numbers behind them, and boolean is-broken predicates. Replace each with the measurement and its age. A threshold that affects only presentation may stay ONLY if the count hidden is stated, the criterion named, and the underlying numbers remain reachable.'
   witness: 'user directive: no hard coded error checking anywhere, just report information as informatively as possible'
   status: pending
+- id: gui-has-no-test-coverage-asymmetry
+  text: 'test.js pins /api/project-signals against ever attaching a severity, but NO test covers the GUI side -- and that asymmetry is exactly how a ten-term attention score and a row-dropping filter survived client-side while the server was locked down. The server is guarded by assertions; the client is guarded only by whoever happens to look. Closing it needs a DOM, which the zero-dependency no-test-framework constraint makes non-trivial, so the design question is real: either assert against the served module exports without a DOM, or accept that the browser witness is the only client guard and make that explicit rather than implicit.'
+  witness: server agent added the project-signals no-severity assertion; the same class of defect then appeared unguarded in gui/app.js and gui/live-agents.js
+  status: pending
+- id: null-sorts-as-zero-class-audit
+  text: 'The health banner sorted staleSeconds == null (no events ever) as zero seconds silent, putting the MOST suspicious project last. That is a class, not a one-off: any comparator or aggregate over a nullable measurement can silently invert its own meaning. Audit every sort and every min/max/avg over a field that can be null, and decide explicitly whether absent means zero, means Infinity, or must be excluded and reported separately.'
+  witness: fixed in longestSilentFirst by mapping null to Infinity; found only because the verdict removal forced a rewrite of the comparator
+  status: pending
