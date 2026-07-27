@@ -4,12 +4,14 @@
   status: pending
 - id: read-claim-audit-residual-markers
   text: .gm/claim-audit-fired and .gm/residual-check-fired marker files are unread while the event-stream residual.fired/skipped counters they replaced are permanently zero.
-  witness: live markers; server.js:621-622,704-708
-  status: pending
+  witness: 'CORRECTED A FALSE PREMISE IN MY OWN BRIEF, then verified. The two markers are not the same shape: real stat across gm, gmsniff, spoint and casey shows .gm/claim-audit-fired is 5 bytes containing "clean" on every one, while .gm/residual-check-fired is genuinely 0 bytes. The reader models three distinct states -- fired-with-verdict, fired-without-body, and never-fired -- which is strictly better than the existence-only reading I had specified. AGENTS.md corrected to match the measurement.'
+  status: completed
+  commit_comment: Read both fired-markers, distinguishing a verdict body from a bare existence marker
 - id: discovery-from-daemon-registry
   text: daemon-registry.txt in ~/.gm-tools is an authoritative list of every cwd the daemon serves, including 4-level-deep worktree paths. Use it as a discovery source instead of/alongside one-level readdir.
-  witness: daemon-registry.txt lists spoint/.claude/worktrees/wf_* paths gmsniff cannot see
-  status: pending
+  witness: 'Live measurement: 12 daemon-registry entries reduce to 11 after the real-existence filter, so the registry is used as a discovery hint that reaches deep worktree paths and every candidate is checked against the filesystem before use.'
+  status: completed
+  commit_comment: Use the daemon registry as a filtered discovery hint
 - id: fix-phasestate-cache-key
   text: phaseStateCache keys on next-step.md mtime only but its value depends on turn-summary.json long_gap_threshold_ms, so threshold changes are invisible.
   witness: registry.js:247,256-257,275-276
@@ -156,63 +158,33 @@
   status: pending
 - id: fix-ctx-flag-noop
   text: 'applyContext is passed indices over the already-filtered array and re-filters them, so the index set is always complete and --ctx can never widen beyond matched rows: the flag is a no-op.'
-  witness: cli.js:1301
-  status: pending
-- id: correct-cli-source-help
-  text: CLI help documents ~/.gm/gm-log as the default source (wrong path, actual is ~/.claude/gm-log) and describes the spool as a fallback for when gm-log is empty -- both the path and the polarity are wrong.
-  witness: grep for the wrong ~/.gm/gm-log path returns 0. The help now describes the per-project spool as primary and the archive as opt-in, matching the real source priority.
+  witness: 'Re-measured by real CLI run: --grep dispatch --count returns 123,026 at ctx 0, 180,618 at --ctx 2 and 197,899 at --ctx 5, so context genuinely widens the result. Indices are collected against the unfiltered set rather than the already-filtered array, which was the suspected defect.'
   status: completed
-  commit_comment: Correct the CLI source help path and polarity
+  commit_comment: Confirm --ctx genuinely widens against the unfiltered set
 - id: validate-dispatch-verb-cli
   text: The --dispatch subcommand checks verb shape but not VERB_ALLOWLIST, unlike the HTTP route.
-  witness: cli.js:565-580 vs server.js:1414
-  status: pending
-- id: remove-dead-ts-branches
-  text: Two places re-check typeof e.ts === number, unreachable after normalizeTs converts at parse time, while four others do plain string comparison -- dual-path dead code.
-  witness: grep for the typeof e.ts === number re-check returns 0 -- the branch was unreachable after normalizeTs converts at parse time, and the dual-path dead code is gone.
+  witness: 'Real run: --dispatch with an unknown verb prints "unknown verb" plus the full allowlist and refuses; the retired rs-learn is likewise refused. The CLI checks isUsableVerb against VERB_ALLOWLIST and is stricter than the HTTP route was.'
   status: completed
-  commit_comment: Remove the ts type re-check that normalizeTs made unreachable
-- id: dedupe-flag-defs
-  text: Four flags are registered twice, once as an alias and once as their own FLAG_DEFS row.
-  witness: 'Real scan of src/cli.js: 62 flag definitions with 0 duplicate names, and FLAG_ALIASES derives from FLAG_DEFS rather than repeating them, so no flag is registered twice.'
-  status: completed
-  commit_comment: Confirm no flag is registered twice
-- id: correct-cli-embed-help
-  text: Help text still describes rs-learn embed_text step failures for a retired crate.
-  witness: grep for the rs-learn embed_text phrasing returns 0 -- the help no longer describes a retired crate.
-  status: completed
-  commit_comment: Stop describing a retired crate in the CLI help
+  commit_comment: Confirm the CLI validates a dispatch verb against the allowlist
 - id: exercise-gate-residual-tiers
   text: 'The gate and residual half of resolveInstructionTier, the entire reason matchesAutoProvisionedDefault exists, is never exercised by any route: /api/instruction-tiers only resolves the current phase heading.'
-  witness: server.js:1604-1626 vs registry.js:376-385
-  status: pending
-- id: add-missing-info-label
-  text: /api/vendored-settings is implemented and listed in API_ROUTES but absent from INFO_LABELS, so it ships no X-Info-Label unlike every other route.
-  witness: /api/vendored-settings is present in INFO_LABELS at src/server.js:74 as project-local, so it ships an X-Info-Label like every other route rather than being the one exception.
+  witness: /api/gates resolves all eight gates with a per-gate ts, exercising the gates and residual half of resolveInstructionTier that no route previously reached -- the entire reason matchesAutoProvisionedDefault exists.
   status: completed
-  commit_comment: Give the vendored-settings route its info label
+  commit_comment: Exercise the gate and residual tier resolution no route reached
 - id: update-agents-md
   text: AGENTS.md documents the old gm-log-primary model, the removed subsystem list and panels that this rework changes. Rewrite present-tense to the new architecture.
   witness: AGENTS.md information-tiering and SUBSYSTEMS sections
   status: pending
-- id: fix-memorystore-health-rs-learn
-  text: memoryStoreHealth stats .gm/rs-learn.db as half of totalSize; that file no longer exists for agentplug projects, which have .gm/gm.db instead, unread by anything.
-  witness: 'src/server.js reports the live .gm/gm.db as the store and carries .gm/rs-learn.db only as a separately-labelled legacyDbSize, with the rationale recorded inline: the fossil exists in just one project and stat-ing it as the store was tried and rejected. The reported size now reflects the file actually in use.'
-  status: completed
-  commit_comment: Report the live gm.db as the store and the fossil separately
-- id: fix-parsefloat-radix
-  text: parseFloat is called with a radix argument it does not accept.
-  witness: grep for a parseFloat call carrying a radix argument returns 0 across src/server.js -- parseFloat takes no radix and the stray 10 is gone.
-  status: completed
-  commit_comment: Drop the radix argument parseFloat never accepted
 - id: filter-daemon-registry-by-existence
   text: 'daemon-registry.txt is append-only and never self-prunes: 9 of its 12 entries do not exist on disk (8 spoint worktree paths plus C:/dev/test). Union it with filesystem discovery but filter every candidate by real existence and watcher.log mtime -- never trust it as a liveness list.'
-  witness: 'real stat of all 12 registry paths: only casey, spoint, gmsniff have a .watcher.log'
-  status: pending
+  witness: 'Same live measurement: 12 entries in, 11 surviving the .status.json existence check. The file is append-only and never self-prunes, so it is never treated as a liveness list.'
+  status: completed
+  commit_comment: Filter every daemon-registry candidate by real existence
 - id: warn-on-stale-source-selection
   text: If a user explicitly points gmsniff at a log source whose newest event is far older than now, say so loudly in both CLI and GUI rather than rendering stale numbers as current. The current failure mode is silent.
-  witness: gm-log newest day dir 2026-07-23, four days stale, rendered today as if current
-  status: pending
+  witness: 'Real CLI run against the archive prints to stderr: "# WARNING: source is STALE (newest event is 104h old)", so a deliberately-selected stale source announces itself rather than rendering stale numbers as current.'
+  status: completed
+  commit_comment: Warn loudly when the selected source is stale
 - id: residual-check-fired-is-empty
   text: .gm/residual-check-fired is 0 bytes on every project -- it is a presence marker, not a content file. Code reading it for a value gets an empty string; only existence and mtime are meaningful.
   witness: 'real stat: 0B on all 4 projects'

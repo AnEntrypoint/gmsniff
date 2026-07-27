@@ -78,7 +78,7 @@ There is no universal session key. `src/correlation.js` ranks the identities tha
 
 ## Per-project state files are authoritative over prose scraping
 
-`.gm/turn-state.json` `{phase, session_id, last_skill, updated_at_ms}` is the **primary** phase source; regex-scraping `next-step.md` is the fallback, not the other way round. Also read directly: `.gm/last-dispatch-ts`, `.gm/last-instruction-ts`, `.gm/last-prompt.txt` (the raw driving user prompt), and the existence-only zero-byte markers `.gm/claim-audit-fired` and `.gm/residual-check-fired` (check existence, never content).
+`.gm/turn-state.json` `{phase, session_id, last_skill, updated_at_ms}` is the **primary** phase source; regex-scraping `next-step.md` is the fallback, not the other way round. Also read directly: `.gm/last-dispatch-ts`, `.gm/last-instruction-ts`, `.gm/last-prompt.txt` (the raw driving user prompt), and the two fired-markers — which are **not** the same shape. `.gm/residual-check-fired` is a zero-byte existence marker. `.gm/claim-audit-fired` carries a short verdict body (`clean`, 5 bytes, measured on gm/gmsniff/spoint/casey). Read presence and verdict apart: "fired and clean", "fired, verdict unknown" and "never fired" are three distinct states, and collapsing them to existence-only discards the verdict.
 
 `.gm/exec-spool/.last-gate-fired.json` `{key, ts}` is the **last-ever** gate fired, not a currently-blocking gate — its `ts` is routinely days old, so any surface showing it must show its age alongside it or it reads as a live block. `.gate-deviation-repeats.json` being `{}` is the normal healthy state, not missing data. `.gm/gm.db` is the live store; `.gm/rs-learn.db` is a retired fossil.
 
