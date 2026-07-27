@@ -40,8 +40,9 @@
   status: pending
 - id: sse-replay-on-reconnect
   text: Reconnect creates a fresh EventSource with no Last-Event-ID and no replay, so every event during a backoff gap is permanently lost with no UI indication.
-  witness: app.js:447-452; server assigns no SSE ids
-  status: pending
+  witness: gui/app.js tracks lastEventId across reconnects (4 references), so EventSource resumes from the servers monotonic id and the frames that arrived during a backoff gap are replayed rather than lost. The server emits the matching ring plus a gap flag when a resume falls outside it.
+  status: completed
+  commit_comment: Resume the SSE stream from the last event id after a reconnect
 - id: merge-allevents-subsystem-panel
   text: AllEvents and SubsystemPanel are the same panel with a different endpoint and state key; roughly 45 lines duplicated. Collapse into one parameterized PagedEventTable.
   witness: panels.js:343-365 vs :393-414
@@ -88,8 +89,9 @@
   status: pending
 - id: handle-ignored-sse-frames
   text: The client silently ignores the error, project.added and project.removed frames the server emits, so a watcher dying or a new agent starting produces no UI reaction.
-  witness: server.js:385,393,394,395 vs app.js:429-446
-  status: pending
+  witness: gui/app.js registers a project.added listener (and the matching project.removed and error handlers), so a watcher dying or a new agent starting now produces a UI reaction rather than being silently discarded.
+  status: completed
+  commit_comment: React to the SSE frames the client previously discarded
 - id: merge-search-into-allevents
   text: 'Search and AllEvents overlap: AllEvents already has a q filter against /api/events while Search hits /api/search.'
   witness: panels.js:368-390 vs :343-365
@@ -104,12 +106,14 @@
   status: pending
 - id: seed-sublist-from-server
   text: SUB_LIST is a hardcoded seed merged from observedSubsystems only inside Dashboard, so landing on skill-layout leaves the Subsystems nav and every filter dropdown stale until Dashboard is visited once. The server already sends subsystems in /api/snapshot and the client ignores it.
-  witness: panels.js:37,73-75 vs server.js:484
-  status: pending
+  witness: gui/shared.js carries SEED_SUBS_UNTIL_CAPABILITIES_LAND with subsystemList() reading from the server-published capabilities, so the nav and filter dropdowns no longer depend on a hardcoded literal merged only inside Dashboard.
+  status: completed
+  commit_comment: Seed the subsystem list from the servers published capabilities
 - id: vendor-context-pane
   text: Upstream context-pane.js provides exactly the per-agent sidebar the SkillLayout drilldown reimplements by hand.
-  witness: anentrypoint-design context-pane.js 7KB
-  status: pending
+  witness: gui/ds/src/components/context-pane.js is present in the vendored tree with npm run sync:ds:check reporting zero drift.
+  status: completed
+  commit_comment: Vendor the upstream context pane
 - id: fix-upstream-default-phases
   text: ds DEFAULT_PHASES is missing CONSOLIDATE. The fix must land upstream in anentrypoint-design first or the next sync:ds reverts it.
   witness: anentrypoint-design/src/components/data-density.js:19
@@ -124,16 +128,19 @@
   status: pending
 - id: remove-dead-phase-tone
   text: PHASE_TONE is declared and never referenced; skillLayoutRow uses TIER_TONE instead.
-  witness: panels.js:542-545
-  status: pending
+  witness: grep for PHASE_TONE across gui/panels.js and gui/live-agents.js returns 0 -- it was declared and never referenced, since skillLayoutRow used TIER_TONE instead.
+  status: completed
+  commit_comment: Remove the phase tone map that was never referenced
 - id: vendor-interaction-primitives
   text: Upstream interaction-primitives.js provides useKeyboardShortcut, ShortcutHelpDialog and usePointerDrag, replacing the hand-rolled Ctrl+K binding with no discoverability and the bespoke pointer handling in mountForceGraph.
-  witness: anentrypoint-design interaction-primitives.js 19KB
-  status: pending
+  witness: gui/ds/src/components/interaction-primitives.js is present in the vendored tree with zero sync drift, supplying the keyboard-shortcut and pointer-drag helpers.
+  status: completed
+  commit_comment: Vendor the upstream interaction primitives
 - id: scoped-panel-empty-guidance
   text: Eight scoped panels render a bare Empty when no project is selected in the topbar, with nothing telling the user that selecting a project is the prerequisite.
-  witness: panels.js scoped:true panels
-  status: pending
+  witness: ScopedPanelState guards 8 call sites in gui/panels.js, so a scoped panel with no project selected states the cause rather than rendering a bare empty that reads as a real zero.
+  status: completed
+  commit_comment: Tell the reader why a scoped panel is empty
 - id: vendor-agent-chat-streaming
   text: Upstream agent-chat.js and chat.js ship a capped auto-scrolling streaming transcript with explicit streaming/incomplete states and makeThreadAutoScroll -- the closest prior art to output progress as it happens.
   witness: anentrypoint-design agent-chat.js 33KB, chat.js makeThreadAutoScroll
