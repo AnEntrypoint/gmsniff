@@ -1,13 +1,3 @@
-- id: invert-log-source-priority
-  text: Make per-project .gm/exec-spool/.watcher.log the PRIMARY event source and ~/.claude/gm-log the optional legacy fallback. src/index.js DEFAULT_LOG_DIR + replayAll currently treat the dead central log as authoritative.
-  witness: 'Real execution of replayAllAudited({}) returns source=spool, archive_used=false, events=203841 in 1965ms. Independently confirmed the archive is NOT merged: gm-log holds 1131698 events across 72 day dirs yet contributes none. Every event carries _src distinguishing watcher.log from gm-log.'
-  status: completed
-  commit_comment: 'Invert event-source priority: per-project watcher.log is primary, gm-log archive is opt-in'
-- id: fix-replayall-never-falls-back
-  text: replayAll (src/index.js:414-443) only falls back to spool when the gm-log dir is ABSENT or yields zero events. The dir exists with stale events, so every non-tail CLI invocation and Store.load() reads a dead dataset. Reverse the polarity.
-  witness: Previously the fallback could never fire because the gm-log dir existed with 1131698 events, so gmsniff read dead history. Real run now returns source=spool with archive_used=false and 203841 live events, newest timestamp 2026-07-27T12:11:21.846Z (60s old at time of check).
-  status: completed
-  commit_comment: Fix replayAll so the live spool is always read instead of a stale archive that satisfied the old fallback guard
 - id: gmlogwatcher-truncation-reset
   text: GmLogWatcher._read (src/index.js:152) lacks the truncation/rotation offset reset that ProjectLogTailer._read (:303) has. Rotation at 10MB silently stops the tail.
   witness: src/index.js:152 vs :303
@@ -20,82 +10,22 @@
   text: SUBSYSTEMS dropped rs_learn as dead but live data has 666 rs_learn recall events; bootstrap (still listed) has zero. Re-derive SUBSYSTEMS from real observed tags.
   witness: src/index.js:8-13 vs live watcher.log tag counts
   status: pending
-- id: add-missing-deviation-kinds
-  text: 'DEVIATION_META (cli.js:629-649) lacks three kinds live in real data: complete-without-ci-validation (26), complete-without-residual-scan (7), consolidate-without-residual-scan (28).'
-  witness: 'Real run of --list-deviations shows all three previously-missing kinds present with real severities and recovery guidance: deviation.consolidate-without-residual-scan (244, warn, legacy), deviation.complete-without-ci-validation (213, warn, legacy), deviation.complete-without-residual-scan (72, warn, legacy), each annotated "now surfaced as gate-deny" rather than falling through to the default warn/? row.'
-  status: completed
-  commit_comment: Add the three live deviation kinds missing from DEVIATION_META
 - id: correct-stale-parse-audit-comment
   text: src/index.js:186-194 claims evt lines do NOT carry phase.transitioned/instruction.served/prd.added/etc. All are live now (17/21/34/50/229). False comment misleads maintainers.
   witness: src/index.js:186-194 vs live event counts
   status: pending
-- id: read-daemon-status-global
-  text: Nothing in src/ reads ~/.gm-tools/daemon-status.json (authoritative daemon pid/ts/active_projects). Add it as the machine-level health source.
-  witness: Real call readDaemonStatus() returns {present:true, pid:4304, alive:false, ts:1784899403178, age_ms:255704951, active_projects:0}, reading the machine-global ~/.gm-tools/daemon-status.json that nothing in src/ previously touched.
-  status: completed
-  commit_comment: Read the machine-global daemon-status.json as the daemon-level health source
-- id: drop-dead-version-fields
-  text: registry.js:194 version/wrapper_sha/idle_limit_ms are permanently null under agentplug. /api/watcher-versions is dead; cli --watchers WRAPPER column always blank and drifted count compares against null so every project reports drifted.
-  witness: 'Real run of node src/cli.js --watchers: header reads "runtime: plugkit v0.1.963 gm-plugkit v2.0.2085 registry-latest v0.1.905 (checked 210h4m ago)" and the SERVED column reads (banner), sourcing the real version from the watcher-log wasm banner and ~/.gm-tools version files rather than the permanently-null .status.json fields.'
-  status: completed
-  commit_comment: Source runtime version from the wasm banner and gm-tools instead of dead status.json fields
 - id: consume-turn-summary-fully
   text: registry.js:275 opens .turn-summary.json solely for long_gap_threshold_ms, discarding phase, prd_pending_count, mutables_pending_count, last_instruction_ts, runtime, update_available.
   witness: registry.js:275-276 vs live .turn-summary.json
   status: pending
-- id: read-turn-state-json
-  text: .gm/turn-state.json carries phase + session_id + last_skill + updated_at_ms directly -- exactly what readLivePhaseState regex-scrapes out of next-step.md prose while guessing skill from a hardcoded heading table. Read it as primary.
-  witness: Real call readTurnState(C:/dev/gmsniff) returns {present:true, legacy_shape:false, phase:EXECUTE, session_id:null, last_skill:gm-emit, updated_at_ms:1785151839538, pending_step_id:null, pending_step_deadline_ms:null}, giving phase and skill directly rather than regex-scraping next-step.md prose. legacy_shape explicitly handles the older {turnId} variant.
-  status: completed
-  commit_comment: Read turn-state.json as the primary phase source with next-step.md prose as fallback
-- id: read-dispatch-instruction-ts
-  text: .gm/last-dispatch-ts and .gm/last-instruction-ts are unread; they give exact per-project idle/gap timing without inference.
-  witness: Real call readProjectMarkers(C:/dev/gmsniff) returns last_dispatch_ts 1785155076249 and last_instruction_ts 1785155076250, giving exact idle and gap timing from the previously-unread marker files.
-  status: completed
-  commit_comment: Read last-dispatch-ts and last-instruction-ts for exact per-project gap timing
-- id: read-last-prompt
-  text: .gm/last-prompt.txt holds the raw user prompt driving each agent -- the single most useful missing context for an observer watching an agent work.
-  witness: Real call readProjectMarkers(C:/dev/gmsniff) returns last_prompt containing the actual raw driving prompt for this session, and the CLI drilldown renders it under a "prompt that opened this chain" heading -- the context an observer most needs and previously could not see anywhere.
-  status: completed
-  commit_comment: Read last-prompt.txt so the raw prompt driving each agent is visible
 - id: read-poll-scan-offset
   text: .gm/exec-spool/.poll-scan-offset.json is unread; relevant to spool-poll deviation detection.
   witness: live file
   status: pending
-- id: report-watcher-log-drop-ratio
-  text: EVT_RE silently discards ~20700 of 33219 lines (retention sweeps, teardown, embed failures) with no diagnostic. Surface a parse-coverage/drop-ratio metric so silent data loss is visible.
-  witness: 'Parse coverage is now measured and reported rather than assumed: replay carries parse_stats with modeled_ratio and unmodeled_ratio, measured at 90.45 percent modeled and 9.55 percent unmodeled, up from roughly 15 percent parsed when only the evt JSON path existed. The root test asserts total-parse coverage.'
-  status: completed
-  commit_comment: Report watcher-log parse coverage so silent data loss is visible
 - id: fix-recall-stats-dead-filter
   text: Store.recallStats filters _sub===memory && event===recall so /api/recall returns all zeros despite 753 live recall events tagged rs_learn. Same dead filter in rsToolsMemoryLeverage and cli memoryLeverage.
   witness: src/server.js:533,:144, src/cli.js:1118
   status: pending
-- id: model-shared-daemon-liveness
-  text: readWatcherStatus does process.kill on a SHARED daemon pid, so every project reports alive together. Per-project liveness must come from real per-project signals (watcher.log mtime, turn-summary ts, spool queue).
-  witness: 'Real call readProjectLiveness(C:/dev/gmsniff) returns {active:true, last_activity_age_ms:31745, activity_sources:{log_age_ms:31745, summary_age_ms:8229775, turn_age_ms:3268577}, heartbeat_age_ms:275}. Per-project activity derives from real per-project clocks while the 275ms daemon heartbeat is kept separate and explicitly NOT used as activity -- the trap that previously marked all 161 projects active. Confirmed at the CLI: --watchers reports 1 active, not every discovered project.'
-  status: completed
-  commit_comment: Derive per-project liveness from real per-project clocks instead of the shared daemon pid
-- id: source-real-version-signal
-  text: Real version signal lives in ~/.gm-tools/plugkit.version, gm-plugkit.version, .update-check-cache.json. Repoint the version/update-drift surface at these.
-  witness: 'Real CLI run --watchers prints "runtime: plugkit v0.1.963 gm-plugkit v2.0.2085 registry-latest v0.1.905 (checked 210h4m ago)", sourcing versions from the watcher-log wasm banner and ~/.gm-tools version files now that .status.json no longer carries a version.'
-  status: completed
-  commit_comment: Source the real runtime version from the wasm banner and gm-tools version files
-- id: alert-stale-daemon-heartbeat
-  text: daemon-status.json ts is days stale while dispatches fire continuously -- a real anomaly. Surface heartbeat age as an alert.
-  witness: 'The stale-heartbeat anomaly is now detected rather than trusted: readDaemonStatus() reports alive:false with age_ms 255704951 (roughly 3 days) for pid 4304, exactly the condition originally flagged as a real anomaly while dispatches were firing continuously.'
-  status: completed
-  commit_comment: Detect and surface a stale daemon heartbeat instead of trusting the recorded pid
-- id: prune-phantom-deviation-kinds
-  text: DEVIATION_META carries 11 kinds with zero live occurrences. Re-derive the table from current ../gm Rust source rather than memory.
-  witness: 'Real run shows the table now re-derived from current ../gm source: every listed kind has a real nonzero count against live data (long-gap-no-instruction 1086, gate-deny 718, push-dirty 144, prd-anti-shape 99, push-non-main-branch 80, prd-add-no-id 72, stuck-loop-escalation 50, push-rebase-conflict 36, push-remote-outpaces 21, long-gap-retry-without-instruction 9, complete-chain-poll 3, client-edit-no-witness 2), with severity buckets critical:230 warn:1898 info:721.'
-  status: completed
-  commit_comment: Re-derive the deviation table from current gm source so every kind has a real emitter
-- id: unify-watcher-log-parser
-  text: 'Two separate watcher.log parsers exist: EVT_RE at src/index.js:183 and line-oriented readWatcherLogEmbedFails at src/cli.js:957-987. Collapse to one parser module used by both.'
-  witness: src/watcher-log.js is now the single parser and ships in the published package (12.3kB in npm pack). It exports parseLine, classifyLine, parseDispatchLine, parseSpawnLine, parseVersionLine, newParseStats, newParseContext, parseCoverage, replayWatcherLogWithStats, readTail, EVT_RE, LINE_CLASSES and DEFAULT_REPLAY_BYTES, and the root test asserts against it.
-  status: completed
-  commit_comment: Collapse watcher-log parsing into a single shared module
 - id: read-gate-fired-markers
   text: .gm/exec-spool/.last-gate-fired.json {key,ts} and .gate-deviation-repeats.json are unread; they directly serve stuck-project detection and stuck-loop-escalation surfacing.
   witness: live files; grep in src/ = 0 hits
@@ -376,11 +306,6 @@
   text: 'applyContext is passed indices over the already-filtered array and re-filters them, so the index set is always complete and --ctx can never widen beyond matched rows: the flag is a no-op.'
   witness: cli.js:1301
   status: pending
-- id: fix-devorigin-always-foreign
-  text: With no sess field and a real absolute cwd, devOrigin classifies every deviation as foreign, so --own-only always prints nothing and the OWN-session-deviations-are-real-defects warning never fires.
-  witness: 'Real run of node src/cli.js --list-deviations: reports "total deviations: 2849 (own:770 foreign:2079)" with an explicit "own = cwd c:/dev/gmsniff (override with GMSNIFF_OWN_CWD)" line. Own/foreign classification now partitions real data instead of classifying every deviation as foreign, so --own-only is functional.'
-  status: completed
-  commit_comment: Fix own/foreign deviation classification, which previously marked every deviation foreign
 - id: correct-cli-source-help
   text: CLI help documents ~/.gm/gm-log as the default source (wrong path, actual is ~/.claude/gm-log) and describes the spool as a fallback for when gm-log is empty -- both the path and the polarity are wrong.
   witness: cli.js:205-208
@@ -389,16 +314,6 @@
   text: The --dispatch subcommand checks verb shape but not VERB_ALLOWLIST, unlike the HTTP route.
   witness: cli.js:565-580 vs server.js:1414
   status: pending
-- id: cli-live-manager-view
-  text: 'The CLI has no equivalent of the live-agent view: add a watch mode showing every running agent phase, current instruction heading and recent output, so the terminal surface matches the GUI goal.'
-  witness: 'Real run of node src/cli.js --agents: rendered "AGENTS 12:14:52 - 2 shown / 66 discovered" with a per-agent table carrying phase (EXECUTE), IN-PHASE elapsed (44m12s), LAST-EVT age (1m39s), pending counts (prd:0 mut:0), served instruction with its own age (PLAN served 2h6m ago), and a live streaming output feed beneath each agent showing real events as they occurred (12:13:11 prd.added sourcestaleness-requires-events-arg, dispatch.end prd-add) -- those were this sessions own dispatches appearing in real time. Idle agents correctly hidden with an explicit count (+64 idle/abandoned/COMPLETE hidden -- pass --idle to show). Single-agent drilldown (--agents --agent spoint) additionally renders daemon state, last gate fired with age, the raw driving prompt from .gm/last-prompt.txt, and the FULL served instruction text.'
-  status: completed
-  commit_comment: 'Add CLI live manager view (--agents): per-agent phase, elapsed, instruction and streaming output'
-- id: fix-watchers-drift-false-positive
-  text: The --watchers drifted count compares update.latest against a version that is always null, so every project with an update marker reports drifted.
-  witness: Real run of --watchers shows "# 1 watchers (ACTIVE only -- pass --all for idle)" and "# 1 active", listing a single ACTIVE project with LAST-ACT 11s and QUEUE 11, rather than reporting every discovered project as alive-and-drifted. Drift is no longer computed against a null version.
-  status: completed
-  commit_comment: Stop reporting every project as drifted by comparing against a null version
 - id: remove-dead-ts-branches
   text: Two places re-check typeof e.ts === number, unreachable after normalizeTs converts at parse time, while four others do plain string comparison -- dual-path dead code.
   witness: server.js:1004,1119 vs :527,608,743,1045
@@ -415,11 +330,6 @@
   text: README documents the current public surface including the gm-log default; refresh to the watcher.log-primary model.
   witness: README.md
   status: pending
-- id: extend-test-real-watcher-log
-  text: test.js asserts live-state only against an injected synthetic sess field, which is why the sess-absence bug passed unnoticed. Extend the single root test.js to assert against real watcher.log-shaped lines with no sess.
-  witness: 'The root test now carries real watcher-log coverage: the passing run reports "watcher-log-total-parse+source-priority+correlation+project-state verified" alongside the pre-existing suites, so parsing, source priority, correlation and project-state are asserted against real data rather than only against injected synthetic fields.'
-  status: completed
-  commit_comment: Extend the single root test to cover watcher-log parsing, source priority, correlation and project state
 - id: edge-clock-skew-timestamps
   text: Events carry ISO ts from one writer and epoch-ms from another; confirm normalizeTs handles both and that age calculations do not go negative under skew.
   witness: index.js:177-181
@@ -492,11 +402,6 @@
   text: The codesearch route polls for 10s then 504s. Confirm behaviour against a genuinely busy watcher and that a late response does not leak.
   witness: server.js:1461-1505
   status: pending
-- id: drop-retired-verbs-from-allowlist
-  text: learn and wait/sleep remain in VERB_ALLOWLIST with comments noting they always error, so /api/lifecycle will happily spool a dispatch guaranteed to fail downstream.
-  witness: Real call isRetiredVerb returns true for learn and wait and false for codesearch, so retired verbs are identified rather than being spoolable dispatches guaranteed to fail downstream.
-  status: completed
-  commit_comment: Identify retired verbs so they cannot be dispatched as if usable
 - id: edge-event-eviction
   text: The event array evicts 5000 at a time at 1M. Confirm eviction does not corrupt the snapshot cache or the cwd activity index mid-request.
   witness: server.js:356-364
@@ -705,16 +610,6 @@
   text: Upstream SessionCard gained an optional lifecycle strip driven by session.phases/phase/phasesSeen/phaseGaps via PhaseWalk, with phasesSeen as an authoritative VISITED SET rather than index math -- correctly modeling gm re-plan edges where EXECUTE->PLAN must not render as a regression. gmsniff must feed phasesSeen from real transition history rather than a current-phase index.
   witness: 'design-system agent proved it: a re-planned session shows 2 reached where index math gives 1'
   status: pending
-- id: fix-preexisting-test-sse-failure
-  text: test.js has a pre-existing failing assertion (did not deliver appended jsonl line within 5s) that reproduces on a pristine tree, unrelated to this sessions changes. It is a real failure in the single root test and must be triaged, not left red.
-  witness: Real run of node test.js exits 0 and the previously-failing SSE assertion passes. Two agents had independently reported this as pre-existing and reproducing on a pristine tree; it was in fact caused by the explicit-logdir regression introduced during the source inversion.
-  status: completed
-  commit_comment: Fix the failing SSE assertion in the single root test
-- id: verify-published-package-completeness
-  text: package.json files is ["src/","gui/"], so the newly vendored gui/ds/src/css/app-shell/*.css parts and every new src/ module must actually land in the published tarball. Verify with a real npm pack that the shipped artifact contains the complete GUI including the css parts whose absence made app-shell.css dead -- a partial publish would recreate that exact 404 bug for every installed user.
-  witness: 'Real npm pack --dry-run: 71 files, 357.3 kB packed. Confirmed present are all 17 gui/ds/src/css/app-shell/*.css parts (base, topbar, primitives, panel-row, hero-content, responsive, chat-basic, files, catalog-theme, chat-polish, sidebar-misc, states-interactions, loading-alerts, responsive2-workspace, row-print, data-density, kits-appended), both new modules src/correlation.js and src/watcher-log.js, the new gui/live-agents.js and gui/honest-state.js, and gui/ds/src/components/sessions.js. Import-closure check: app-shell.css declares 17 imports, all 17 ship, zero missing, so the dead-CSS 404 cannot recur for installed users.'
-  status: completed
-  commit_comment: Verify the published tarball ships the complete GUI including every vendored CSS part
 - id: protect-zero-dependency-property
   text: gmsniff has ZERO dependencies and zero devDependencies -- a real strength for an observability tool that must run anywhere and work offline. Make this an explicit, guarded invariant so a future change cannot casually add one.
   witness: package.json deps {} devDeps {}
@@ -835,16 +730,6 @@
   text: createServer with no bounding loads 260552 events across the whole discovered fleet on boot. Combined with 174 discovered projects this makes every server start expensive and every test slow. Boot must be bounded by default (current epoch or time window) and an explicitly-scoped server must load only its requested scope.
   witness: 'real probe: snapshot.total 260552 immediately after boot with a temp logDir requested'
   status: pending
-- id: explicit-logdir-ignored-regression
-  text: 'REGRESSION, not pre-existing. createServer({logDir}) with an explicit directory no longer watches that directory: a probe created a temp gm-log-shaped dir, passed it as logDir, appended a line, and the server instead loaded 260552 fleet-wide spool events (bySub plugkit 242858, hook 3382, memory 6339, rs_learn 7973) and never delivered the appended line. This breaks the documented contract that an explicit GM_LOG_DIR / logDir is honored, breaks test isolation, and is the true cause of the test.js:97 SSE failure that was reported as pre-existing. An explicitly-requested source must always win over automatic discovery.'
-  witness: Real run of node test.js now exits 0 with "gmsniff OK -- 997222 events across 69 days - live-feedback verified - multi-project fanout verified - formal-spec verified - stuck-state+throughput+memory-health+codeinsight-age verified - total-parser verified - watcher-log-total-parse+source-priority+correlation+project-state verified". The SSE assertion at test.js:97 that previously failed with "did not deliver appended jsonl line within 5s (got 0 events)" now passes, confirming an explicitly-passed logDir is honored again rather than being overridden by fleet-wide discovery.
-  status: completed
-  commit_comment: Honor an explicitly-requested log source over automatic spool discovery
-- id: correct-preexisting-sse-failure-attribution
-  text: 'The test.js:97 SSE failure was reported by two separate agents as pre-existing and reproducing on a pristine tree. Real investigation shows it is caused by explicit-logdir-ignored-regression: the test passes a temp logDir and asserts an appended line arrives over SSE, which now fails because the explicit dir is ignored. Correct the attribution so the row is fixed rather than dismissed as inherited breakage.'
-  witness: 'Confirmed the failure was a regression, not inherited breakage: it was reproduced by a targeted probe (temp logDir + appended line returned 260552 fleet-wide events and never delivered the line), and it disappeared once explicit-source precedence was restored. Real run of node test.js now exits 0 with the full assertion list passing.'
-  status: completed
-  commit_comment: Correct the mis-attribution of the SSE test failure as pre-existing
 - id: skill-layout-renders-names-only
   text: 'Real browser witness of #panel=skill-layout: the panel renders a flat comma-separated wall of roughly 140 project names including every dead worktree, with only 11 row nodes in the DOM and NO phase, elapsed time, instruction text, output feed or liveness distinction. The panel that is meant to be the product currently shows less than the CLI does. Must reach parity with the CLI --agents view.'
   witness: browser page.evaluate on the live GUI returned panelText of names only, rowNodes 11, zero page errors
@@ -853,11 +738,6 @@
   text: 'The GUI leads with Health: critical without naming what is critical or which project, giving an alarming signal with no actionable content. Either state the specific failing condition and link to the project, or do not lead with it.'
   witness: 'browser witness: panelText begins Health: critical followed only by project names'
   status: pending
-- id: verify-css-imports-resolve-over-http
-  text: 'Confirmed fixed and worth guarding: all 17 app-shell.css @import targets now return HTTP 200 when served, and the browser reports app-shell.css with 17 live rules. Previously all 17 were 404 and the sheet was inert. Add an assertion so a future vendoring change cannot silently reintroduce it.'
-  witness: Real HTTP check against the running server returned 17 resolved and 0 missing for every app-shell.css import target, and a real browser page.evaluate reported app-shell.css with 17 live cssRules alongside colors_and_type.css 25, editor-primitives.css 384, chat.css 408 and gui-extra.css 139, with zero page errors. Previously all 17 targets returned 404 and the sheet was entirely inert.
-  status: completed
-  commit_comment: Confirm every vendored CSS import resolves when served
 - id: exclude-dead-worktrees-from-ui
   text: Roughly 140 entries render in the GUI project list, a large share of them wf_* worktree paths that are abandoned or already deleted. Listing dead worktrees as peers of live agents is the single largest source of UI noise. Exclude by default or label distinctly.
   witness: browser witness listed dozens of wf_* and agent-* worktree entries alongside 2 genuinely active projects
