@@ -30,6 +30,14 @@ jobs:
           node-version: '22'
           registry-url: 'https://registry.npmjs.org'
 
+      # The suite is the only gate between a push and a published package: gmsniff has no build
+      # step and no other CI stage, so without this a red run still publishes to npm. It needs no
+      # install -- zero dependencies is a load-bearing property, and running it with no
+      # node_modules present proves that property on every push.
+      - name: Run the real-services suite
+        if: env.SKIP != 'true'
+        run: node test.js
+
       - name: Bump patch version
         if: env.SKIP != 'true'
         run: |
