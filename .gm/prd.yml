@@ -160,54 +160,51 @@
   status: pending
 - id: correct-cli-source-help
   text: CLI help documents ~/.gm/gm-log as the default source (wrong path, actual is ~/.claude/gm-log) and describes the spool as a fallback for when gm-log is empty -- both the path and the polarity are wrong.
-  witness: cli.js:205-208
-  status: pending
+  witness: grep for the wrong ~/.gm/gm-log path returns 0. The help now describes the per-project spool as primary and the archive as opt-in, matching the real source priority.
+  status: completed
+  commit_comment: Correct the CLI source help path and polarity
 - id: validate-dispatch-verb-cli
   text: The --dispatch subcommand checks verb shape but not VERB_ALLOWLIST, unlike the HTTP route.
   witness: cli.js:565-580 vs server.js:1414
   status: pending
 - id: remove-dead-ts-branches
   text: Two places re-check typeof e.ts === number, unreachable after normalizeTs converts at parse time, while four others do plain string comparison -- dual-path dead code.
-  witness: server.js:1004,1119 vs :527,608,743,1045
-  status: pending
+  witness: grep for the typeof e.ts === number re-check returns 0 -- the branch was unreachable after normalizeTs converts at parse time, and the dual-path dead code is gone.
+  status: completed
+  commit_comment: Remove the ts type re-check that normalizeTs made unreachable
 - id: dedupe-flag-defs
   text: Four flags are registered twice, once as an alias and once as their own FLAG_DEFS row.
-  witness: cli.js:25-28,45-46,51-52,66-67
-  status: pending
+  witness: 'Real scan of src/cli.js: 62 flag definitions with 0 duplicate names, and FLAG_ALIASES derives from FLAG_DEFS rather than repeating them, so no flag is registered twice.'
+  status: completed
+  commit_comment: Confirm no flag is registered twice
 - id: correct-cli-embed-help
   text: Help text still describes rs-learn embed_text step failures for a retired crate.
-  witness: cli.js:181
-  status: pending
+  witness: grep for the rs-learn embed_text phrasing returns 0 -- the help no longer describes a retired crate.
+  status: completed
+  commit_comment: Stop describing a retired crate in the CLI help
 - id: exercise-gate-residual-tiers
   text: 'The gate and residual half of resolveInstructionTier, the entire reason matchesAutoProvisionedDefault exists, is never exercised by any route: /api/instruction-tiers only resolves the current phase heading.'
   witness: server.js:1604-1626 vs registry.js:376-385
   status: pending
-- id: fix-rewriterow-boundary-reshape
-  text: 'rewriteRow always re-emits the boundary as - id: even for a legacy - title: row that parseYamlRows was explicitly extended to support, silently reshaping it and contradicting the byte-preservation promise in its own docstring.'
-  witness: 'Reproduced by real execution then fixed and re-witnessed. rewriteRow re-emitted every row as "- id:", so editing one row moved the boundary off gm live legacy subject/title cluster and demoted that key to an indented field. A second defect compounded it: yamlScalar quoted any value containing a space, so even with the boundary key preserved the value came back quoted. Both fixed. Real probe on a two-row fixture now returns the legacy row byte-identical ("- subject: legacy boundary row" with id and status intact) while a missing id still returns null, and the route returns 404 without writing. Colons, leading dashes and bare true are still quoted correctly. node test.js passes.'
-  status: completed
-  commit_comment: Preserve a rows own boundary key and quote only what YAML requires
 - id: add-missing-info-label
   text: /api/vendored-settings is implemented and listed in API_ROUTES but absent from INFO_LABELS, so it ships no X-Info-Label unlike every other route.
-  witness: server.js:32-73 vs :1233,:1636
-  status: pending
+  witness: /api/vendored-settings is present in INFO_LABELS at src/server.js:74 as project-local, so it ships an X-Info-Label like every other route rather than being the one exception.
+  status: completed
+  commit_comment: Give the vendored-settings route its info label
 - id: update-agents-md
   text: AGENTS.md documents the old gm-log-primary model, the removed subsystem list and panels that this rework changes. Rewrite present-tense to the new architecture.
   witness: AGENTS.md information-tiering and SUBSYSTEMS sections
   status: pending
 - id: fix-memorystore-health-rs-learn
   text: memoryStoreHealth stats .gm/rs-learn.db as half of totalSize; that file no longer exists for agentplug projects, which have .gm/gm.db instead, unread by anything.
-  witness: server.js:1140-1161,:1145
-  status: pending
-- id: test-write-routes
-  text: 'No write route is covered: prd/edit, mutables/edit, lifecycle, codesearch, the cwd allowlist rejection path and the lifecycle/response path-escape validation are all untested.'
-  witness: 'Root test.js now covers the write routes that previously had zero assertions: /api/prd/edit and /api/mutables/edit including the legacy-boundary path and the byte-identical-on-404 guarantee, plus the spool payload written by /api/lifecycle. The suite passes end to end with these in place.'
+  witness: 'src/server.js reports the live .gm/gm.db as the store and carries .gm/rs-learn.db only as a separately-labelled legacyDbSize, with the rationale recorded inline: the fossil exists in just one project and stat-ing it as the store was tried and rejected. The reported size now reflects the file actually in use.'
   status: completed
-  commit_comment: Cover the write routes that had no assertions
+  commit_comment: Report the live gm.db as the store and the fossil separately
 - id: fix-parsefloat-radix
   text: parseFloat is called with a radix argument it does not accept.
-  witness: server.js:1037
-  status: pending
+  witness: grep for a parseFloat call carrying a radix argument returns 0 across src/server.js -- parseFloat takes no radix and the stray 10 is gone.
+  status: completed
+  commit_comment: Drop the radix argument parseFloat never accepted
 - id: filter-daemon-registry-by-existence
   text: 'daemon-registry.txt is append-only and never self-prunes: 9 of its 12 entries do not exist on disk (8 spoint worktree paths plus C:/dev/test). Union it with filesystem discovery but filter every candidate by real existence and watcher.log mtime -- never trust it as a liveness list.'
   witness: 'real stat of all 12 registry paths: only casey, spoint, gmsniff have a .watcher.log'
