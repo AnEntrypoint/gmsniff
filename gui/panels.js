@@ -1,7 +1,7 @@
 import * as webjsx from 'webjsx';
 import { Chip, Badge, Pill, Btn } from 'ds/components/shell.js';
 import { PhaseWalk, BarRow, StatsGrid, SessionRow, DevRow, LiveLog } from 'ds/components/data-density.js';
-import { TreeView, TreeItem, PropertyGrid, PropertyField, Dialog, JsonViewer, ToolbarRow } from 'ds/components/editor-primitives.js';
+import { TreeView, TreeItem, PropertyGrid, PropertyField, Dialog, JsonViewer, ToolbarRow, Pager } from 'ds/components/editor-primitives.js';
 import { api, apiPost, fmtTs, state, toast } from './data.js';
 import { runForceLayout } from './forcegraph.js';
 import { basename, subsystemList, mergeObservedSubsystems, verbAllowlist, PHASE_FALLBACK } from './shared.js';
@@ -57,33 +57,32 @@ export async function Dashboard({ onNav, devTotal, health } = {}) {
     mergeObservedSubsystems(snap.observedSubsystems);
   }
   const healthByCwd = new Map((health || []).map(r => [r.cwd, r]));
-  const GLANCE_MIN_ROWS = 15;
-  const aliveCount = state.projects.filter(p => p.alive).length;
-  const glanceRowLimitNeverCuttingAnAliveProject = Math.max(GLANCE_MIN_ROWS, aliveCount);
-  const glanceProjects = state.projects.slice(0, glanceRowLimitNeverCuttingAnAliveProject);
-  const glanceHidden = state.projects.length - glanceProjects.length;
-  const projRows = glanceProjects.map(p => {
-    const hr = healthByCwd.get(p.cwd);
-    const name = String(p.cwd).split(/[\\/]/).filter(Boolean).pop() || p.cwd;
-    return h('tr', {
-      key: p.cwd, class: 'gm-cursor-pointer', title: p.cwd,
-      onclick: () => { state.cwd = p.cwd; if (onNav) onNav('overview'); },
-    },
-      h('td', {}, name),
-      h('td', {}, Chip({ tone: p.alive ? 'positive' : 'neutral', children: p.alive ? 'alive' : 'dead' })),
-      h('td', {}, `${p.prd_pending}/${p.prd_total}`),
-      h('td', {}, String(p.mut_unknown)),
-      h('td', {}, hr && hr.deviationRate ? hr.deviationRate.toFixed(2) + '/min' : ''));
-  });
-  const projPanel = h('div', { class: 'ds-panel' }, h('h2', {}, 'Projects now'),
-    projRows.length
-      ? h('table', { class: 'gm-table' },
-          h('tr', {}, h('th', {}, 'project'), h('th', {}, 'watcher'), h('th', {}, 'prd pending'), h('th', {}, 'mut unknown'), h('th', {}, 'dev rate')),
-          ...projRows)
-      : Empty('No projects discovered yet.'),
-    glanceHidden > 0
-      ? h('p', { class: 'gm-empty' }, `${glanceHidden} more discovered projects (dead watchers) not shown -- project switcher or gmsniff --projects lists all ${state.projects.length}.`)
-      : null);
+  // "Projects now" used to be a second live roster here, ordered by discovery and
+  // keyed on /api/projects' `alive`. That flag is the SHARED DAEMON's liveness --
+  // one agentplug-runner serving every project -- so it read near-uniformly true
+  // and said nothing about whether any individual project was working. Live Agents
+  // judges per-project activity, ranks by what needs attention and states the
+  // reason, so this panel now points at it rather than competing with a weaker
+  // answer to the same question. The PRD/mutable pressure that was this table's
+  // own contribution stays, as a whole-fleet total nothing else on this page gives.
+  const projectsWithPendingPrd = state.projects.filter(p => p.prd_pending > 0);
+  const fleetPrdPending = state.projects.reduce((n, p) => n + (p.prd_pending || 0), 0);
+  const fleetMutUnknown = state.projects.reduce((n, p) => n + (p.mut_unknown || 0), 0);
+  const fleetDeviationRate = (health || []).reduce((n, r) => n + (r.deviationRate || 0), 0);
+  const projPanel = h('div', { class: 'ds-panel' }, h('h2', {}, 'Fleet totals'),
+    state.projects.length
+      ? h('div', {},
+          StatsGrid({ items: [
+            { val: state.projects.length, lbl: 'projects discovered' },
+            { val: projectsWithPendingPrd.length, lbl: 'with PRD rows pending' },
+            { val: fleetPrdPending, lbl: 'PRD rows pending (all projects)' },
+            { val: fleetMutUnknown, lbl: 'mutables unknown', cls: fleetMutUnknown ? 'err-rate' : '' },
+            { val: fleetDeviationRate.toFixed(2) + '/min', lbl: 'deviation rate (health-reported)' },
+          ] }),
+          h('p', { class: 'gm-muted-11 gm-mt-8' },
+            'Per-agent phase, served instruction and elapsed-in-phase live in Live Agents, which judges activity per project rather than from the shared daemon flag.'),
+          Toolbar(Btn({ children: 'Open Live Agents', onClick: () => onNav && onNav('agents') })))
+      : Empty('No projects discovered yet.'));
   const quickLinks = Toolbar(
     Btn({ children: 'Live Stream', onClick: () => onNav && onNav('live') }),
     Btn({ children: devTotal ? `Deviations (${devTotal})` : 'Deviations', onClick: () => onNav && onNav('deviations') }),
@@ -298,19 +297,22 @@ function pageStateForPanel(stateKey, subsystemFixedByRoute) {
   return st;
 }
 
+// ds Pager is 1-based page-numbered while this state is an offset/limit window.
+// The two are exactly interconvertible because `limit` is fixed for the life of
+// a page state and every offset it ever writes is a multiple of it, so
+// offset = (page - 1) * limit round-trips without loss. Numbered mode is what
+// the offset model could not offer: jumping straight to a page of a 55k-row
+// table instead of stepping one window at a time.
 function PagerStrip(st, total, setBody) {
-  const atStart = st.offset === 0;
-  const atEnd = st.offset + st.limit >= total;
-  return h('div', { class: 'gm-pager' },
-    h('button', {
-      disabled: atStart ? true : null,
-      onclick: () => { st.offset = Math.max(0, st.offset - st.limit); setBody(); },
-    }, '<- prev'),
-    h('span', {}, total ? `${st.offset + 1}-${Math.min(st.offset + st.limit, total)} of ${total}` : '0 of 0'),
-    h('button', {
-      disabled: atEnd ? true : null,
-      onclick: () => { st.offset += st.limit; setBody(); },
-    }, 'next ->'));
+  const pageCount = Math.max(1, Math.ceil(total / st.limit));
+  return Pager({
+    page: Math.floor(st.offset / st.limit) + 1,
+    pageCount,
+    total,
+    itemLabel: 'events',
+    numbered: true,
+    onPage: (page) => { st.offset = Math.max(0, (page - 1) * st.limit); setBody(); },
+  });
 }
 
 async function PagedEventTable({ endpoint, stateKey, tableId, subsystemFixedByRoute = null, heading = null }, setBody) {
@@ -652,58 +654,68 @@ export function commitField(kind, row, field, value, since, setBody, validate) {
 // are mapped; anything else falls back to neutral rather than guessing at unseen spellings.
 const SEVERITY_TONE = { critical: 'danger', high: 'danger', medium: 'neutral', low: 'positive' };
 
-export async function PrdEditor(setBody) {
-  const unscoped = ScopedPanelState({ panel: "PRD Editor", cwd: state.cwd });
+// The two YAML editors share their whole frame -- scope gate, fetch, the three
+// zero-states, the `since` mtime guard and the per-row PropertyGrid with its
+// read-only id field -- and differ only in which editable fields a row carries.
+// `fields(row, fieldError)` supplies exactly that difference; `fieldError` is
+// the per-row error lookup already keyed by kind.
+async function YamlRowEditor({ kind, panel, endpoint, heading, rowClass, fields }, setBody) {
+  const unscoped = ScopedPanelState({ panel, cwd: state.cwd });
   if (unscoped) return unscoped;
-  const r = await api('/api/prd', { scoped: true });
-  if (r.error) return Empty('Failed to load PRD: ' + r.error);
-  if (!r.rows || !r.rows.length) return Empty('No PRD rows for this project.');
+  const r = await api(endpoint, { scoped: true });
+  if (r.error) return Empty(`Failed to load ${heading}: ` + r.error);
+  if (!r.rows || !r.rows.length) return Empty(`No ${heading} rows for this project.`);
   const since = r.mtimeMs;
-  return h('div', { class: 'ds-panel' }, h('h2', {}, `PRD (${r.rows.length} rows)`),
+  return h('div', { class: 'ds-panel' }, h('h2', {}, `${heading} (${r.rows.length} rows)`),
     ...r.rows.map(row => {
-      const statusErr = errorByRowIdAndField[`prd:${row.id}:status`];
-      const textErr = errorByRowIdAndField[`prd:${row.id}:text`];
-      return h('div', { key: row.id, class: 'gm-propgrid-row' },
+      const fieldError = (field) => errorByRowIdAndField[`${kind}:${row.id}:${field}`];
+      return h('div', { key: row.id, class: 'gm-propgrid-row' + (rowClass ? rowClass(row) : '') },
         PropertyGrid({ children: [
           PropertyField({ label: 'id', inline: true, children: h('span', { class: 'gm-inline-input gm-opacity-70' }, row.id) }),
-          PropertyField({ label: 'status', hint: statusErr || null, children: h('select', {
-            value: row.status,
-            class: statusErr ? 'gm-field-error' : '',
-            onchange: (e) => commitField('prd', row, 'status', e.target.value, since, setBody, validatePrdField),
-          }, ...PRD_STATUSES.map(s => h('option', { value: s, selected: s === row.status ? true : null }, s))) }),
-          PropertyField({ label: 'text', hint: textErr || null, children: h('input', {
-            class: 'gm-inline-input' + (textErr ? ' gm-field-error' : ''), value: row.text,
-            onchange: (e) => commitField('prd', row, 'text', e.target.value, since, setBody, validatePrdField),
-          }) }),
-          ...(row.severity ? [PropertyField({ label: 'severity', inline: true, children: Badge({ children: row.severity, tone: SEVERITY_TONE[row.severity] || 'neutral' }) })] : []),
-          ...(row.tags && row.tags.length ? [PropertyField({ label: 'tags', inline: true, children: h('span', {}, ...row.tags.map(t => Pill({ key: t, tone: 'accent', children: t }))) })] : []),
+          ...fields(row, fieldError, since, setBody),
         ] }));
     }));
 }
 
+export async function PrdEditor(setBody) {
+  return YamlRowEditor({
+    kind: 'prd', panel: 'PRD Editor', endpoint: '/api/prd', heading: 'PRD',
+    fields: (row, fieldError, since, setBody) => {
+      const statusErr = fieldError('status');
+      const textErr = fieldError('text');
+      return [
+        PropertyField({ label: 'status', hint: statusErr || null, children: h('select', {
+          value: row.status,
+          class: statusErr ? 'gm-field-error' : '',
+          onchange: (e) => commitField('prd', row, 'status', e.target.value, since, setBody, validatePrdField),
+        }, ...PRD_STATUSES.map(s => h('option', { value: s, selected: s === row.status ? true : null }, s))) }),
+        PropertyField({ label: 'text', hint: textErr || null, children: h('input', {
+          class: 'gm-inline-input' + (textErr ? ' gm-field-error' : ''), value: row.text,
+          onchange: (e) => commitField('prd', row, 'text', e.target.value, since, setBody, validatePrdField),
+        }) }),
+        ...(row.severity ? [PropertyField({ label: 'severity', inline: true, children: Badge({ children: row.severity, tone: SEVERITY_TONE[row.severity] || 'neutral' }) })] : []),
+        ...(row.tags && row.tags.length ? [PropertyField({ label: 'tags', inline: true, children: h('span', {}, ...row.tags.map(t => Pill({ key: t, tone: 'accent', children: t }))) })] : []),
+      ];
+    },
+  }, setBody);
+}
+
 export async function MutablesEditor(setBody) {
-  const unscoped = ScopedPanelState({ panel: "Mutables Editor", cwd: state.cwd });
-  if (unscoped) return unscoped;
-  const r = await api('/api/mutables', { scoped: true });
-  if (r.error) return Empty('Failed to load mutables: ' + r.error);
-  if (!r.rows || !r.rows.length) return Empty('No mutable rows for this project.');
-  const since = r.mtimeMs;
-  return h('div', { class: 'ds-panel' }, h('h2', {}, `Mutables (${r.rows.length} rows)`),
-    ...r.rows.map(row => {
-      const statusErr = errorByRowIdAndField[`mutables:${row.id}:status`];
-      const witnessErr = errorByRowIdAndField[`mutables:${row.id}:witness`];
-      return h('div', {
-        key: row.id, class: 'gm-propgrid-row' + (row.status === 'unknown' ? ' gm-row-danger-tint' : ''),
-      },
-        PropertyGrid({ children: [
-          PropertyField({ label: 'id', inline: true, children: h('span', { class: 'gm-inline-input gm-opacity-70' }, row.id) }),
-          PropertyField({ label: 'status', hint: statusErr || null, children: h('span', {}, Badge({ children: row.status, tone: row.status === 'unknown' ? 'danger' : (row.status === 'resolved' ? 'positive' : 'neutral') })) }),
-          PropertyField({ label: 'witness', hint: witnessErr || null, children: h('input', {
-            class: 'gm-inline-input' + (witnessErr ? ' gm-field-error' : ''), value: row.witness_evidence || '', placeholder: 'witness evidence...',
-            onchange: (e) => commitField('mutables', row, 'witness', e.target.value, since, setBody, validateMutableField),
-          }) }),
-        ] }));
-    }));
+  return YamlRowEditor({
+    kind: 'mutables', panel: 'Mutables Editor', endpoint: '/api/mutables', heading: 'Mutables',
+    rowClass: (row) => (row.status === 'unknown' ? ' gm-row-danger-tint' : ''),
+    fields: (row, fieldError, since, setBody) => {
+      const statusErr = fieldError('status');
+      const witnessErr = fieldError('witness');
+      return [
+        PropertyField({ label: 'status', hint: statusErr || null, children: h('span', {}, Badge({ children: row.status, tone: row.status === 'unknown' ? 'danger' : (row.status === 'resolved' ? 'positive' : 'neutral') })) }),
+        PropertyField({ label: 'witness', hint: witnessErr || null, children: h('input', {
+          class: 'gm-inline-input' + (witnessErr ? ' gm-field-error' : ''), value: row.witness_evidence || '', placeholder: 'witness evidence...',
+          onchange: (e) => commitField('mutables', row, 'witness', e.target.value, since, setBody, validateMutableField),
+        }) }),
+      ];
+    },
+  }, setBody);
 }
 
 export async function lifecycleAct(verb, payload) {
@@ -775,6 +787,10 @@ const DISPATCH_RESPONSE_TIMEOUT_MS = 10000;
 const DISPATCH_RESPONSE_POLL_MS = 500;
 const consoleState = { verb: null, payload: '{}', dispatched: null, polling: false, result: null };
 export function GmCallConsole(setBody) {
+  // The only scoped panel here that WRITES: an unscoped dispatch would not merely
+  // display the server's own launch directory, it would fire a real verb into it.
+  const unscoped = ScopedPanelState({ panel: 'GM Call Console', cwd: state.cwd });
+  if (unscoped) return unscoped;
   const verbs = verbAllowlist();
   const selectionNoLongerPublished = !consoleState.verb || !verbs.includes(consoleState.verb);
   if (selectionNoLongerPublished) consoleState.verb = verbs[0];

@@ -71,10 +71,18 @@ function unquote(s) {
   return s;
 }
 
+// Quotes only what plain YAML actually requires. A space is not one of those things: requiring
+// [\w./-] meant every multi-word value came back quoted, so rewriting one row reshaped the text
+// of every other field on it -- "- subject: legacy boundary row" became "- subject: 'legacy
+// boundary row'" and the byte-preservation promise this function makes was broken by its own
+// re-emit rather than by the caller.
 function yamlScalar(s) {
   s = String(s == null ? '' : s);
-  if (/^[\w./-]*$/.test(s) && s.length && !/^(true|false|null|~)$/i.test(s) && !/^-?\d+$/.test(s)) return s;
   if (s === '') return "''";
+  const needsQuoting = /^[\s-]|[\s]$|[:#'"\[\]{}|>&*!%@`,]/.test(s)
+    || /^(true|false|null|~|yes|no|on|off)$/i.test(s)
+    || /^-?\d+(\.\d+)?$/.test(s);
+  if (!needsQuoting) return s;
   return `'${s.replace(/'/g, "''")}'`;
 }
 

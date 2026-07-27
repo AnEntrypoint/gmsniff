@@ -661,12 +661,24 @@ const _projectCache = new Map();
 
 // discoverProjects walks 161+ project directories doing real synchronous stat/read work,
 // measured at 2.18s per call, and nearly every route invokes it at least once per request.
-let _discoverCache = { at: 0, len: -1, value: null };
+//
+// Keyed on the events array IDENTITY and length as well as the clock, matching discoverCwdSet.
+// A clock-only key was tried and rejected: it stored `len` without ever comparing it, so a
+// project whose events had just been ingested stayed absent from the registry for the whole TTL
+// and EVERY cwd-scoped route rejected it 403 "cwd not in discovered project registry" -- a live
+// project reported as not existing, with the write routes refusing real work. Reproduced against
+// a real server: 403 immediately after the project's 6 events were in store.events, 200 for the
+// identical request once the TTL lapsed.
+let _discoverCache = { at: 0, eventsRef: null, eventsLength: -1, value: null };
 function discoverProjectsCached(events) {
   const now = Date.now();
-  if (_discoverCache.value && (now - _discoverCache.at) < PROJECT_CACHE_TTL_MS) return _discoverCache.value;
-  const value = discoverProjects(events);
-  _discoverCache = { at: now, len: events.length, value };
+  const arr = events || [];
+  const fresh = (now - _discoverCache.at) < PROJECT_CACHE_TTL_MS;
+  if (_discoverCache.value && fresh && _discoverCache.eventsRef === arr && _discoverCache.eventsLength === arr.length) {
+    return _discoverCache.value;
+  }
+  const value = discoverProjects(arr);
+  _discoverCache = { at: now, eventsRef: arr, eventsLength: arr.length, value };
   return value;
 }
 

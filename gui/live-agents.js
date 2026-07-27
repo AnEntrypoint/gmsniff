@@ -3,7 +3,7 @@ import { Btn, Chip, Pill } from 'ds/components/shell.js';
 import { Dialog, SplitPanel } from 'ds/components/editor-primitives.js';
 import { SessionDashboard, fmtAgo, fmtDuration } from 'ds/components/sessions.js';
 import { Toggle } from 'ds/components/form-primitives.js';
-import { api, apiPost, esc, fmtTs, state, toast } from './data.js';
+import { api, apiPost, fmtTs, state, toast } from './data.js';
 import {
   basename, verbAllowlist, phaseUniverse, liveness, LIVENESS_LABEL, ageMs,
   currentDispatch, resolveInflight, verbDurations, prdBurndown, deviationTrend,

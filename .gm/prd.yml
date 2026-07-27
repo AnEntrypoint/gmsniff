@@ -214,21 +214,6 @@
   text: If a user explicitly points gmsniff at a log source whose newest event is far older than now, say so loudly in both CLI and GUI rather than rendering stale numbers as current. The current failure mode is silent.
   witness: gm-log newest day dir 2026-07-23, four days stale, rendered today as if current
   status: pending
-- id: surface-fsm-graph-override-live
-  text: C:/dev/gm is the only project carrying .gm/instructions/fsm/graph.json (5464 bytes) -- a REAL live phase-graph override, so the hardcoded six-phase assumption is already wrong for a real project on this machine. Parse the override and drive PhaseWalk and gate display from it per-project.
-  witness: 'Real stat: C:/dev/gm carries a 5,464-byte .gm/instructions/fsm/graph.json, so a per-project FSM graph override exists on this machine today and the hardcoded six-phase assumption is already wrong for a real project. Both src/server.js and src/registry.js read the override.'
-  status: completed
-  commit_comment: Honour the live per-project FSM graph override
-- id: gm-db-size-monitoring
-  text: '.gm/gm.db is the live store and is large and growing: gm 174.9MB, spoint 28.6MB, casey 19.8MB, gmsniff 18.8MB. memoryStoreHealth currently stats the nonexistent rs-learn.db instead. Repoint at gm.db and surface growth.'
-  witness: 'Real stat: .gm/gm.db is present and is the live store, while .gm/rs-learn.db exists only in C:/dev/gm as a retired fossil. memoryStoreHealth reads gm.db rather than the fossil it previously stat-ed, so the reported store size reflects the file actually in use.'
-  status: completed
-  commit_comment: Monitor the live gm.db rather than the retired rs-learn fossil
-- id: gate-deviation-repeats-empty-object
-  text: .gm/exec-spool/.gate-deviation-repeats.json is 2 bytes ({}) on every project, so the stuck-loop repeat counter is currently empty everywhere. Surfacing it must handle the empty-object case as the normal state, not as missing data.
-  witness: 'Real read: .gate-deviation-repeats.json contains {} -- the normal healthy state, not missing data. The surface treats an empty object as zero repeats rather than as an absent file or an error.'
-  status: completed
-  commit_comment: Treat an empty gate-repeat object as the healthy state
 - id: residual-check-fired-is-empty
   text: .gm/residual-check-fired is 0 bytes on every project -- it is a presence marker, not a content file. Code reading it for a value gets an empty string; only existence and mtime are meaningful.
   witness: 'real stat: 0B on all 4 projects'
@@ -321,11 +306,6 @@
   text: 174 projects are now discovered, 99 of them worktree-hosted, while only 2 are genuinely active. Listing all 174 is unusable. Prune or age-filter stale worktree projects by default, since a deleted worktree leaves a discoverable but dead directory.
   witness: 'data-layer agent: 174 discovered, 99 worktree-hosted, 2 active'
   status: pending
-- id: turn-state-legacy-shape-migration
-  text: C:/dev/test carries a legacy turn-state.json shaped {turnId,...} with no phase field. Confirm against ../gm whether that shape is still written by any current code path, and handle or ignore it explicitly rather than treating it as a malformed current-shape file.
-  witness: 'Real read: readTurnState(C:/dev/test) reports legacy_shape true with present true, so the older {turnId} shape still on disk is detected and labelled rather than treated as a malformed current-shape file. 20 of 85 projects still carry it, so removing the branch would silently reclassify them as phase null.'
-  status: completed
-  commit_comment: Detect the legacy turn-state shape instead of treating it as malformed
 - id: prd-status-vocabulary-untested
   text: 'All 123 gmsniff PRD rows read status: pending and no row uses done/complete/completed, so closed-status detection has never been exercised against a real closed row. Verify the policy-driven closed-status logic against genuinely closed rows, from another project or by closing one here.'
   witness: 'data-layer agent: 100% of gmsniff prd.yml rows are status pending'
@@ -350,11 +330,6 @@
   text: 'correlationCoverage reports session_id: 0 across 203855 events even though C:/dev/gm carries a real session_id in its turn-state.json. The session_id rank tier exists but currently matches nothing, so either the extractor does not read the field the runtime actually writes, or the tier is vestigial. Confirm before any surface claims to group by session_id.'
   witness: 'docs agent: correlationCoverage session_id 0 of 203855 despite a real session_id on C:/dev/gm'
   status: pending
-- id: daemon-alive-contradiction
-  text: 'CONFIRMED BUG. readWatcherStatus(cwd).daemon_alive returns true (pid 3364) while readProjectLiveness(cwd).daemon_alive returns false in the same process at the same instant, because they read different files: the per-project .status.json holds pid 3364 and the machine-global ~/.gm-tools/daemon-status.json holds pid 4304. Direct process.kill probe proves pid 3364 IS alive and pid 4304 is NOT, and the global file is 255773s (roughly 3 days) stale. So readWatcherStatus is correct and readProjectLiveness.daemon_alive is wrong -- it trusts the stale global file over the live per-project one. Fix the precedence: prefer the freshest verified-alive pid, and never report daemon_alive false while a real daemon pid is serving the project.'
-  witness: 'Real probe: readWatcherStatus(C:/dev/gmsniff).daemon_alive and readProjectLiveness(C:/dev/gmsniff).daemon_alive both return true and AGREE. They previously disagreed in the same process at the same instant because one read the per-project .status.json pid (3364, genuinely alive) and the other the machine-global daemon-status.json pid (4304, dead and three days stale). Resolution is now by verified liveness across both sources, with the stale global surfaced as a diagnostic rather than trusted.'
-  status: completed
-  commit_comment: Resolve daemon liveness by verified pid rather than by whichever file was read
 - id: reconcile-subsystem-list-with-rs-learn
   text: SUBSYSTEMS is now 5 entries [plugkit,hook,bootstrap,memory,rs_learn] and real replay shows 5295 live rs_learn events (recall, vector_top_k, auto_recall), contradicting the earlier AGENTS.md claim that rs_learn was dead with zero live events -- and contradicting commit 17af397 which moved the other way. Reconcile against current ../gm source to determine the correct emitter, and confirm gui/panels.js SUB_LIST carries the identical literal, since the two are required to stay byte-identical.
   witness: docs agent measured 5295 live rs_learn events dated 2026-07-07 in real replay

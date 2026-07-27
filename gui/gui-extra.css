@@ -34,10 +34,6 @@
 .gm-table th.gm-th-sortable:focus-visible { outline:2px solid var(--accent, var(--panel-accent)); outline-offset:-2px; }
 .gm-table th.gm-th-sorted { color: var(--accent, var(--panel-accent)); }
 
-.gm-pager { display:flex; gap:6px; align-items:center; margin-top:8px; font-size:12px; color: var(--muted); }
-.gm-pager button { background: var(--surface-2, var(--panel-bg)); border:1px solid var(--border); color: var(--text); padding:3px 10px; border-radius:3px; font-size:12px; cursor:pointer; }
-.gm-pager button:disabled { opacity:.4; cursor:default; }
-
 .gm-json { font-size:10px; font-family: ui-monospace, Consolas, monospace; white-space:pre-wrap; word-break:break-all; background: var(--surface-2, var(--panel-bg)); padding:8px; border-radius:3px; max-height:300px; overflow-y:auto; }
 .gm-empty { color: var(--muted); padding:16px; text-align:center; }
 .gm-pill { display:inline-block; padding:1px 7px; border-radius:10px; font-size:11px; background: var(--surface-2, var(--panel-bg)); margin:1px; }

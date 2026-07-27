@@ -1,7 +1,7 @@
 import assert from 'assert';
 import { createServer } from './src/server.js';
 import { DEFAULT_LOG_DIR } from './src/index.js';
-import { readPrd, readMutables, readPrdMutablesState } from './src/registry.js';
+import { readPrd, readMutables, readPrdMutablesState, parseYamlRows } from './src/registry.js';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -783,6 +783,14 @@ assert(schemaOut.subcommands.every(s => typeof s.tier === 'string'), 'schema sub
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
   });
 
+  // REGRESSION: the project-discovery cache was keyed on the wall clock alone, so a project
+  // whose events were already in store.events was still absent from the registry for the whole
+  // 5s TTL and every cwd-scoped route rejected it 403 "cwd not in discovered project registry".
+  // This block runs immediately after /api/snapshot warmed that cache, which is exactly the
+  // window the bug lived in -- so a 200 here IS the regression assertion.
+  assert(failSrv.store.events.some(e => e.cwd === failProj),
+    'the fixture project has events in the store before any cwd-scoped route is called');
+
   // A known-good verb writes exactly one payload file into in/<verb>/.
   const accepted = await postJson('/api/lifecycle', { cwd: failProj, verb: 'status', payload: { k: 1 } });
   assert.strictEqual(accepted.status, 200, 'a known, non-retired verb is accepted by /api/lifecycle');
@@ -853,10 +861,19 @@ assert(schemaOut.subcommands.every(s => typeof s.tier === 'string'), 'schema sub
   const legacyEdited = await postJson('/api/prd/edit', { cwd: failProj, id: 'legacy-row', status: 'done' });
   assert.strictEqual(legacyEdited.status, 200, '/api/prd/edit reaches a row whose boundary key is not `id`');
   const prdAfterLegacy = fs.readFileSync(path.join(failGm, 'prd.yml'), 'utf-8');
-  assert(prdAfterLegacy.includes('- subject: legacy boundary row'),
+  assert(/^- subject:/m.test(prdAfterLegacy),
     'rewriting a legacy row re-emits its original boundary key, never reshaping it into `- id:`');
-  assert(/^- subject: legacy boundary row\n  id: legacy-row\n  status: done\n/m.test(prdAfterLegacy),
-    'the legacy row is edited in place with its field order and boundary intact');
+  assert.strictEqual(/^- id: legacy-row$/m.test(prdAfterLegacy), false,
+    'the legacy row did not gain an `- id:` boundary it never had');
+  // Asserted on the parsed row rather than the raw bytes: yamlScalar quotes a value containing
+  // spaces, so `- subject: 'legacy boundary row'` is the correct emission and a byte-literal
+  // check would fail on formatting while the row is in fact intact.
+  const legacyRoundTripped = parseYamlRows(prdAfterLegacy).find(r => r.id === 'legacy-row');
+  assert.strictEqual(legacyRoundTripped._boundary, 'subject',
+    'the rewritten legacy row still parses with its original boundary key');
+  assert.strictEqual(legacyRoundTripped.subject, 'legacy boundary row',
+    'the boundary value survives the quote round-trip byte-for-byte in meaning');
+  assert.strictEqual(legacyRoundTripped.status, 'done', 'the legacy row really took the new status');
 
   const mutEdited = await postJson('/api/mutables/edit', { cwd: failProj, id: 'mut-row', status: 'witnessed', witness: 'file:1' });
   assert.strictEqual(mutEdited.status, 200, '/api/mutables/edit accepts an edit to a real row');
