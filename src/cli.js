@@ -3,7 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { GmLogWatcher, MultiProjectWatcher, replayAll, DEFAULT_LOG_DIR, correlationOf, correlationKey, correlationCoverage, sourceStaleness } from './index.js';
-import { readWatcherStatus, readProjectLiveness, readInstalledVersions, readTurnState, readTurnSummary, VERB_ALLOWLIST, isUsableVerb, isRetiredVerb, isKnownVerb } from './registry.js';
+import { readWatcherStatus, readProjectLiveness, readInstalledVersions, readTurnState, readTurnSummary, readLivePhaseState, VERB_ALLOWLIST, isUsableVerb, isRetiredVerb, isKnownVerb } from './registry.js';
 import { parseLine, readTail, DEFAULT_REPLAY_BYTES } from './watcher-log.js';
 
 const GM_TOOLS_DIR = process.env.GM_TOOLS_DIR || path.join(os.homedir(), '.gm-tools');
@@ -1368,18 +1368,14 @@ function readAgentState(cwd) {
   const status = readWatcherStatus(cwd);
   const liveness = readProjectLiveness(cwd);
 
-  let heading = null, instruction = '', updatedTs = null;
-  try {
-    const text = fs.readFileSync(path.join(cwd, '.gm', 'next-step.md'), 'utf-8');
-    const um = text.match(/^Updated:\s*(\d+)$/m);
-    updatedTs = um ? Number(um[1]) : null;
-    // Some real files carry no `---` separator at all (observed on rs-codeinsight), where a
-    // naive first-heading scan reports the file's own "# Next step" preamble as the instruction.
-    const bodyIdx = text.indexOf('\n---\n');
-    instruction = bodyIdx >= 0 ? text.slice(bodyIdx + 5).trimStart() : text.replace(/^#\s*Next step\s*$/mi, '').trimStart();
-    const hm = instruction.match(/^#\s*(.+?)\s*$/m);
-    heading = hm && !/^next step$/i.test(hm[1].trim()) ? hm[1].trim() : null;
-  } catch (_) {}
+  // Shared with the GUI rather than re-scanned here: this file carried its own
+  // first-heading scan, which reported the constant ORCHESTRATOR preamble as the
+  // instruction for every project, and fixing that in one copy would have left
+  // the two surfaces disagreeing about the same file.
+  const phaseState = readLivePhaseState(cwd);
+  const heading = phaseState.instruction_heading;
+  const instruction = phaseState.instruction_excerpt || '';
+  const updatedTs = phaseState.updated_ts;
 
   let prompt = '';
   try { prompt = fs.readFileSync(path.join(cwd, '.gm', 'last-prompt.txt'), 'utf-8').trim(); } catch (_) {}
@@ -1540,7 +1536,10 @@ function renderAgents(rows, opts) {
   const shown = showIdle ? rows : rows.filter(a => a.working);
   const hidden = rows.length - shown.length;
 
-  process.stdout.write(`${color('AGENTS', 1)}  ${new Date().toISOString().slice(11, 19)}  -  ${shown.length} shown / ${rows.length} discovered\n\n`);
+  // "discovered" alone was ambiguous across surfaces: this walk and the server's
+  // discoverProjectsCached scan different roots, so the CLI said 70 while
+  // /api/projects said 173 and neither named which population it meant.
+  process.stdout.write(`${color('AGENTS', 1)}  ${new Date().toISOString().slice(11, 19)}  -  ${shown.length} working / ${rows.length} with gm state on disk\n\n`);
   if (!shown.length) {
     process.stdout.write(`  (no agent actively working${hidden ? `; ${hidden} idle/COMPLETE -- pass --idle to show` : ''})\n`);
   }

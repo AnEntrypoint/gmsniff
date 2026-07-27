@@ -8,6 +8,7 @@ import {
   basename, verbAllowlist, phaseUniverse, liveness, LIVENESS_LABEL, ageMs,
   currentDispatch, resolveInflight, verbDurations, prdBurndown, deviationTrend,
   attentionScore, agentAges, phaseDivergence, authoritativePhase,
+  REASON_DISPATCHING_NOW,
 } from './shared.js';
 import { renderMarkdown } from './markdown.js';
 import { HonestState } from './honest-state.js';
@@ -686,6 +687,11 @@ function pendingLabel(p) {
 function servedSectionLabel(p, divergence) {
   const served = p.instruction_heading || p.instruction_key;
   if (!served) return null;
+  // With the phase now in the badge, an agreeing served section rendered the
+  // same word three times on one card (EMIT / serving EMIT / EMIT). The served
+  // heading only carries information when it DISAGREES with turn-state.json --
+  // that lag is the thing worth showing.
+  if (!divergence && served === authoritativePhase(p)) return null;
   return divergence ? `serving ${served} (phase moved on)` : `serving ${served}`;
 }
 
@@ -699,7 +705,10 @@ function toCard(a) {
   return {
     sid: agentKey(p),
     title: basename(p.cwd),
-    agent: p.skill || 'gm',
+    // The ds card renders `agent` as a badge. p.skill is 'gm' on every project
+    // on the machine, so the badge carried nothing; the phase is what actually
+    // distinguishes one card from another at a glance.
+    agent: authoritativePhase(p) || p.skill || 'gm',
     // The ds card renders this slot as a bare word beside the phase. It must say
     // what the word IS, because the served prose legitimately lags
     // turn-state.json -- measured live, casey served PLAN while its phase was
@@ -795,7 +804,15 @@ export async function LiveAgents({ connState = 'connecting', onNav } = {}, setBo
       : liveState.errorsOnly ? `No agent has a stated reason right now (${agents.length} reported by live-state). Untick "needs attention" to see them all.`
         : 'No agent is working right now. Turn off "working only" to see finished and idle projects.';
 
-  const topReasons = visible.slice(0, ATTENTION_REASONS_SHOWN).filter(a => a.attention.reasons.length);
+  // "dispatching now" is the healthy state, so a strip headed "Needs attention"
+  // listing it told the reader an agent needed attention for working normally --
+  // measured live with 2 of 3 entries reading exactly that. Anomalous reasons
+  // only; the ranking itself still counts dispatching, and every agent remains
+  // visible in the cards regardless.
+  const anomalousReasonOf = (a) => a.attention.reasons.find(r => r !== REASON_DISPATCHING_NOW);
+  const topReasons = visible.slice(0, ATTENTION_REASONS_SHOWN)
+    .map(a => ({ a, reason: anomalousReasonOf(a) }))
+    .filter(x => x.reason);
 
   return h('div', {},
     h('div', { key: 'tb', class: 'gm-toolbar' },
@@ -828,10 +845,10 @@ export async function LiveAgents({ connState = 'connecting', onNav } = {}, setBo
     topReasons.length
       ? h('div', { key: 'att', class: 'gm-attention' },
           h('strong', { key: 'h' }, 'Needs attention: '),
-          ...topReasons.map(a => h('button', {
+          ...topReasons.map(({ a, reason }) => h('button', {
             key: a.row.cwd, type: 'button', class: 'gm-attention-item',
             onclick: () => openDrilldown(a.row, setBody),
-          }, `${basename(a.row.cwd)} -- ${a.attention.reasons[0]}`)))
+          }, `${basename(a.row.cwd)} -- ${reason}`)))
       : null,
     h('div', { key: 'dash' }, SessionDashboard({
       sessions: cards,

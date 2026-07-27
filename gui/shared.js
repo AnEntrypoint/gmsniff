@@ -163,6 +163,13 @@ export function agentAges(row, feedTs, now = Date.now()) {
 // PLAN while turn-state.json had already moved to EXECUTE (observed live on
 // spoint). The server publishes both sides of one comparison so the flag and the
 // two phases it names can never come from separately-derived fields.
+// The one reason describing a HEALTHY agent. It still contributes to the
+// ranking -- a dispatching agent is what an observer most wants at the top --
+// but a "Needs attention" strip listing it says an agent needs attention for
+// working normally, which is why that strip filters on this constant rather
+// than on an invented severity for the other seven reasons.
+export const REASON_DISPATCHING_NOW = 'dispatching now';
+
 export function phaseDivergence(row) {
   if (!row) return null;
   const served = row.phase_served ?? row.instruction_phase ?? row.next_step_phase ?? null;
@@ -311,7 +318,7 @@ export function attentionScore(agent, now = Date.now()) {
   }
   const idleAtTerminalPhase = agent.row && agent.row.phase === 'COMPLETE';
   if (live === 'idle' && !idleAtTerminalPhase) { score += SCORE_IDLE_MID_CHAIN; reasons.push('idle mid-chain'); }
-  if (live === 'active') { score += SCORE_DISPATCHING_NOW; reasons.push('dispatching now'); }
+  if (live === 'active') { score += SCORE_DISPATCHING_NOW; reasons.push(REASON_DISPATCHING_NOW); }
   if (agent.row && agent.row.unparseable) { score += SCORE_UNPARSEABLE_INSTRUCTION; reasons.push('next-step.md unparseable'); }
 
   return { score, reasons, liveness: live };
