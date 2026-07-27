@@ -1572,12 +1572,19 @@ function resolveScopedCwd(store, cwdParam) {
   if (typeof cwd !== 'string' || cwd.includes('..')) {
     return { ok: false, error: 'invalid cwd' };
   }
-  const projects = discoverProjectsCached(store.events);
-  const allowed = [OWN_ROOT, ...projects.map(p => p.cwd)];
-  if (!isAllowedProjectCwd(cwd, allowed)) {
-    return { ok: false, error: 'cwd not in discovered project registry' };
+  const allowedFrom = (projects) => [OWN_ROOT, ...projects.map(p => p.cwd)];
+  if (isAllowedProjectCwd(cwd, allowedFrom(discoverProjectsCached(store.events)))) {
+    return { ok: true, cwd };
   }
-  return { ok: true, cwd };
+  // Discovery reads the FILESYSTEM but the cache only invalidates when the events array changes,
+  // so a project that appeared on disk without yet producing an event stays invisible for the
+  // whole TTL. Rejecting on that stale read told a caller a live project did not exist and made
+  // the write routes refuse real work on it -- intermittently, which is worse than consistently.
+  // A miss therefore costs one uncached re-scan before it is allowed to be an answer.
+  if (isAllowedProjectCwd(cwd, allowedFrom(discoverProjects(store.events)))) {
+    return { ok: true, cwd };
+  }
+  return { ok: false, error: 'cwd not in discovered project registry' };
 }
 
 // Two real failures measured on live data drive this shape. COST: C:/dev/spoint's prd.yml is
