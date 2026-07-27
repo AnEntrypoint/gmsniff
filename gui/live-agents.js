@@ -307,6 +307,28 @@ export function applyAutoscroll() {
   if (el) el.scrollTop = el.scrollHeight;
 }
 
+// Gate state now rides on the live-state row itself. Two published shapes are
+// both real and both handled: the light list form (`gates_blocked` plus
+// `gates_failing: [name]`) and the full form (`gates: {blocked, blockers:[{gate,
+// detail}]}`). The side-channel map is kept last as the older-server fallback.
+//
+// A FAILING gate is not the same thing as a BLOCKING one: on this machine every
+// working agent reports gates_failing:["prd-all-closed"] with gates_blocked:false,
+// because an open PRD is the normal condition of an agent mid-run. Rendering
+// those as blockers would put a red "blocked" chip on every healthy agent.
+export function gatesFor(row) {
+  if (!row) return null;
+  if (row.gates && typeof row.gates === 'object' && Array.isArray(row.gates.blockers)) return row.gates;
+  if (Array.isArray(row.gates_failing) || typeof row.gates_blocked === 'boolean') {
+    return {
+      blocked: !!row.gates_blocked,
+      blockers: (row.gates_failing || []).map(g => ({ gate: g, detail: null })),
+      blocked_edges: row.gates_blocked_edges || null,
+    };
+  }
+  return liveState.gates.get(row.cwd) || null;
+}
+
 // ---------------------------------------------------------------------------
 // GATE BLOCKERS -- which gate denied, and how many times it repeated.
 // ---------------------------------------------------------------------------
@@ -317,9 +339,13 @@ function GateBlockers(gateInfo) {
   if (!blockers.length && !gateInfo.last_gate_fired) return null;
   return h('div', { class: 'gm-gates' },
     h('div', { key: 'gh', class: 'gm-gates-head' },
-      blockers.length
-        ? Chip({ tone: 'danger', children: `blocked by ${blockers.length} gate${blockers.length === 1 ? '' : 's'}` })
-        : Chip({ tone: 'positive', children: 'no failing gates' }),
+      !blockers.length
+        ? Chip({ tone: 'positive', children: 'no failing gates' })
+        : gateInfo.blocked
+          ? Chip({ tone: 'danger', children: `blocked by ${blockers.length} gate${blockers.length === 1 ? '' : 's'}` })
+          // Open gates that are not currently denying a transition -- the normal
+          // condition of an agent mid-run, stated as such rather than as a block.
+          : Chip({ tone: 'warn', children: `${blockers.length} gate${blockers.length === 1 ? '' : 's'} not yet satisfied (not blocking)` }),
       gateInfo.last_gate_fired
         ? h('span', { class: 'gm-feed-muted gm-ml-6' }, `last fired: ${gateInfo.last_gate_fired.key}${gateInfo.last_gate_fired.ts ? ' ' + fmtAgo(gateInfo.last_gate_fired.ts) : ''}`)
         : null),

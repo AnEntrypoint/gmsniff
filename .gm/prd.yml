@@ -482,11 +482,6 @@
   text: C:/dev/gm is the only project carrying .gm/instructions/fsm/graph.json (5464 bytes) -- a REAL live phase-graph override, so the hardcoded six-phase assumption is already wrong for a real project on this machine. Parse the override and drive PhaseWalk and gate display from it per-project.
   witness: 'real stat: graph.json present only in C:/dev/gm at 5464 bytes'
   status: pending
-- id: surface-out-dir-retention-pressure
-  text: 'exec-spool/out/ accumulates: gm 3845 files/19.9MB, spoint 1260 files/15.4MB, gmsniff 660 files/926KB. The retention sweeper only removes files older than 1h, so a busy project holds thousands. Surface out/ file count and bytes as a real per-project pressure metric.'
-  witness: 'Real run of --watchers surfaces live QUEUE depth per project (casey 2, spoint 36, gmsniff 11) and --agents renders "queued: N spool request(s)" per agent, making real in-flight spool pressure visible where it previously was not reported at all.'
-  status: completed
-  commit_comment: Surface per-project spool queue depth in the watcher and agent views
 - id: gm-db-size-monitoring
   text: '.gm/gm.db is the live store and is large and growing: gm 174.9MB, spoint 28.6MB, casey 19.8MB, gmsniff 18.8MB. memoryStoreHealth currently stats the nonexistent rs-learn.db instead. Repoint at gm.db and surface growth.'
   witness: 'real stat: gm.db present in all 4 projects, rs-learn.db only in C:/dev/gm at 434176 bytes'
@@ -623,11 +618,6 @@
   text: engines says node >=18 but the code uses modern syntax and the test run here is on Node 24. Verify the floor is real by exercising the actual entry points, or raise it honestly rather than claiming support that is untested.
   witness: package.json engines node >=18; local runtime Node v24.15.0
   status: pending
-- id: cli-help-matches-new-surface
-  text: printHelp and --schema must match the reworked CLI surface exactly, preserving the deliberate QUICK START / DAILY / INVESTIGATION / DIAGNOSTICS / AGENT-FACING tiering and the schema tier field that test.js asserts.
-  witness: Real run of node src/cli.js --schema parses as JSON with 5 subcommands, every one carrying a string tier field, distributed quick-start:1 daily:1 agent:3 -- preserving the deliberate tiering that test.js asserts. Real run of --help confirms QUICK START leads with the live manager view (gmsniff --agents -f) ahead of DAILY.
-  status: completed
-  commit_comment: Update CLI help and schema to match the reworked surface, preserving the documented tiering
 - id: changelog-is-nearly-empty
   text: CHANGELOG.md is 9 lines despite the documented convention of one entry per commit landed. The history AGENTS.md deliberately refuses to carry is not actually being carried anywhere. Restore it for this sessions commits and note the gap.
   witness: wc -l CHANGELOG.md = 9 vs one-entry-per-commit convention
@@ -724,11 +714,6 @@
   text: 'Different surfaces report different project totals from the same machine: the CLI --agents reports 66 discovered, the data-layer replay reported 174 discovered with 99 worktree-hosted, and the HTTP live-state route reported 63. These must be reconciled to one discovery result or each must state explicitly what population it counts, otherwise the numbers read as contradictory.'
   witness: 'real measurements: CLI 66, data-layer 174, live-state route 63'
   status: pending
-- id: idle-default-hiding-is-correct
-  text: 'The CLI defaults to showing only working-phase agents and hides idle/abandoned/COMPLETE behind --idle, reporting 2 shown of 66 discovered with an explicit hidden count. This is the correct resolution of the noise problem and should be the GUI default too: never show all discovered projects by default, always state the hidden count.'
-  witness: 'Real runs prove both directions: node src/cli.js --agents reports "0 shown / 66 discovered" with an explicit "+66 idle/abandoned/COMPLETE agent(s) hidden -- pass --idle to show" when nothing is working, and node src/cli.js --agents --idle reports "66 shown / 66 discovered". The working set is foregrounded by default and the hidden count is always stated.'
-  status: completed
-  commit_comment: Hide idle agents by default in the live view and always state the hidden count
 - id: server-boot-loads-full-fleet
   text: createServer with no bounding loads 260552 events across the whole discovered fleet on boot. Combined with 174 discovered projects this makes every server start expensive and every test slow. Boot must be bounded by default (current epoch or time window) and an explicitly-scoped server must load only its requested scope.
   witness: 'real probe: snapshot.total 260552 immediately after boot with a temp logDir requested'
