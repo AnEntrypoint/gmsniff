@@ -115,11 +115,6 @@ window.addEventListener('popstate', () => {
   renderBody(true).then(focusMain);
 });
 
-const HEALTH_DEV_RATE_AMBER_PER_MIN = 1;
-const HEALTH_WATCHER_DEAD_AFTER_SEC = 5 * 60;
-const HEALTH_FULLY_STALE_AFTER_SEC = 5 * 60;
-const HEALTH_BREACHES_MEANING_RED = 2;
-
 function navItem(id, label, extra) {
   return { label, href: '#panel=' + id, active: ui.panel === id, onClick: (e) => { e.preventDefault(); go(id); }, count: extra };
 }
@@ -204,39 +199,34 @@ function switchToProject(cwd) {
   renderBody();
 }
 
-function healthRowSeverity(row) {
-  const fullyStale = row.staleSeconds == null || row.staleSeconds >= HEALTH_FULLY_STALE_AFTER_SEC;
-  // Stale long enough to rule out a brief restart blip, on top of not being
-  // alive -- either alone is too weak to call a watcher dead.
-  const watcherDead = !row.watcherAlive
-    && (row.staleSeconds == null || row.staleSeconds >= HEALTH_WATCHER_DEAD_AFTER_SEC);
-  const highDeviationRate = (row.deviationRate || 0) >= HEALTH_DEV_RATE_AMBER_PER_MIN;
-  const breaches = (highDeviationRate ? 1 : 0) + (watcherDead ? 1 : 0) + (fullyStale ? 1 : 0);
-  if (fullyStale && watcherDead) return 'red';
-  if (breaches >= HEALTH_BREACHES_MEANING_RED) return 'red';
-  if (breaches === 1) return 'amber';
-  return 'ok';
-}
-
-// A bare "Health: critical" followed by 140 comma-separated names states a
-// severity without a cause and buries the live agents under the machine's entire
-// abandoned backlog, so the banner carries a reason per project, caps the list,
-// and says how many it omitted.
+// Every working agent appears, so a condition no threshold anticipated is
+// visible rather than merely unranked. Ordering is longest-silent first because
+// that is the measurement most likely to be the reason someone opened the page,
+// and the list caps only for space, always naming the count it omitted.
 const HEALTH_BANNER_PROJECTS_SHOWN = 6;
 const SEC_PER_MIN = 60;
 
-function healthReason(r) {
-  const silentFor = r.staleSeconds == null ? null : `silent ${Math.round(r.staleSeconds / SEC_PER_MIN)}m`;
-  const breachedReasons = [];
-  if (!r.watcherAlive) breachedReasons.push('watcher not running');
-  if (r.staleSeconds == null) breachedReasons.push('no events ever');
-  else if (r.staleSeconds >= HEALTH_FULLY_STALE_AFTER_SEC) breachedReasons.push(silentFor);
-  if ((r.deviationRate || 0) >= HEALTH_DEV_RATE_AMBER_PER_MIN) breachedReasons.push(`${r.deviationRate.toFixed(1)} deviations/min`);
-  if (breachedReasons.length) return breachedReasons.join(', ');
-  // Never a bare verdict like "degraded": a word with no measurement behind it
-  // is the exact thing this banner was rebuilt to stop doing. When nothing
-  // crossed a display threshold, the raw numbers go out and the reader judges.
-  return `${silentFor ?? 'no events'}, ${(r.deviationRate || 0).toFixed(1)} deviations/min`;
+// The three measurements the health route actually reports, each rendered as its
+// own number with its own age. No sum, no score, no label standing in for them:
+// "watcher not running" plus "silent 198m" is what the reader needs, and
+// collapsing that pair into the word "stalled" throws away both halves.
+function healthMeasurements(r) {
+  const silence = r.staleSeconds == null
+    ? 'no events ever recorded'
+    : `silent ${Math.round(r.staleSeconds / SEC_PER_MIN)}m`;
+  return [
+    `watcher ${r.watcherAlive ? 'running' : 'not running'}`,
+    silence,
+    `${(r.deviationRate || 0).toFixed(1)} deviations/min`,
+  ].join(', ');
+}
+
+// Sorts by silence, then by deviation rate, so a project with no events ever
+// (staleSeconds == null) sorts to the top rather than reading as zero seconds
+// silent -- the absence of a measurement is not a measurement of zero.
+function longestSilentFirst(a, b) {
+  const silenceOf = (r) => (r.staleSeconds == null ? Infinity : r.staleSeconds);
+  return (silenceOf(b) - silenceOf(a)) || ((b.deviationRate || 0) - (a.deviationRate || 0));
 }
 
 // A stopped watcher on a project that FINISHED or was abandoned months ago is
@@ -259,23 +249,24 @@ function healthScopedToWorkingAgents() {
 
 function HealthBanner() {
   const { rows, total } = healthScopedToWorkingAgents();
-  const offending = rows.map(r => ({ ...r, severity: healthRowSeverity(r) })).filter(r => r.severity !== 'ok');
-  if (!offending.length) return null;
-  const tone = offending.some(r => r.severity === 'red') ? 'red' : 'amber';
-  const worstFirst = [...offending].sort((a, b) => (b.deviationRate || 0) - (a.deviationRate || 0));
-  const shown = worstFirst.slice(0, HEALTH_BANNER_PROJECTS_SHOWN);
-  const omitted = worstFirst.length - shown.length;
-  return h('div', { class: 'gm-health-banner gm-health-' + tone, role: 'alert' },
+  if (!rows.length) return null;
+  const longestSilent = [...rows].sort(longestSilentFirst);
+  const shown = longestSilent.slice(0, HEALTH_BANNER_PROJECTS_SHOWN);
+  const omitted = longestSilent.length - shown.length;
+  return h('div', { class: 'gm-health-banner', role: 'status', 'aria-live': 'polite' },
     h('span', { class: 'gm-health-label' },
-      `${offending.length} of ${total} working agent${total === 1 ? '' : 's'} ${tone === 'red' ? 'stalled' : 'degraded'}`),
+      `${total} working agent${total === 1 ? '' : 's'}, longest-silent first`),
     h('span', { class: 'gm-health-list' }, ...shown.map(r => h('button', {
       type: 'button',
       key: 'health-' + r.cwd,
-      class: 'gm-health-item gm-health-item-' + r.severity,
-      title: `${r.cwd} -- ${healthReason(r)}`,
+      class: 'gm-health-item',
+      title: `${r.cwd} -- ${healthMeasurements(r)}`,
       onclick: () => switchToProject(r.cwd),
-    }, `${r.name} (${healthReason(r)})`))),
-    omitted > 0 ? h('span', { class: 'gm-health-omitted' }, `and ${omitted} more`) : null);
+    }, `${r.name} (${healthMeasurements(r)})`))),
+    omitted > 0
+      ? h('span', { class: 'gm-health-omitted' },
+          `+${omitted} more working agent${omitted === 1 ? '' : 's'} not shown (list caps at ${HEALTH_BANNER_PROJECTS_SHOWN}) -- open Live Agents for all`)
+      : null);
 }
 
 // A dropped stream or a failing watcher previously produced no visible reaction

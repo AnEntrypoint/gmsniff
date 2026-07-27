@@ -503,7 +503,11 @@ function AgentDrilldown(setBody) {
   const divergence = phaseDivergence(p);
   const durs = verbDurations(f.rows);
   const medianMsForRunningVerb = running ? (durs.find(d => d.verb === running.verb) || {}).median : null;
-  const runningSlow = medianMsForRunningVerb && running.ageMs > medianMsForRunningVerb * DISPATCH_SLOW_MULTIPLE_OF_MEDIAN;
+  // The multiple itself, never a "(slow)" verdict derived from it: 1.2x and 40x
+  // both read as "slow" once collapsed, and the reader needs the difference.
+  const runningVsMedian = medianMsForRunningVerb && running.ageMs
+    ? running.ageMs / medianMsForRunningVerb
+    : null;
 
   const header = h('div', { class: 'gm-agent-head' },
     Pill({ key: 'ph', children: phase || 'no phase' }),
@@ -514,7 +518,7 @@ function AgentDrilldown(setBody) {
       children: LIVENESS_LABEL[live],
     }),
     running
-      ? Chip({ key: 'run', tone: 'warn', children: `running ${running.verb}${running.ageMs != null ? ' for ' + fmtDuration(running.ageMs) : ''}${runningSlow ? ' (slow)' : ''}` })
+      ? Chip({ key: 'run', tone: 'warn', children: `running ${running.verb}${running.ageMs != null ? ' for ' + fmtDuration(running.ageMs) : ''}${runningVsMedian ? ` (${runningVsMedian.toFixed(1)}x median ${fmtDuration(medianMsForRunningVerb)})` : ''}` })
       : null,
     abandoned.length
       ? Chip({ key: 'ab', tone: 'danger', children: `${abandoned.length} dispatch${abandoned.length === 1 ? '' : 'es'} never completed` })
@@ -708,7 +712,6 @@ function toCard(a) {
 }
 
 const WORKING_LIVENESS = ['active', 'idle'];
-const NEEDS_ATTENTION_MIN_SCORE = 30;
 const AGENTS_BACKFILLED_PER_RENDER = 12;
 const ATTENTION_REASONS_SHOWN = 3;
 
@@ -746,7 +749,15 @@ export async function LiveAgents({ connState = 'connecting', onNav } = {}, setBo
     ? agents.filter(a => [a.row.cwd, a.row.phase, a.row.skill, a.row.instruction_key, a.row.instruction_heading]
         .some(v => String(v || '').toLowerCase().includes(q)))
     : (liveState.aliveOnly ? working : agents);
-  if (liveState.errorsOnly) visible = visible.filter(a => a.attention.score >= NEEDS_ATTENTION_MIN_SCORE);
+  // The toggle keeps only agents that have at least one stated reason, rather
+  // than those clearing an invented score cutoff. A score threshold made the
+  // criterion unnameable -- an agent at 25 ("idle mid-chain") vanished while one
+  // at 30 stayed, and nothing on screen said 25 was the reason. "Has a reason"
+  // is a criterion the strip can print, and the hidden count rides with it.
+  const withoutStatedReason = liveState.errorsOnly
+    ? visible.filter(a => a.attention.reasons.length === 0).length
+    : 0;
+  if (liveState.errorsOnly) visible = visible.filter(a => a.attention.reasons.length > 0);
 
   // At 63 rows this ordering, not any cap, decides what an observer ever
   // actually sees, so it answers "where do I look first" rather than sorting
@@ -764,7 +775,7 @@ export async function LiveAgents({ connState = 'connecting', onNav } = {}, setBo
   const emptyText = agents.length === 0
     ? 'No gm projects discovered on this machine yet.'
     : q ? `No project matches "${liveState.filter}" (searched all ${agents.length}).`
-      : liveState.errorsOnly ? 'No agent currently needs attention.'
+      : liveState.errorsOnly ? `No agent has a stated reason right now (${agents.length} reported by live-state). Untick "needs attention" to see them all.`
         : 'No agent is working right now. Turn off "working only" to see finished and idle projects.';
 
   const topReasons = visible.slice(0, ATTENTION_REASONS_SHOWN).filter(a => a.attention.reasons.length);
@@ -782,6 +793,10 @@ export async function LiveAgents({ connState = 'connecting', onNav } = {}, setBo
         q
           ? `${visible.length} of ${agents.length} match (searched every project live-state reports)`
           : `${visible.length} shown / ${agents.length} reported by live-state`),
+      withoutStatedReason > 0
+        ? h('span', { class: 'gm-feed-muted' },
+            `+${withoutStatedReason} hidden by "needs attention" (no stated reason) -- untick to show`)
+        : null,
       !q && (finished || notAgents)
         ? h('button', {
             type: 'button', class: 'gm-reveal',
