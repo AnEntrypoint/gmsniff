@@ -12,7 +12,7 @@ import {
   lifecycleAct, runCodesearch, dispatchConsole, liveStreamDebugSnapshot,
 } from './panels.js';
 import {
-  LiveAgents, liveState, appendLiveEvent, applyAutoscroll, loadAgentContext,
+  LiveAgents, liveState, appendLiveEvent, appendOutputBatch, applyAutoscroll, loadAgentContext,
   openDrilldown, closeDrilldown, agentKey,
 } from './live-agents.js';
 import { loadCapabilities, subsystemList, basename } from './shared.js';
@@ -672,6 +672,19 @@ function connectSSE() {
 
   sse.addEventListener('project.phase-changed', () => {
     if (ui.panel === 'agents' || ui.panel === 'overview') scheduleRender({ refetch: true });
+  });
+
+  // The incremental output frame: pre-normalized nodes for one agent, appended
+  // straight into its feed. Without this listener the server emits the frame and
+  // nothing receives it, so the panel falls back to refetching the whole
+  // live-state payload on every raw event -- the exact cost this frame exists to
+  // avoid.
+  sse.addEventListener('agent.output', (e) => {
+    if (e.lastEventId) ui.lastEventId = e.lastEventId;
+    let batch = null;
+    try { batch = JSON.parse(e.data); } catch (_) { return; }
+    const key = appendOutputBatch(batch, liveState.rows);
+    if (key && ui.panel === 'agents') scheduleRender({ refetch: false });
   });
 
   sse.onerror = () => {

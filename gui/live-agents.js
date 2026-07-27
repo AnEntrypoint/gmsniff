@@ -139,6 +139,31 @@ export function appendLiveEvent(ev, rows) {
   return key;
 }
 
+// Appends a server-sent `agent.output` batch. Its nodes already carry the
+// process-tree shape seedFeed uses, so they are pushed as-is rather than routed
+// through normalizeStreamEvent -- that maps RAW gm-log events, and re-mapping an
+// already-normalized node would drop every field it does not know.
+//
+// The batch is bounded by the feed's own last ts, so a Last-Event-ID replay that
+// re-delivers frames already appended cannot double-append them.
+export function appendOutputBatch(batch, rows) {
+  if (!batch || !batch.cwd || !Array.isArray(batch.nodes) || !batch.nodes.length) return null;
+  const match = (rows || []).find(r => r.cwd === batch.cwd);
+  if (!match) return null;
+  const key = agentKey(match);
+  const f = feeds.get(key);
+  if (!f || !f.seeded) return null;
+  const seen = lastEventTs(f);
+  let added = 0;
+  for (const node of batch.nodes) {
+    if (!node) continue;
+    if (seen && node.ts && node.ts <= seen) continue;
+    pushFeedRow(f, node);
+    added++;
+  }
+  return added ? key : null;
+}
+
 // Maps a raw gm-log event onto the same node shape the server's process-tree
 // emits, so a streamed row and a seeded row render through one formatter.
 //

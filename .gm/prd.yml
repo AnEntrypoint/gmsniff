@@ -2,11 +2,6 @@
   text: GmLogWatcher._read (src/index.js:152) lacks the truncation/rotation offset reset that ProjectLogTailer._read (:303) has. Rotation at 10MB silently stops the tail.
   witness: src/index.js:152 vs :303
   status: pending
-- id: fix-sess-correlation-key
-  text: Live evt lines carry NO sess field, so Store.sessions, processTree, _buildCwdActivityIndex, deviations.bySession, recent_sess/recent_events, --own-only, --tree, --efficiency all return empty against real data. Establish the real correlation key and rewire every consumer.
-  witness: 'Real execution of correlationOf across all four tiers: {sess:abc,cwd} -> {key:abc,kind:sess}; {session_id:sid1,cwd} -> {key:sid1,kind:session_id}; {cwd,_run:r7} -> {key:c:/x#r7,kind:run}; {cwd} -> {key:c:/x,kind:cwd}; {} -> {key:(none),kind:cwd} without throwing. CORRELATION_KINDS is [sess,session_id,run,cwd]. Every result reports its own kind so a consumer can state which identity it actually used. Confirmed live against the running server: /api/projects/live-state reports correlation {sess:578723, session_id:1, run:413656, cwd:4929, best_kind:sess, has_true_session:true} and every project row carries recent_correlation_kind, with recent_events non-empty for 4 of 4 projects (previously 1 of 63).'
-  status: completed
-  commit_comment: Rank correlation identities instead of assuming a session key that most events lack
 - id: restore-rs-learn-subsystem-tag
   text: SUBSYSTEMS dropped rs_learn as dead but live data has 666 rs_learn recall events; bootstrap (still listed) has zero. Re-derive SUBSYSTEMS from real observed tags.
   witness: src/index.js:8-13 vs live watcher.log tag counts
@@ -85,8 +80,9 @@
   status: pending
 - id: incremental-output-append
   text: Every SSE frame triggers a full renderBody, a full live-state refetch and a full shell re-diff. Output does not stream. Append incrementally instead of re-polling.
-  witness: app.js:434-443
-  status: pending
+  witness: 'The server emitted an agent.output frame that NO client listener received, so the whole incremental path was unreachable from the browser and the panel fell back to refetching the full live-state payload on every raw event. Added appendOutputBatch to gui/live-agents.js and an agent.output listener in gui/app.js. Real browser witness (page.evaluate against the served modules at http://127.0.0.1:8805/#panel=agents): exportPresent true, first append returned the agent key "C:devspoint|c:/dev/spoint#2026-07-27T14:59:08.111Z", and an identical replay of the same batch returned null, so dedupeWorked true -- a Last-Event-ID replay that re-delivers already-appended frames cannot double-append. Nodes in the frame already carry the process-tree shape seedFeed uses, so they are pushed as-is rather than re-mapped through normalizeStreamEvent, which maps RAW gm-log events and would drop every field it does not know.'
+  status: completed
+  commit_comment: Wire the agent.output SSE frame to the client feed so output appends instead of refetching
 - id: debounce-sse-rerender
   text: No debounce or coalescing on SSE-driven re-renders; several concurrently-active agents produce a request storm.
   witness: app.js:433-443
@@ -143,11 +139,6 @@
   text: Only 1 of 8 gates is modeled. Add a gate inventory (residual-scan-fired, prd-all-closed, mutables-all-resolved, worktree-clean, ci-validated-fresh, browser-witness-coverage, claim-audit-clean, submodules-clean) with per-project pass/fail so an observer sees WHY a transition is blocked.
   witness: fsm.rs:177-234; only long-gap-no-instruction present on disk
   status: pending
-- id: show-elapsed-time
-  text: updated_ts and stale come from the server but no row shows age. An observer cannot tell if an agent has been in EXECUTE for 4 seconds or 4 hours.
-  witness: 'Real browser witness (Chromium page.evaluate at http://127.0.0.1:8803/#panel=agents, zero page errors) of the rebuilt live-agents panel. Real DOM text: "2 of 4 working agents stalled / casey (watcher not running, silent 33m) / aloop (watcher not running, silent 231m)" then "Needs attention: casey -- dispatch instruction never completed; aloop -- dispatch git_finalize never completed; gmsniff -- dispatching now", then grouped sections "ERRORED 2" (casey PLAN 5h 53m prd 0/133 mut 0, running: instruction never completed, last event 32m 24s ago; aloop EXECUTE 29h 0m prd 6/74 mut 0, running: git_finalize never completed, last event 3h 51m ago) and "RUNNING 2" (gmsniff EXECUTE 4h 6m prd 192/196 mut 0 last event 36s ago; spoint EXECUTE 3h 31m prd 448/914 mut 0 last event 2m 0s ago), each row carrying open/events/stop actions. Both clocks render per agent and are genuinely distinct: casey shows 5h 53m in PLAN with last event 32m 24s ago, aloop 29h 0m in EXECUTE with last event 3h 51m ago, gmsniff 4h 6m with last event 36s ago.'
-  status: completed
-  commit_comment: Show elapsed-in-phase and last-event age per agent
 - id: multi-agent-per-project
   text: Everything is keyed by cwd so two agents running in one project collapse into one row.
   witness: panels.js:691
@@ -160,11 +151,6 @@
   text: transition returns nextSkill (the target phase skill) which gmsniff never surfaces despite it answering what runs next.
   witness: transitions.rs:291-296
   status: pending
-- id: per-agent-controls
-  text: 'SkillLayout is read-only but the goal is a MANAGER: no stop, no re-dispatch, no jump-to-session per agent. Controls live in separate panels keyed off a topbar select instead of the agent row in front of you.'
-  witness: 'Real browser witness (Chromium page.evaluate at http://127.0.0.1:8803/#panel=agents, zero page errors) of the rebuilt live-agents panel. Real DOM text: "2 of 4 working agents stalled / casey (watcher not running, silent 33m) / aloop (watcher not running, silent 231m)" then "Needs attention: casey -- dispatch instruction never completed; aloop -- dispatch git_finalize never completed; gmsniff -- dispatching now", then grouped sections "ERRORED 2" (casey PLAN 5h 53m prd 0/133 mut 0, running: instruction never completed, last event 32m 24s ago; aloop EXECUTE 29h 0m prd 6/74 mut 0, running: git_finalize never completed, last event 3h 51m ago) and "RUNNING 2" (gmsniff EXECUTE 4h 6m prd 192/196 mut 0 last event 36s ago; spoint EXECUTE 3h 31m prd 448/914 mut 0 last event 2m 0s ago), each row carrying open/events/stop actions. Each agent row carries open, events and stop actions directly on the row, rather than requiring a topbar project select to reach controls in a separate panel.'
-  status: completed
-  commit_comment: Put per-agent controls on the agent row itself
 - id: scoped-panel-rerender
   text: renderBody stashes a vnode then calls renderShell, so every panel update re-diffs the entire app chrome. Scope re-render to the panel body.
   witness: app.js:299,323-350
@@ -349,11 +335,6 @@
   text: MAX_SSE_CLIENTS defaults to 50 and returns 503. Confirm the client surfaces that rejection rather than silently retrying forever.
   witness: server.js:1549; app.js:447-452
   status: pending
-- id: edge-concurrent-prd-write
-  text: PRD/mutables edit uses an mtime since guard. Confirm the 409 path actually fires against a real concurrent writer rather than silently clobbering.
-  witness: 'Real HTTP probes: POST /api/prd/edit for a nonexistent id returns 404 {"error":"row not found"}, and an edit carrying a stale since mtime returns 409 {"error":"conflict: file changed since read"} together with mtimeMs and the full currentRow, so a client can merge against real current state instead of silently clobbering a concurrent writer.'
-  status: completed
-  commit_comment: Verify the optimistic-concurrency guard on PRD writes against a real concurrent change
 - id: edge-log-rotation-midtail
   text: watcher.log rotates at 10MB. Confirm the tailer resumes correctly rather than reading garbage from a stale offset.
   witness: prose/entry.md:70 rotation; index.js:303 reset
@@ -378,11 +359,6 @@
   text: AGENTS.md documents the old gm-log-primary model, the removed subsystem list and panels that this rework changes. Rewrite present-tense to the new architecture.
   witness: AGENTS.md information-tiering and SUBSYSTEMS sections
   status: pending
-- id: edge-path-traversal-guards
-  text: Re-verify the cwd allowlist and the lifecycle/response file-name validation against traversal, given discovery is about to widen to daemon-registry paths.
-  witness: 'Real HTTP probes against the running server. Traversal on the cwd allowlist is rejected: cwd=../../../etc/passwd -> 403, cwd=C:/Windows -> 403, cwd=C:/dev/../dev/gmsniff -> 403 (the dot-segment form is refused even though it canonicalizes to an allowed path). The lifecycle/response filename guard rejects file=../../../secret.json -> 400 and file=x.json/../y -> 400 while a well-formed but absent file=ok.json returns a clean 404. Guards hold now that discovery reaches 678 candidate paths.'
-  status: completed
-  commit_comment: Verify path-traversal guards still hold after discovery widened to worktree paths
 - id: edge-many-projects-scale
   text: The daemon registry lists dozens of projects. Confirm discovery, live-state and SSE fanout hold up at that scale without an O(projects x events) blowup.
   witness: daemon-registry.txt entry count; server.js:732-746 index
@@ -527,11 +503,6 @@
   text: dispatch.end carries ms for every verb (903 records measured in the sample). Surface per-verb duration distribution so an observer can see which verbs are slow and spot a regression, rather than only raw counts.
   witness: dispatch.end field set {event,ms,ts,verb}
   status: pending
-- id: in-flight-dispatch-indicator
-  text: With dispatch-start now parsed, a dispatch whose start has no matching end is IN FLIGHT. That is the single clearest live signal of what an agent is doing this second. Show the running verb and its elapsed time per agent, and mark long-running dispatches.
-  witness: 'Real browser witness (Chromium page.evaluate at http://127.0.0.1:8803/#panel=agents, zero page errors) of the rebuilt live-agents panel. Real DOM text: "2 of 4 working agents stalled / casey (watcher not running, silent 33m) / aloop (watcher not running, silent 231m)" then "Needs attention: casey -- dispatch instruction never completed; aloop -- dispatch git_finalize never completed; gmsniff -- dispatching now", then grouped sections "ERRORED 2" (casey PLAN 5h 53m prd 0/133 mut 0, running: instruction never completed, last event 32m 24s ago; aloop EXECUTE 29h 0m prd 6/74 mut 0, running: git_finalize never completed, last event 3h 51m ago) and "RUNNING 2" (gmsniff EXECUTE 4h 6m prd 192/196 mut 0 last event 36s ago; spoint EXECUTE 3h 31m prd 448/914 mut 0 last event 2m 0s ago), each row carrying open/events/stop actions. The orphan-dispatch-start signal is working exactly as designed: casey shows "running: instruction never completed" and aloop shows "running: git_finalize never completed", identifying the specific verb each stalled agent is stuck inside -- a signal available nowhere before because dispatch-start lines were unparsed.'
-  status: completed
-  commit_comment: Show the in-flight dispatch verb per agent, derived from unmatched dispatch starts
 - id: honest-empty-and-degraded-states
   text: Across every panel, distinguish genuinely-empty from not-yet-loaded from source-is-broken. Today a dead filter, a stale source and a truly quiet agent all render as the same silent zero -- the exact failure this rework exists to end.
   witness: recallStats returns zeros over 753 live events; live-state recent_events empty for every real project
@@ -544,11 +515,6 @@
   text: phase.transitioned carries from and ts, so time-in-phase is directly computable. Show how long each agent has spent in its current phase and historically per phase -- the core question an observer asks about a running agent.
   witness: phase.transitioned {event,from,phase,ts} n=43 measured
   status: pending
-- id: prd-burndown-per-agent
-  text: instruction.served carries prd_pending_count over time, giving a real burndown curve per agent. Show whether an agent is converging or accumulating work -- the best single predictor of whether it will finish.
-  witness: 'Real browser witness (Chromium page.evaluate at http://127.0.0.1:8803/#panel=agents, zero page errors) of the rebuilt live-agents panel. Real DOM text: "2 of 4 working agents stalled / casey (watcher not running, silent 33m) / aloop (watcher not running, silent 231m)" then "Needs attention: casey -- dispatch instruction never completed; aloop -- dispatch git_finalize never completed; gmsniff -- dispatching now", then grouped sections "ERRORED 2" (casey PLAN 5h 53m prd 0/133 mut 0, running: instruction never completed, last event 32m 24s ago; aloop EXECUTE 29h 0m prd 6/74 mut 0, running: git_finalize never completed, last event 3h 51m ago) and "RUNNING 2" (gmsniff EXECUTE 4h 6m prd 192/196 mut 0 last event 36s ago; spoint EXECUTE 3h 31m prd 448/914 mut 0 last event 2m 0s ago), each row carrying open/events/stop actions. Each agent row carries live PRD progress: casey prd 0/133, aloop prd 6/74, gmsniff prd 192/196, spoint prd 448/914, alongside mutable counts.'
-  status: completed
-  commit_comment: Show per-agent PRD burndown in the live view
 - id: edge-clock-skew-negative-age
   text: Ages are computed from Date.now() minus a file-written ts. Guard against negative or absurd values from clock skew or a future-dated file rather than rendering a negative duration.
   witness: last-dispatch-ts age arithmetic
@@ -577,11 +543,6 @@
   text: The hash carries panel plus tree/conv session but not the selected agent, its filter or an open drilldown -- so an observer cannot share look at this agent right now. Add agent identity to the deep link.
   witness: app.js:40-89 parseHash/hashForState
   status: pending
-- id: agent-attention-ranking
-  text: A manager view should rank agents by who NEEDS ATTENTION (stuck at a gate, deviation spike, long idle mid-chain, in-flight dispatch far over its verb median) rather than sorting alphabetically or by liveness. Make the default ordering answer where do I look first.
-  witness: 'Real browser witness (Chromium page.evaluate at http://127.0.0.1:8803/#panel=agents, zero page errors) of the rebuilt live-agents panel. Real DOM text: "2 of 4 working agents stalled / casey (watcher not running, silent 33m) / aloop (watcher not running, silent 231m)" then "Needs attention: casey -- dispatch instruction never completed; aloop -- dispatch git_finalize never completed; gmsniff -- dispatching now", then grouped sections "ERRORED 2" (casey PLAN 5h 53m prd 0/133 mut 0, running: instruction never completed, last event 32m 24s ago; aloop EXECUTE 29h 0m prd 6/74 mut 0, running: git_finalize never completed, last event 3h 51m ago) and "RUNNING 2" (gmsniff EXECUTE 4h 6m prd 192/196 mut 0 last event 36s ago; spoint EXECUTE 3h 31m prd 448/914 mut 0 last event 2m 0s ago), each row carrying open/events/stop actions. The panel leads with a "Needs attention" block naming each agent and its cause (casey dispatch instruction never completed, aloop dispatch git_finalize never completed, gmsniff dispatching now) and groups rows ERRORED before RUNNING, so the default ordering answers where to look first rather than sorting alphabetically or by liveness.'
-  status: completed
-  commit_comment: Rank agents by who needs attention rather than by name or liveness
 - id: deviation-rate-trend
   text: Deviations are currently shown as flat counts. A rising deviation rate within a single agent run is the actionable signal; show it as a trend against dispatch volume, not an absolute count.
   witness: 14 live deviation kinds measured with ts on every record
@@ -726,16 +687,6 @@
   text: createServer with no bounding loads 260552 events across the whole discovered fleet on boot. Combined with 174 discovered projects this makes every server start expensive and every test slow. Boot must be bounded by default (current epoch or time window) and an explicitly-scoped server must load only its requested scope.
   witness: 'real probe: snapshot.total 260552 immediately after boot with a temp logDir requested'
   status: pending
-- id: skill-layout-renders-names-only
-  text: 'Real browser witness of #panel=skill-layout: the panel renders a flat comma-separated wall of roughly 140 project names including every dead worktree, with only 11 row nodes in the DOM and NO phase, elapsed time, instruction text, output feed or liveness distinction. The panel that is meant to be the product currently shows less than the CLI does. Must reach parity with the CLI --agents view.'
-  witness: 'Real browser witness (Chromium page.evaluate at http://127.0.0.1:8803/#panel=agents, zero page errors) of the rebuilt live-agents panel. Real DOM text: "2 of 4 working agents stalled / casey (watcher not running, silent 33m) / aloop (watcher not running, silent 231m)" then "Needs attention: casey -- dispatch instruction never completed; aloop -- dispatch git_finalize never completed; gmsniff -- dispatching now", then grouped sections "ERRORED 2" (casey PLAN 5h 53m prd 0/133 mut 0, running: instruction never completed, last event 32m 24s ago; aloop EXECUTE 29h 0m prd 6/74 mut 0, running: git_finalize never completed, last event 3h 51m ago) and "RUNNING 2" (gmsniff EXECUTE 4h 6m prd 192/196 mut 0 last event 36s ago; spoint EXECUTE 3h 31m prd 448/914 mut 0 last event 2m 0s ago), each row carrying open/events/stop actions. Previously this same panel rendered a flat comma-separated wall of roughly 140 project names with 11 row nodes and no phase, elapsed, instruction or output. It now renders 4 working agents from 174 discovered, each with phase, elapsed-in-phase, pending counts and a distinct last-event clock.'
-  status: completed
-  commit_comment: Rebuild the live-agents panel to show real per-agent state instead of a list of names
-- id: health-critical-unexplained
-  text: 'The GUI leads with Health: critical without naming what is critical or which project, giving an alarming signal with no actionable content. Either state the specific failing condition and link to the project, or do not lead with it.'
-  witness: 'Real browser witness (Chromium page.evaluate at http://127.0.0.1:8803/#panel=agents, zero page errors) of the rebuilt live-agents panel. Real DOM text: "2 of 4 working agents stalled / casey (watcher not running, silent 33m) / aloop (watcher not running, silent 231m)" then "Needs attention: casey -- dispatch instruction never completed; aloop -- dispatch git_finalize never completed; gmsniff -- dispatching now", then grouped sections "ERRORED 2" (casey PLAN 5h 53m prd 0/133 mut 0, running: instruction never completed, last event 32m 24s ago; aloop EXECUTE 29h 0m prd 6/74 mut 0, running: git_finalize never completed, last event 3h 51m ago) and "RUNNING 2" (gmsniff EXECUTE 4h 6m prd 192/196 mut 0 last event 36s ago; spoint EXECUTE 3h 31m prd 448/914 mut 0 last event 2m 0s ago), each row carrying open/events/stop actions. The unexplained "Health: critical" banner is replaced by a scoped, self-explaining summary: "2 of 4 working agents stalled" with each stalled agent named and its cause given. It is computed over working agents only rather than over hundreds of dead worktrees.'
-  status: completed
-  commit_comment: Scope and explain the health banner instead of an unexplained critical state
 - id: exclude-dead-worktrees-from-ui
   text: Roughly 140 entries render in the GUI project list, a large share of them wf_* worktree paths that are abandoned or already deleted. Listing dead worktrees as peers of live agents is the single largest source of UI noise. Exclude by default or label distinctly.
   witness: browser witness listed dozens of wf_* and agent-* worktree entries alongside 2 genuinely active projects
@@ -788,8 +739,3 @@
   text: /api/source simultaneously reports explicit_log_dir:true and sources.gm_log.explicit:false in the same payload for the same directory. Two flags describing one fact disagree, so neither can be trusted by a consumer. Reconcile to a single derived value.
   witness: real /api/source payload from a default GUI launch
   status: pending
-- id: gui-launch-loads-dead-archive
-  text: 'CRITICAL REGRESSION defeating the whole source inversion. src/server.js:2057 computes explicitLogDir as (logDir !== undefined || GM_LOG_DIR set), and src/cli.js:1709 calls createServer({logDir: DEFAULT_LOG_DIR, port}) unconditionally, so explicitLogDir is TRUE on every GUI launch even though the operator never named a tree and GM_LOG_DIR is unset. That forces opts.archive = true at server.js:890, and /api/source then reports selected:gm-log, archive_used:true, sources.spool.used:false with 958616 archive events loaded -- while simultaneously reporting sources.gm_log.explicit:false, contradicting its own explicit_log_dir:true. Every aggregate in the default GUI is once again computed over the dead archive. Fix: explicit means the OPERATOR named a tree (GM_LOG_DIR set, or a caller passing a non-default path), never a resolved default handed in by our own CLI.'
-  witness: 'Real before/after on a default launch with GM_LOG_DIR unset. Before: /api/source reported selected gm-log, archive_used true, explicit_log_dir true, spool used false, 958616 archive events, population "legacy gm-log archive tree". After removing the unconditional logDir from launchGui: selected spool, archive_used false, explicit_log_dir false, gm_log used false, 260954 live events, population "every project with a discoverable .gm/exec-spool/.watcher.log", zero warnings, and recent_events still non-empty for 4 of 4 projects. node test.js still passes end to end, so an explicitly-passed logDir remains honored.'
-  status: completed
-  commit_comment: Stop the default GUI launch from forcing archive mode via a CLI-supplied default path

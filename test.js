@@ -444,6 +444,94 @@ assert(schemaOut.subcommands.every(s => typeof s.tier === 'string'), 'schema sub
   assert.strictEqual(cov.has_true_session, false, 'correlation does not claim session fidelity it lacks');
   assert.strictEqual(cov.counts.sess, 0, 'no synthetic sess key is minted');
   assert.strictEqual(corr.correlationOf({ sess: 'real-sess' }).kind, 'sess', 'a real sess field still wins when present');
+  // The session_id tier is gone because it could never match: gm's emit_event writes only
+  // event/sess/ts onto an event, and session_id lives in .gm/turn-state.json (project state).
+  assert.deepStrictEqual(corr.CORRELATION_KINDS, ['sess', 'run', 'cwd'], 'no rank tier that structurally cannot match');
+  assert.strictEqual(corr.correlationOf({ session_id: 'x', cwd: 'C:/p', _run: 'r' }).kind, 'run',
+    'an event carrying session_id is still grouped by run -- session_id is not an event field');
+  assert.strictEqual(cov.dominant_kind, 'run', 'coverage reports what the grouping is actually worth, not its rarest strong id');
+
+  // A second crafted log covering the parse classes added for the real shapes measured live:
+  // both dispatch arrow generations, the supervisor spawn banner, ANSI-wrapped runtime lines,
+  // update/stale-sweep/turn-state-failure/process-error lines, and the malformed-verb bug.
+  const ESC = String.fromCharCode(27);
+  const BS = String.fromCharCode(92);
+  const p2Proj = path.join(parseRoot, 'proj2');
+  fs.mkdirSync(path.join(p2Proj, '.gm', 'exec-spool'), { recursive: true });
+  const p2Log = path.join(p2Proj, '.gm', 'exec-spool', '.watcher.log');
+  fs.writeFileSync(p2Log, [
+    '--- supervisor spawn 2026-07-27T11:00:00.000Z parent=555 ---',
+    `evt: ${JSON.stringify({ ts: 1785160000000, event: 'instruction.served' })}`,
+    '[dispatch] \u2192 verb=codesearch task=3 body=31b',
+    '[dispatch] \u2190 verb=codesearch task=3 ms=122 out=44b',
+    '[dispatch] -> verb=instruction task=4 body=2b',
+    '[dispatch] <- verb=instruction task=4 ms=26 out=4221b',
+    '[dispatch] -> verb=browser task=9 body=10b',
+    `[dispatch] \u2192 verb=prd-resolve${BS}.gm${BS}exec-spool task=.status body=222b`,
+    `[plugkit-wasm] error processing prd-resolve${BS}.gm${BS}exec-spool${BS}.status.json: ENOENT: no such file`,
+    '[update] available: installed=2.0.1 latest=2.0.9',
+    '[stale-sweep] auto-failed prd-resolve.json (age=90000ms)',
+    'turn-state.json parse failed (missing field `phase` at line 1 column 2): backed up',
+    '[retention] failed to sweep browser: EPERM: operation not permitted',
+    `${ESC}[36m[plugkit-wasm:warn] recall::recall_hits start query_len=12${ESC}[0m`,
+    '(node:1234) [DEP0190] DeprecationWarning: Passing args to a child process',
+    '    at file:///C:/Users/user/.gm-tools/plugkit-wasm-wrapper.js:1:1',
+    '',
+  ].join('\n'));
+
+  const rep2 = wl.replayWatcherLogWithStats(p2Log, p2Proj, 'v1');
+  const ev2 = rep2.events;
+  const dStarts = ev2.filter(e => e.event === 'dispatch.start');
+  assert.strictEqual(dStarts.length, 4, 'both ASCII and Unicode dispatch arrows are parsed');
+  assert(dStarts.some(e => e.verb === 'codesearch' && e.body_bytes === 31), 'Unicode-arrow dispatch keeps its fields');
+  const dEnds = ev2.filter(e => e.event === 'dispatch.end' && e._origin === 'line');
+  assert(dEnds.some(e => e.verb === 'codesearch' && e.ms === 122 && e.out_bytes === 44),
+    'Unicode-arrow close carries both duration and response size');
+  const byEvent2 = Object.fromEntries(ev2.map(e => [e.event, e]));
+  assert.strictEqual(byEvent2['supervisor.spawn'].parent_pid, 555, 'supervisor spawn banner modeled');
+  assert.strictEqual(byEvent2['update.available'].latest, '2.0.9', 'update banner carries installed+latest');
+  assert.strictEqual(byEvent2['spool.stale-swept'].age_ms, 90000, 'stale-sweep auto-fail modeled');
+  assert(byEvent2['turn-state.parse-failed'], 'turn-state deserialize failure modeled');
+  assert(byEvent2['retention.failed'], 'a failed sweep is modeled distinctly from a successful one');
+  assert(byEvent2['spool.process-error'], 'unprocessable spool request modeled');
+  assert.strictEqual(rep2.stats.unmodeled_ratio, 0, 'every crafted line matched a known shape');
+  assert(rep2.stats.hostnoise_lines >= 2, 'node host chatter is classified, not left unmodeled');
+  assert(rep2.stats.runtime_lines >= 1, 'an ANSI-wrapped runtime line is still recognized as runtime');
+  assert(rep2.stats.ignored < rep2.stats.modeled, 'ignored lines are reported apart from real signal');
+
+  // Dispatch pairing: by task id, with in-flight starts and the upstream malformed-verb bug
+  // reported as separate, non-overlapping counts.
+  const pairing = rep2.dispatch;
+  assert.strictEqual(pairing.paired, 2, 'starts pair to their ends by task id');
+  assert.strictEqual(pairing.orphan_starts, 1, 'a start with no end is reported as in-flight');
+  assert.strictEqual(pairing.malformed_verb_starts, 1, 'a path-shaped verb is excluded from pairing, counted separately');
+  const cs = pairing.pairs.find(p => p.verb === 'codesearch');
+  assert.deepStrictEqual([cs.ms, cs.body_bytes, cs.out_bytes], [122, 31, 44], 'a pair carries duration, request and response size');
+  const verbStats = wl.dispatchVerbStats(pairing);
+  assert(verbStats.some(v => v.verb === 'instruction' && v.out_bytes === 4221), 'per-verb response size aggregated');
+
+  // Untimed head-region events: lines before the file's first evt record have no ts to inherit.
+  const p3Proj = path.join(parseRoot, 'proj3');
+  fs.mkdirSync(path.join(p3Proj, '.gm', 'exec-spool'), { recursive: true });
+  const p3Log = path.join(p3Proj, '.gm', 'exec-spool', '.watcher.log');
+  fs.writeFileSync(p3Log, [
+    '[dispatch] -> verb=recall task=1 body=40b',
+    '[retention] swept 2 out/ files older than 1h',
+    `evt: ${JSON.stringify({ ts: 1785170000000, event: 'instruction.served' })}`,
+    '',
+  ].join('\n'));
+  const rep3 = wl.replayWatcherLogWithStats(p3Log, p3Proj, 'v1');
+  assert.strictEqual(rep3.events.filter(e => !e.ts).length, 0, 'no event is left without a ts');
+  const backfilled = rep3.events.filter(e => e._ts_source === 'backfill');
+  assert.strictEqual(backfilled.length, 2, 'head-region events are backfilled from the first following ts');
+  assert(backfilled.every(e => e._untimed === true), 'a backfilled ts is still flagged as not upstream-supplied');
+  const expectDay = new Date(1785170000000).toISOString().slice(0, 10);
+  assert(backfilled.every(e => e._day === expectDay), 'backfilled events get a real day bucket');
+  const st3 = idx.sourceStaleness(rep3.events);
+  assert.strictEqual(st3.untimed, 0, 'staleness reports how many events no time view can see');
+  // A missing argument is a programming error, not evidence that the source is stale.
+  assert.throws(() => idx.sourceStaleness(), /requires an events array/, 'sourceStaleness cannot invent a stale verdict from no input');
+  assert.strictEqual(idx.sourceStaleness([]).stale, true, 'a genuinely empty set is still honestly stale');
 
   // Source priority: spool is read even though a non-empty gm-log dir exists.
   const legacyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gmsniff-legacy-'));
