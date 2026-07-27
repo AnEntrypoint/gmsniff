@@ -6,11 +6,6 @@
   text: Every panel keeps module-level mutable globals in panels.js (20+ separate state objects), making panels un-instantiable singletons. Introduce a per-panel state registry.
   witness: panels.js:166-189,342,367,392,419,463,567,819,908,1027,1068,1216,1270,252,329
   status: pending
-- id: update-agents-md
-  text: AGENTS.md documents the old gm-log-primary model, the removed subsystem list and panels that this rework changes. Rewrite present-tense to the new architecture.
-  witness: AGENTS.md now carries 16 present-tense invariant sections describing the current model -- spool-primary with archive opt-in, the three meanings of liveness, ranked correlation, the FSM re-plan edges, zero dependencies, the offline GUI, comment discipline, report-measurements-never-a-verdict -- plus the traps each was learned from, including the CRLF parse defect found today.
-  status: completed
-  commit_comment: Bring AGENTS.md up to the current model with the traps behind each rule
 - id: notify-on-state-change
   text: An observer cannot watch continuously. Provide an opt-in signal (visual pulse, title-bar count, optional sound) for phase transitions, deviations and gate denials so the manager is useful while unattended.
   witness: no notification surface exists in gui/app.js today
@@ -19,35 +14,10 @@
   text: Upstream anentrypoint-design lint-tokens-json reports a shadow mismatch that appears to be a CRLF/whitespace comparison artifact -- the two strings render identically. Fix the comparison to normalize line endings so the lint is not permanently red for a non-issue.
   witness: design-system agent diagnosed it as CRLF artifact reproducing on pristine tree
   status: pending
-- id: adopt-sessioncard-phase-strip
-  text: Upstream SessionCard gained an optional lifecycle strip driven by session.phases/phase/phasesSeen/phaseGaps via PhaseWalk, with phasesSeen as an authoritative VISITED SET rather than index math -- correctly modeling gm re-plan edges where EXECUTE->PLAN must not render as a regression. gmsniff must feed phasesSeen from real transition history rather than a current-phase index.
-  witness: phasesSeen is built from real transition history (8 references in gui/live-agents.js) rather than from index math, so gm legal gate-free re-plan edges render as revisits rather than regressions -- the distinction the upstream component was changed to support.
-  status: completed
-  commit_comment: Drive the phase strip from a visited set rather than index math
 - id: publish-workflow-guards
   text: Pushing to main auto-bumps the patch version and publishes to npm. With this much changing at once, confirm the workflow still passes and that a broken build cannot publish -- ideally the single root test must gate the publish.
   witness: .github/workflows/publish-npm.yml auto-bump-and-publish on push to main
   status: pending
-- id: stale-worktree-pruning
-  text: 174 projects are now discovered, 99 of them worktree-hosted, while only 2 are genuinely active. Listing all 174 is unusable. Prune or age-filter stale worktree projects by default, since a deleted worktree leaves a discoverable but dead directory.
-  witness: 'The live view foregrounds working agents and states its hidden count rather than listing all 161 discovered projects, of which 99 are worktree-hosted and mostly abandoned. Nothing is silently dropped: the count and the criterion are always printed.'
-  status: completed
-  commit_comment: Fold away the stale worktree majority while stating the count
-- id: prd-status-vocabulary-untested
-  text: 'All 123 gmsniff PRD rows read status: pending and no row uses done/complete/completed, so closed-status detection has never been exercised against a real closed row. Verify the policy-driven closed-status logic against genuinely closed rows, from another project or by closing one here.'
-  witness: 'FOUND A REAL DEFECT WHILE TESTING THIS, then fixed it. Investigating why the live store showed no closed rows revealed that readPrd returned 0 rows for this repos own 15-row prd.yml: gm writes the file with the hosts line endings, so on Windows it is CRLF, and parseYamlRows split on newline leaving a trailing carriage return that broke every regex end anchor. A CRLF fixture parsed to 0 rows where the identical LF fixture parsed to 1. Fixed by stripping the carriage return for matching only, keeping row offsets against the original lines so byte-for-byte rewrite still holds -- verified on a two-row CRLF fixture. readPrd now returns all 15 real rows and the closed-status policy resolves [done, complete, completed]. The vocabulary itself was exercised repeatedly this session: 11 commits closed roughly 170 rows through the real resolve path.'
-  status: completed
-  commit_comment: Parse CRLF stores, which read as zero rows on Windows
-- id: dispatch-start-end-imbalance
-  text: Real counts are dispatch.start 51203 versus dispatch.end 53948 -- 2745 MORE ends than starts. Ends outnumbering starts means the pairing cannot assume a matching start, so in-flight detection must handle an orphan end (a start scrolled past the bounded replay window, or a start line shape not yet parsed) without miscounting or crashing.
-  witness: 'Re-measured on the current parser: 63,058 dispatch.start against 59,973 dispatch.end, so starts exceed ends -- the expected in-flight shape. The original reading that ends outnumbered starts compared text-derived starts against separate evt-record ends, two different populations, and malformed-verb starts are now excluded from pairing and counted separately.'
-  status: completed
-  commit_comment: Correct the dispatch-imbalance measurement and its diagnosis
-- id: surface-nextstep-vs-turnstate-divergence
-  text: 'The CLI drilldown detected and reported a real inconsistency on C:/dev/spoint: next-step.md still shows PLAN while turn-state.json has moved to EXECUTE, meaning the served prose on disk lags the actual FSM state. This divergence is a genuine observable condition and should be surfaced everywhere phase is shown, including the GUI, rather than silently preferring one source. It also validates reading turn-state.json as primary with next-step.md as the prose fallback.'
-  witness: phase_divergence is reported by src/server.js and consumed in gui/live-agents.js, so the real case observed on C:/dev/spoint -- next-step.md still reading PLAN while turn-state.json had moved to EXECUTE -- is surfaced as an observable condition with both sources shown, rather than silently resolved in favour of one.
-  status: completed
-  commit_comment: Surface the divergence between served prose and authoritative phase
 - id: skill-lags-phase-in-turn-state
   text: Real drilldown on C:/dev/casey shows phase PLAN with skill update-docs -- update-docs is the COMPLETE-phase skill, so last_skill lags the current phase rather than describing it. turn-state.json last_skill records the skill that ran most recently, NOT the skill for the current phase. Label it accordingly in every surface (last skill, not current skill) or derive the current-phase skill from the FSM graph instead, otherwise it reads as a contradiction.
   witness: 'real run of node src/cli.js --agents --agent casey: phase PLAN for 5h22m with skill update-docs'
@@ -60,8 +30,3 @@
   text: 'test.js pins /api/project-signals against ever attaching a severity, but NO test covers the GUI side -- and that asymmetry is exactly how a ten-term attention score and a row-dropping filter survived client-side while the server was locked down. The server is guarded by assertions; the client is guarded only by whoever happens to look. Closing it needs a DOM, which the zero-dependency no-test-framework constraint makes non-trivial, so the design question is real: either assert against the served module exports without a DOM, or accept that the browser witness is the only client guard and make that explicit rather than implicit.'
   witness: server agent added the project-signals no-severity assertion; the same class of defect then appeared unguarded in gui/app.js and gui/live-agents.js
   status: pending
-- id: rotation-detected-only-by-shrink
-  text: 'ProjectLogTailer detects rotation by stat.size < offset, so it recovers only when the replacement file is STRICTLY SMALLER. Real probe: rewriting a 110-byte log with 77 bytes correctly picked up the new event, but rewriting a log with same-or-greater size left stat.size >= offset, the reset never fired, and the new content was silently missed -- the tailer kept reading from a stale offset into unrelated bytes. Size is the wrong rotation signal: use the file identity (inode/ino on posix, or a birthtime/ino pair) or compare a leading-bytes fingerprint, so a rotation that happens to produce an equal-or-larger file is still detected.'
-  witness: 'Fixed and witnessed earlier this session: rotation is now detected by file identity (inode) rather than by the file shrinking, since stat.size < offset only fires when the replacement is strictly smaller. Re-witnessed with a real unlink-then-recreate rotation, which the tailer now recovers where it previously reported only the pre-rotation event.'
-  status: completed
-  commit_comment: Detect rotation by file identity rather than by shrinkage
