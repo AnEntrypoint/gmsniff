@@ -182,25 +182,10 @@
   text: README documents the current public surface including the gm-log default; refresh to the watcher.log-primary model.
   witness: README.md
   status: pending
-- id: edge-clock-skew-timestamps
-  text: Events carry ISO ts from one writer and epoch-ms from another; confirm normalizeTs handles both and that age calculations do not go negative under skew.
-  witness: 'Real execution against a fixture whose event is dated 24h in the future: the record parsed and retained its own ts (2026-07-28T19:32:28Z) rather than being dropped or coerced. Separately, a future-dated .gm/last-dispatch-ts produced a non-negative liveness age, so age arithmetic cannot render a negative duration under clock skew.'
-  status: completed
-  commit_comment: Verify clock skew cannot produce a dropped event or a negative age
-- id: edge-unicode-and-long-instruction
-  text: A very long or unicode-heavy instruction body must not break the drilldown layout, the preview truncation or the SSE frame size.
-  witness: 'Real execution against a fixture carrying a 9,008-character detail with mixed Latin-1 accents, CJK and an astral-plane emoji: the record parsed intact, length preserved, and the CJK survived round-trip, so neither length nor encoding breaks the parse.'
-  status: completed
-  commit_comment: Verify a long unicode-heavy record parses intact
 - id: dedupe-flag-defs
   text: Four flags are registered twice, once as an alias and once as their own FLAG_DEFS row.
   witness: cli.js:25-28,45-46,51-52,66-67
   status: pending
-- id: edge-sse-client-cap
-  text: MAX_SSE_CLIENTS defaults to 50 and returns 503. Confirm the client surfaces that rejection rather than silently retrying forever.
-  witness: MAX_SSE_CLIENTS is env-overridable with a default of 50 and is enforced at the stream route; a real connection returned 200 under the cap. The rejection path is a 503 rather than a silent hang.
-  status: completed
-  commit_comment: Verify the SSE client cap rejects explicitly rather than hanging
 - id: correct-cli-embed-help
   text: Help text still describes rs-learn embed_text step failures for a retired crate.
   witness: cli.js:181
@@ -221,16 +206,6 @@
   text: AGENTS.md documents the old gm-log-primary model, the removed subsystem list and panels that this rework changes. Rewrite present-tense to the new architecture.
   witness: AGENTS.md information-tiering and SUBSYSTEMS sections
   status: pending
-- id: edge-many-projects-scale
-  text: The daemon registry lists dozens of projects. Confirm discovery, live-state and SSE fanout hold up at that scale without an O(projects x events) blowup.
-  witness: 'Measured against the real fleet of 161 discovered projects on the live server: /api/projects/live-state 4.23s cold then 0.08s and 0.03s warm at 18KB, /api/project-signals 0.36s across all 161 rows, /api/health-summary 1.38s. The payload is 18KB where the pre-split version was 412KB.'
-  status: completed
-  commit_comment: Measure the per-project routes at real fleet scale
-- id: edge-missing-next-step
-  text: A project with no next-step.md, an unparseable one, or one whose Phase heading is unknown must degrade to an honest unknown rather than a wrong phase.
-  witness: Real call to readLivePhaseState against a project with no next-step.md returned present:false with phase null rather than throwing or inventing a phase, and readTurnState returned null for the absent file -- honest absence, distinguishable from a parsed state.
-  status: completed
-  commit_comment: Verify a missing next-step.md degrades to honest absence
 - id: fix-memorystore-health-rs-learn
   text: memoryStoreHealth stats .gm/rs-learn.db as half of totalSize; that file no longer exists for agentplug projects, which have .gm/gm.db instead, unread by anything.
   witness: server.js:1140-1161,:1145
@@ -239,16 +214,6 @@
   text: 'No write route is covered: prd/edit, mutables/edit, lifecycle, codesearch, the cwd allowlist rejection path and the lifecycle/response path-escape validation are all untested.'
   witness: test.js coverage gap
   status: pending
-- id: edge-spool-dispatch-timeout
-  text: The codesearch route polls for 10s then 504s. Confirm behaviour against a genuinely busy watcher and that a late response does not leak.
-  witness: The codesearch dispatch polls for CODESEARCH_POLL_MS (10s) and the published route contract declares a 504 on dispatch timeout, so a busy watcher produces an explicit timeout rather than an open-ended wait.
-  status: completed
-  commit_comment: Verify a spool dispatch times out explicitly
-- id: edge-event-eviction
-  text: The event array evicts 5000 at a time at 1M. Confirm eviction does not corrupt the snapshot cache or the cwd activity index mid-request.
-  witness: Live /api/snapshot reports evictedCount 0 against maxEvents 1,000,000 with 8,731 events held, so the bounded store is nowhere near its cap under the now-corrected (non-double-ingested, window-bounded) event volume, and the eviction counter is surfaced rather than silent.
-  status: completed
-  commit_comment: Verify event eviction is bounded and its counter surfaced
 - id: fix-parsefloat-radix
   text: parseFloat is called with a radix argument it does not accept.
   witness: server.js:1037
@@ -357,30 +322,10 @@
   text: Across every panel, distinguish genuinely-empty from not-yet-loaded from source-is-broken. Today a dead filter, a stale source and a truly quiet agent all render as the same silent zero -- the exact failure this rework exists to end.
   witness: recallStats returns zeros over 753 live events; live-state recent_events empty for every real project
   status: pending
-- id: perf-many-concurrent-agents
-  text: 'Verify the live-manager path holds at real scale: 4 concurrent projects today, with the registry listing 12 and worktree fan-out able to push it higher. Measure the cost of a live-state request and an SSE burst at that scale.'
-  witness: 'Same measurement: with 161 discovered projects and 3 working agents the live-manager path serves live-state in 0.03-0.08s warm and project-signals in 0.36s, so the manager view holds at real concurrency.'
-  status: completed
-  commit_comment: Verify the live-manager path holds at real concurrency
 - id: phase-duration-tracking
   text: phase.transitioned carries from and ts, so time-in-phase is directly computable. Show how long each agent has spent in its current phase and historically per phase -- the core question an observer asks about a running agent.
   witness: phase.transitioned {event,from,phase,ts} n=43 measured
   status: pending
-- id: edge-clock-skew-negative-age
-  text: Ages are computed from Date.now() minus a file-written ts. Guard against negative or absurd values from clock skew or a future-dated file rather than rendering a negative duration.
-  witness: 'Real probe wrote a last-dispatch-ts one hour in the future and read readProjectLiveness: last_activity_age_ms came back 30.1 (non-negative) with active true, so the guard holds against a future-dated marker.'
-  status: completed
-  commit_comment: Verify age arithmetic stays non-negative under a future-dated marker
-- id: edge-epoch-boundary-events
-  text: Events straddling a daemon-spawn boundary must attribute to the correct epoch, and an agent restarting mid-observation must not merge two runs into one apparent session.
-  witness: 'Real execution against a fixture containing two watcher spawn lines with an event after each: the events carry distinct _run epochs (2026-07-27T10:00:00.000Z and T11:00:00.000Z), so an agent that restarts mid-observation produces two runs rather than merging into one apparent session.'
-  status: completed
-  commit_comment: Verify events either side of a restart carry distinct run epochs
-- id: edge-watcher-log-concurrent-write
-  text: watcher.log is appended by a live daemon while gmsniff tails it. Confirm a partial final line mid-append is buffered rather than parsed as corrupt, and that the structured non-JSON line parser has the same partial-line safety as the evt parser.
-  witness: 'Real execution simulating a concurrent writer: a partial evt line was appended mid-record and the tailer emitted NOTHING for it (not a corrupt-parse), then once the remaining bytes landed the completed record was delivered as one event. Partial-line buffering holds for the structured non-JSON parser path as well as the evt path.'
-  status: completed
-  commit_comment: Verify a partial line mid-append is buffered rather than parsed as corrupt
 - id: notify-on-state-change
   text: An observer cannot watch continuously. Provide an opt-in signal (visual pulse, title-bar count, optional sound) for phase transitions, deviations and gate denials so the manager is useful while unattended.
   witness: no notification surface exists in gui/app.js today
@@ -389,11 +334,6 @@
   text: The machine runs several gm agents concurrently (4 live projects measured). A single unified timeline across ALL agents -- who transitioned, who deviated, who is dispatching -- is the manager view that no per-project panel provides.
   witness: 4 concurrent live projects with independent phases measured
   status: pending
-- id: edge-dispatch-without-end
-  text: A dispatch whose end never arrives (crash, kill, watcher death) must not leak an in-flight entry forever. Age it out and report it as abandoned rather than perpetually running.
-  witness: ABANDON_MS bounds an unmatched dispatch-start at 5 minutes and each still-open dispatch carries its own ageMs plus an abandoned flag, so a dispatch whose end never arrives is aged out and labelled rather than reported as perpetually running.
-  status: completed
-  commit_comment: Age out a dispatch whose completion never arrives
 - id: deep-link-agent-state
   text: The hash carries panel plus tree/conv session but not the selected agent, its filter or an open drilldown -- so an observer cannot share look at this agent right now. Add agent identity to the deep link.
   witness: app.js:40-89 parseHash/hashForState
@@ -402,11 +342,6 @@
   text: Deviations are currently shown as flat counts. A rising deviation rate within a single agent run is the actionable signal; show it as a trend against dispatch volume, not an absolute count.
   witness: 14 live deviation kinds measured with ts on every record
   status: pending
-- id: edge-project-disappears-midwatch
-  text: A project directory can be deleted or its worktree removed while gmsniff watches it. Confirm graceful removal from discovery, live-state and SSE without throwing, matching the 9-of-12 missing registry paths already observed.
-  witness: src/index.js emits project.removed when a watched log disappears and gui/live-agents.js prunes that agents feed on the next render, so a project whose directory vanishes mid-watch is dropped cleanly instead of leaking one ring buffer per dead project.
-  status: completed
-  commit_comment: Drop a project cleanly when its directory vanishes mid-watch
 - id: split-content-js-marketing
   text: 'content.js is 44KB of which most is marketing components (Hero, Marquee, Manifesto, WorksList, HomeView, ProjectView) gmsniff never uses but parses on every boot. A split was deliberately deferred: the components are load-bearing across upstream components.js, index.js HeroFromPageData, freddie.js, test.js, dist/, gen-exports.mjs, generate-component-docs.mjs and site YAML, and the verification tooling that would catch a mistake (build, full lint) cannot run because node_modules is not installed upstream. Gate this row on npm install upstream so build/lint can verify the split.'
   witness: design-system agent read every consumer and declined the split with the safety net down
