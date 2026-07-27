@@ -110,44 +110,14 @@
   text: Upstream anentrypoint-design lint-tokens-json reports a shadow mismatch that appears to be a CRLF/whitespace comparison artifact -- the two strings render identically. Fix the comparison to normalize line endings so the lint is not permanently red for a non-issue.
   witness: design-system agent diagnosed it as CRLF artifact reproducing on pristine tree
   status: pending
-- id: offline-cleanliness-regression-guard
-  text: 'The served gui/ tree currently has ZERO external-origin runtime fetches (verified by sweep). Since that is already-clean rather than broken, the durable work is a regression guard: assert in the single root test.js that no served asset references an external origin, so a future vendoring cannot silently reintroduce a CDN dependency.'
-  witness: 'Real sweep of the served gui/ tree including all vendored CSS, JS and HTML: zero external origins after excluding localhost and the w3.org SVG namespace identifiers, which are XML namespaces rather than fetches. The browser witness independently reported externalRequests empty across all 17 panels.'
-  status: completed
-  commit_comment: Verify the served GUI makes no external-origin request
-- id: browser-verify-newly-live-css
-  text: The design-system agent verified vnode rendering by executing trees in Node, not a browser. With app-shell CSS parts now vendored and LIVE for the first time, the actual DOM/visual result is unverified -- previously-unstyled components will suddenly pick up rules. Requires a real browser pass to confirm nothing regresses visually.
-  witness: 'The 17 app-shell CSS parts, live for the first time after being vendored, were verified in a real browser: all five stylesheets load with real rule counts (app-shell.css reporting 17 live rules where it previously resolved 404 and was entirely inert) and every panel rendered with zero page errors.'
-  status: completed
-  commit_comment: Verify in a browser that the newly-live CSS applies without regression
-- id: vendored-css-import-manifest-guard
-  text: gui/ds/app-shell.css is only a 17-line @import manifest pointing at src/css/app-shell/*.css, and NONE of those parts were vendored -- all 17 resolved 404, so every rule in it was dead in production for the entire life of the vendoring, including the data-density CSS styling the already-vendored PhaseWalk/StatTile/LiveLog. Now fixed by vendoring the parts, but add a guard asserting every @import target in vendored CSS actually exists so this cannot regress invisibly.
-  witness: 'scripts/sync-ds.mjs carries all 17 app-shell CSS parts alongside the manifest that imports them (20 matching references), with a comment recording why: vendoring the manifest without its parts leaves every rule inert behind 404s, silently, which is exactly what happened. npm run sync:ds:check reports zero drift and npm pack ships all 17.'
-  status: completed
-  commit_comment: Keep the CSS import manifest and its targets vendored together
 - id: adopt-sessioncard-phase-strip
   text: Upstream SessionCard gained an optional lifecycle strip driven by session.phases/phase/phasesSeen/phaseGaps via PhaseWalk, with phasesSeen as an authoritative VISITED SET rather than index math -- correctly modeling gm re-plan edges where EXECUTE->PLAN must not render as a regression. gmsniff must feed phasesSeen from real transition history rather than a current-phase index.
   witness: 'design-system agent proved it: a re-planned session shows 2 reached where index math gives 1'
   status: pending
-- id: changelog-is-nearly-empty
-  text: CHANGELOG.md is 9 lines despite the documented convention of one entry per commit landed. The history AGENTS.md deliberately refuses to carry is not actually being carried anywhere. Restore it for this sessions commits and note the gap.
-  witness: CHANGELOG.md carries 20 entries for this sessions work, each a commit-subject line plus a one-sentence why, replacing the 9-line stub that held none of it.
-  status: completed
-  commit_comment: Fill in the changelog this session left empty
 - id: publish-workflow-guards
   text: Pushing to main auto-bumps the patch version and publishes to npm. With this much changing at once, confirm the workflow still passes and that a broken build cannot publish -- ideally the single root test must gate the publish.
   witness: .github/workflows/publish-npm.yml auto-bump-and-publish on push to main
   status: pending
-- id: model-unmodeled-9pct
-  text: Parse coverage reached 90.5% modeled with 9.6% still matching no known shape (worst project 247420 at 24.6% unmodeled). Run one classification pass over the residual to decide what is genuinely unmodeled upstream format versus legitimately-ignorable runtime chatter.
-  witness: 'Real replayAllAudited over the live fleet: unmodeled_ratio is 0.0005, down from 0.0955. The residual is Bun crash dumps and WASM panic traces, genuinely unstructured, with the ignored fraction reported separately so coverage is interpretable rather than inflated.'
-  status: completed
-  commit_comment: Close the unmodeled residual and report what is deliberately ignored
-- id: adopt-shared-parser-in-cli
-  text: src/watcher-log.js is now the single unified parser and exports parseLine with the same semantics as cli.js readWatcherLogEmbedFails (cli.js:957-987). Replace the duplicate CLI-local parser with the shared export.
-  witness: grep for readWatcherLogEmbedFails in src/cli.js returns 0 -- the CLI-local second parser is gone and cli.js consumes the shared src/watcher-log.js parseLine, so one parser serves both surfaces and cannot drift.
-  status: completed
-  commit_comment: Retire the CLI-local parser in favour of the shared one
 - id: stale-worktree-pruning
   text: 174 projects are now discovered, 99 of them worktree-hosted, while only 2 are genuinely active. Listing all 174 is unusable. Prune or age-filter stale worktree projects by default, since a deleted worktree leaves a discoverable but dead directory.
   witness: 'data-layer agent: 174 discovered, 99 worktree-hosted, 2 active'
@@ -156,16 +126,6 @@
   text: 'All 123 gmsniff PRD rows read status: pending and no row uses done/complete/completed, so closed-status detection has never been exercised against a real closed row. Verify the policy-driven closed-status logic against genuinely closed rows, from another project or by closing one here.'
   witness: 'data-layer agent: 100% of gmsniff prd.yml rows are status pending'
   status: pending
-- id: sourcestaleness-requires-events-arg
-  text: sourceStaleness() called with no argument returns stale:true reason no timestamped events, which reads as a broken source rather than a misuse. Given it feeds a user-facing stale-source warning, make the no-argument case either analyze the default source itself or fail loudly as a programming error -- never emit a false stale verdict.
-  witness: 'Real call: sourceStaleness() with no argument now throws a TypeError rather than returning a false stale verdict of "no timestamped events" -- a misuse is a programming error, not a report that the source is broken. A genuinely empty array still returns the honest stale verdict.'
-  status: completed
-  commit_comment: Throw on misuse rather than emitting a false stale verdict
-- id: events-without-timestamp
-  text: '103 of 203841 replayed events carry no ts at all. Any surface that sorts, buckets by day, computes an age or windows by time silently drops or mis-places them. Decide explicitly: synthesize a ts from surrounding lines, or tag them untimed and exclude them from time-based views rather than letting them fall through.'
-  witness: 'Real replayAllAudited over the live fleet: 0 events carry no ts, down from 102. Lines synthesized before a files first evt record now backfill the first following timestamp, retaining _untimed and _ts_source so a derived stamp is never mistaken for an upstream one.'
-  status: completed
-  commit_comment: Backfill timestamps for lines preceding a files first evt record
 - id: dispatch-start-end-imbalance
   text: Real counts are dispatch.start 51203 versus dispatch.end 53948 -- 2745 MORE ends than starts. Ends outnumbering starts means the pairing cannot assume a matching start, so in-flight detection must handle an orphan end (a start scrolled past the bounded replay window, or a start line shape not yet parsed) without miscounting or crashing.
   witness: real measurement over 203841 replayed events
@@ -174,41 +134,6 @@
   text: 'The CLI drilldown detected and reported a real inconsistency on C:/dev/spoint: next-step.md still shows PLAN while turn-state.json has moved to EXECUTE, meaning the served prose on disk lags the actual FSM state. This divergence is a genuine observable condition and should be surfaced everywhere phase is shown, including the GUI, rather than silently preferring one source. It also validates reading turn-state.json as primary with next-step.md as the prose fallback.'
   witness: 'real run of node src/cli.js --agents --agent spoint: instruction line reads next-step.md still on PLAN, turn-state has moved to EXECUTE'
   status: pending
-- id: correlation-session-id-tier-matches-nothing
-  text: 'correlationCoverage reports session_id: 0 across 203855 events even though C:/dev/gm carries a real session_id in its turn-state.json. The session_id rank tier exists but currently matches nothing, so either the extractor does not read the field the runtime actually writes, or the tier is vestigial. Confirm before any surface claims to group by session_id.'
-  witness: CORRELATION_KINDS is now [sess, run, cwd]. The session_id tier was removed after measuring 0 matches across 233,487 events and confirming structurally in ../gm that emit_event inserts only event, sub and ts -- session_id lives on turn-state.json project state and can never appear on an event. A rank tier that cannot match is worse than absent.
-  status: completed
-  commit_comment: Remove the correlation tier that could never match
-- id: reconcile-subsystem-list-with-rs-learn
-  text: SUBSYSTEMS is now 5 entries [plugkit,hook,bootstrap,memory,rs_learn] and real replay shows 5295 live rs_learn events (recall, vector_top_k, auto_recall), contradicting the earlier AGENTS.md claim that rs_learn was dead with zero live events -- and contradicting commit 17af397 which moved the other way. Reconcile against current ../gm source to determine the correct emitter, and confirm gui/panels.js SUB_LIST carries the identical literal, since the two are required to stay byte-identical.
-  witness: 'Re-derived from real data rather than source alone: rs_learn carries 5,295 live recall events dated to 2026-07-07 and memory carries the same recall event from 07-07 onward. It is a rename cutover, not a retirement, and since gmsniff reads history both tags are required. bootstrap measuring zero on the spool is expected -- it is emitted only to the archive tree.'
-  status: completed
-  commit_comment: Keep both subsystem tags across the rename cutover
-- id: remove-stray-playwright-core
-  text: node_modules/playwright-core is present on disk despite zero declared dependencies. It is not in the published tarball and not imported by src/, so shipped users are unaffected, but it muddies the zero-dependency invariant locally and should be removed or explained.
-  witness: node_modules carried a 13MB playwright-core that was never a declared dependency and never shipped (0 occurrences in npm pack). Removed entirely, and the full suite then passes with NO node_modules present at all -- the strongest available proof of the zero-dependency property, since the code demonstrably runs on core Node modules alone.
-  status: completed
-  commit_comment: Remove the undeclared local playwright-core and prove the suite runs with no node_modules
-- id: drop-removed-cli-flags-from-docs
-  text: The old README documented --spool-queue, --watcher-versions and --instruction-tiers, which now return unknown flag; the equivalent /api/* routes are still live. Docs were corrected to describe them as server routes only -- verify no other surface still advertises them as CLI flags.
-  witness: grep for --spool-queue, --watcher-versions and --instruction-tiers across README.md and src/cli.js returns 0. They no longer exist as CLI flags and are documented only as the server routes they actually are.
-  status: completed
-  commit_comment: Stop documenting removed flags as if they were CLI options
-- id: parse-dispatch-completion-lines
-  text: 'ROOT CAUSE of the unmodeled residual and the dispatch imbalance. The watcher log carries BOTH [dispatch] -> (start) AND [dispatch] <- (completion) text lines, and only the start form is parsed. Real counts: spoint 14888 start / 14777 end, gmsniff 1694 / 1681, casey 3511 / 3466. The completion line is RICHER than the dispatch.end evt record because it carries out= response bytes as well as ms=, e.g. [dispatch] <- verb=instruction task=3 ms=3876 out=16855b. Parse it, pair it to its start by task id, and expose response size per dispatch. This is roughly 14777 lines in spoint alone -- a large share of the 9.55% unmodeled residual.'
-  witness: 'Real replayAllAudited over the live fleet: 59,973 dispatch.end events and 56,014 events carrying out_bytes -- the [dispatch] <- completion line is parsed, and it is richer than the evt record because it carries response bytes as well as duration.'
-  status: completed
-  commit_comment: Parse the dispatch completion lines and their response bytes
-- id: expose-dispatch-response-size
-  text: The [dispatch] <- completion line carries out=<n>b response bytes, a signal available nowhere else. Surface per-dispatch response size so an observer can spot a verb returning an unexpectedly large or empty payload, which is a real failure mode for instruction and codesearch dispatches.
-  witness: 'Real replayAllAudited over the live fleet: 56,014 events carry out_bytes, so per-dispatch response size is surfaced and a verb returning an unexpectedly large or empty payload is visible.'
-  status: completed
-  commit_comment: Surface per-dispatch response size
-- id: correct-dispatch-imbalance-diagnosis
-  text: The earlier reading that ends outnumber starts (51203 start vs 53948 end) was an artifact of comparing text-derived dispatch.start against the separate dispatch.end evt records, two different populations. Real like-for-like pairing of the text lines shows starts slightly EXCEED ends -- 169 orphan starts across 3 projects (spoint 111, gmsniff 13, casey 45) -- which is exactly the expected shape for in-flight and interrupted dispatches. Pair start to completion by task id and treat a small orphan-start count as normal in-flight, not as corruption.
-  witness: 'Real replayAllAudited over the live fleet: 63,058 dispatch.start against 59,973 dispatch.end. Starts exceed ends, which is the expected in-flight shape; the earlier reading that ends outnumbered starts compared text-derived starts against the separate evt-record ends, two different populations. Malformed-verb starts are excluded from pairing and counted separately rather than inflating the orphan figure.'
-  status: completed
-  commit_comment: Correct the dispatch-imbalance diagnosis and exclude malformed starts
 - id: skill-lags-phase-in-turn-state
   text: Real drilldown on C:/dev/casey shows phase PLAN with skill update-docs -- update-docs is the COMPLETE-phase skill, so last_skill lags the current phase rather than describing it. turn-state.json last_skill records the skill that ran most recently, NOT the skill for the current phase. Label it accordingly in every surface (last skill, not current skill) or derive the current-phase skill from the FSM graph instead, otherwise it reads as a contradiction.
   witness: 'real run of node src/cli.js --agents --agent casey: phase PLAN for 5h22m with skill update-docs'
@@ -221,11 +146,6 @@
   text: /api/source simultaneously reports explicit_log_dir:true and sources.gm_log.explicit:false in the same payload for the same directory. Two flags describing one fact disagree, so neither can be trusted by a consumer. Reconcile to a single derived value.
   witness: real /api/source payload from a default GUI launch
   status: pending
-- id: single-writer-collision-on-gui-forcegraph
-  text: 'Real single-writer collision observed: edits to gui/forcegraph.js were overwritten wholesale by the concurrent agent that owns gui/, reverting a completed comment pass (named functions, renamed constants, trimmed header). Confirms the discipline -- per-file ownership must be respected even for a small isolated file, and a second writer should hand the change to the owner rather than applying it directly.'
-  witness: 'Observed and handled as designed rather than fought: a completed comment pass on gui/forcegraph.js was overwritten wholesale by the concurrent owner of gui/, so the change was handed to that owner as a fully-specified diff instead of being re-applied. It landed correctly there, including the two-site MIN_DIST rename that node --check cannot catch. AGENTS.md records the read-back guard this taught.'
-  status: completed
-  commit_comment: Hand a change to the files owner rather than racing a concurrent writer
 - id: orphan-css-classes
   text: gui-extra.css declares gm-bar-visual, gm-center-mt-14, gm-conflict, gm-flex-2, gm-graph-node and gm-muted-12 with no consumer anywhere. Note gm-health-amber and gm-health-red are NOT orphans despite appearing so -- they are built by string concatenation, which a naive grep misses.
   witness: GUI agent verified consumers for each; the two false positives are concatenated at their use site
