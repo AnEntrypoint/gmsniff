@@ -1463,7 +1463,11 @@ function fmtEventLine(e) {
 function renderAgentDrilldown(a, outputLines) {
   process.stdout.write(`${color('='.repeat(78), 90)}\n`);
   process.stdout.write(`${color(a.name, 1)}  ${a.cwd}\n`);
-  process.stdout.write(`phase:      ${color(a.phase || '?', PHASE_COLOR[a.phase] || 0)}  for ${a.phase_elapsed_ms !== null ? fmtAge(a.phase_elapsed_ms) : '?'}  (skill: ${a.skill || '?'})\n`);
+  // turn-state.json calls the field `last_skill`, but measured across four live projects it holds
+  // the skill for the phase the agent moves to NEXT, not the one it is in: EXECUTE/gm-emit,
+  // VERIFY/gm-consolidate, COMPLETE/update-docs. Labelling it "skill:" beside the current phase
+  // read as though the agent were running it now.
+  process.stdout.write(`phase:      ${color(a.phase || '?', PHASE_COLOR[a.phase] || 0)}  for ${a.phase_elapsed_ms !== null ? fmtAge(a.phase_elapsed_ms) : '?'}  (next skill: ${a.skill || '?'})\n`);
   process.stdout.write(`instruction:${a.heading || '(none)'} served ${a.instruction_age_ms !== null ? fmtAge(a.instruction_age_ms) : '?'} ago${a.instruction_phase ? color(`  [next-step.md still on ${a.instruction_phase}, turn-state has moved to ${a.phase}]`, 33) : ''}\n`);
   process.stdout.write(`daemon:     ${a.alive ? color('ALIVE', 32) : color('dead', 31)} pid=${a.pid || '?'}   last event: ${a.idle_ms !== null ? fmtAge(a.idle_ms) : '?'} ago${a.stalled ? color('  IDLE', 31) : ''}\n`);
   process.stdout.write(`pending:    prd=${a.prd_pending ?? '?'}  mutables=${a.mut_pending ?? '?'}\n`);
