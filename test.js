@@ -464,6 +464,73 @@ assert(schemaOut.subcommands.every(s => typeof s.tier === 'string'), 'schema sub
   assert(archived.warnings.length > 0, 'stale source selection emits a loud warning');
   if (prevSpool === undefined) delete process.env.GM_SPOOL_DIRS; else process.env.GM_SPOOL_DIRS = prevSpool;
 
+  // createServer-level source selection. The layer above replayAllAudited had its OWN inversion:
+  // "explicit" was defined as `logDir !== undefined`, and src/cli.js passes the resolved
+  // DEFAULT_LOG_DIR unconditionally, so every default `gmsniff gui` launch scored as an explicit
+  // archive request and served 958,616 dead gm-log events with the live spool unused. The
+  // replayAllAudited assertions above all still passed while that was broken, so the contract is
+  // pinned here at the boundary where it actually failed: a default logDir is NOT explicit, while
+  // an operator-named non-default path still wins (the behavior test.js's own live server needs).
+  const defaultSrv = await createServer({ logDir: DEFAULT_LOG_DIR, port: 0 });
+  assert.strictEqual(defaultSrv.store.explicitLogDir, false,
+    'passing the resolved DEFAULT_LOG_DIR is NOT an explicit source request');
+  assert.strictEqual(defaultSrv.store.source.archive_used, false,
+    'a default-logDir launch never loads the legacy archive');
+  assert.strictEqual(defaultSrv.store.source.selected, 'spool',
+    'a default-logDir launch selects the live spool');
+  assert.strictEqual(defaultSrv.store.source.explicit_reason, null,
+    'explicit_reason is null when nothing was explicitly named');
+  await defaultSrv.close();
+
+  // The other half: a genuinely non-default path is still honored end-to-end.
+  const namedSrv = await createServer({ logDir: legacyDir, port: 0 });
+  assert.strictEqual(namedSrv.store.explicitLogDir, true,
+    'an operator-named non-default logDir is explicit');
+  assert.strictEqual(path.resolve(namedSrv.store.source.log_dir), path.resolve(legacyDir),
+    'the named tree is the one actually loaded');
+  assert.strictEqual(namedSrv.store.source.explicit_reason, 'caller-supplied non-default logDir',
+    'explicit_reason names which input made it explicit');
+  assert(namedSrv.store.source.total_before_window >= 1,
+    'the explicitly named tree is actually read');
+  await namedSrv.close();
+
+  // Bounded + honestly-absent .gm YAML row stores. Two failures, both measured live:
+  // spoint's prd.yml (2.1MB / 966 rows) was parsed AND serialized whole on every request, and
+  // readPrd returns {mtimeMs:null, rows:[]} for BOTH a missing prd.yml (C:/dev/gm has none) and
+  // an empty one -- so a client could not tell "no PRD" from "PRD with nothing pending".
+  const yamlRowsVia = async (srv, cwd, route, extra = '') => {
+    const r = await fetch(`${srv.url}/api/${route}?cwd=${encodeURIComponent(cwd)}${extra}`);
+    assert.strictEqual(r.status, 200, `/api/${route} → ${r.status}`);
+    return r.json();
+  };
+  const yamlRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gmsniff-yaml-'));
+  const yProj = path.join(yamlRoot, 'proj');
+  fs.mkdirSync(path.join(yProj, '.gm', 'exec-spool'), { recursive: true });
+  fs.writeFileSync(path.join(yProj, '.gm', 'exec-spool', '.watcher.log'),
+    `evt: ${JSON.stringify({ ts: new Date().toISOString(), event: 'instruction.served', cwd: yProj, phase: 'PLAN' })}\n`);
+  const manyRows = Array.from({ length: 40 }, (_, i) => `- id: row-${i}\n  status: pending\n  text: r${i}\n`).join('');
+  fs.writeFileSync(path.join(yProj, '.gm', 'prd.yml'), manyRows);
+  // Set BEFORE createServer so the temp project is in the discovered registry that
+  // resolveScopedCwd allowlists; an out-of-registry cwd is (correctly) rejected with 403.
+  const prevYamlSpool = process.env.GM_SPOOL_DIRS;
+  process.env.GM_SPOOL_DIRS = yProj;
+  const yamlSrv = await createServer({ logDir: DEFAULT_LOG_DIR, port: 0 });
+  // Absence is distinguishable from emptiness: mutables.yml was never written above.
+  const r1 = await yamlRowsVia(yamlSrv, yProj, 'mutables');
+  const r2 = await yamlRowsVia(yamlSrv, yProj, 'prd');
+  assert.strictEqual(r1.present, false, 'a missing mutables.yml reports present:false');
+  assert.strictEqual(r2.present, true, 'an existing prd.yml reports present:true');
+  assert.deepStrictEqual([r1.rows.length, r2.total], [0, 40], 'absent store is empty, present store reports its true total');
+  assert.strictEqual(typeof r2.file_bytes, 'number', 'parse cost is reported, not inferred');
+  // Paging bound: an explicit oversized ?limit= cannot recreate the unbounded read.
+  const capped = await yamlRowsVia(yamlSrv, yProj, 'prd', '&limit=10');
+  assert.strictEqual(capped.returned, 10, 'rows are paged to the requested limit');
+  assert.strictEqual(capped.total, 40, 'total still reports the whole store behind the window');
+  assert.strictEqual(capped.truncated, true, 'a partial window is flagged, never passed off as complete');
+  if (prevYamlSpool === undefined) delete process.env.GM_SPOOL_DIRS; else process.env.GM_SPOOL_DIRS = prevYamlSpool;
+  await yamlSrv.close();
+  fs.rmSync(yamlRoot, { recursive: true, force: true });
+
   // Per-project liveness must ignore the shared-daemon heartbeat, which ticks for every project
   // on the machine simultaneously (measured: gmsniff 281ms, spoint 131ms, casey 210ms and test
   // 258ms all at once, while casey's real work was 2.2 hours cold). A project whose OWN signals

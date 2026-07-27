@@ -350,7 +350,10 @@ function GateBlockers(gateInfo) {
         ? h('span', { class: 'gm-feed-muted gm-ml-6' }, `last fired: ${gateInfo.last_gate_fired.key}${gateInfo.last_gate_fired.ts ? ' ' + fmtAgo(gateInfo.last_gate_fired.ts) : ''}`)
         : null),
     ...blockers.map(b => h('div', { key: b.gate, class: 'gm-gate-row' },
-      h('strong', { key: 'g', class: 'gm-text-danger' }, b.gate),
+      // Red only when the gate is actually DENYING a transition. An unsatisfied
+      // gate on a mid-run agent (every working agent here reports
+      // prd-all-closed) is normal and must not read as a failure.
+      h('strong', { key: 'g', class: gateInfo.blocked ? 'gm-text-danger' : '' }, b.gate),
       h('span', { key: 'd', class: 'gm-ml-6' }, b.detail || ''),
       repeats[b.gate] ? h('span', { key: 'r', class: 'gm-pill gm-ml-6 gm-text-danger' }, `repeated x${repeats[b.gate]}`) : null)));
 }
@@ -453,12 +456,21 @@ export function openDrilldown(row, setBody) {
   if (drilldownAux.fullFor !== row.cwd) {
     drilldownAux.full = null;
     drilldownAux.fullFor = row.cwd;
+    // The dedicated per-cwd drilldown route, NOT a second live-state refetch:
+    // live-state walks every one of the 678 discovered projects (measured 10.9s
+    // in the real browser) to answer a question about exactly one of them.
+    // /api/projects/instruction reads that project's next-step.md and returns the
+    // FULL body, which the list deliberately omits.
     if (!row.instruction_excerpt && row.present) {
       drilldownAux.fullLoading = true;
-      api('/api/projects/live-state?cwd=' + encodeURIComponent(row.cwd)).then((r) => {
+      api('/api/projects/instruction?cwd=' + encodeURIComponent(row.cwd)).then((r) => {
         if (drilldownAux.fullFor !== row.cwd) return;
-        const one = r && !r.error && Array.isArray(r.projects) ? r.projects.find(x => x.cwd === row.cwd) : null;
-        drilldownAux.full = one && one.instruction_excerpt ? one.instruction_excerpt : null;
+        drilldownAux.full = r && !r.error && r.instruction_excerpt ? r.instruction_excerpt : null;
+        // The route also carries the untruncated driving prompt (8KB vs the
+        // list's 400-char slice), so the drilldown shows the whole thing.
+        if (r && !r.error && typeof r.last_prompt === 'string' && r.last_prompt) {
+          liveState.prompts.set(row.cwd, r.last_prompt);
+        }
         drilldownAux.fullLoading = false;
         if (setBody) setBody();
       });
@@ -498,12 +510,15 @@ function AgentDrilldown(setBody) {
   const f = seedFeed(p);
   const running = currentDispatch(f.rows);
   const abandoned = resolveInflight(f.rows).filter(o => o.abandoned);
-  const gateInfo = liveState.gates.get(p.cwd);
+  const gateInfo = gatesFor(p);
+  // The drilldown fetch stores the FULL prompt (8KB) in the map; the list row
+  // carries only a 400-char slice, so the map wins when it has been populated.
   const prompt = liveState.prompts.get(p.cwd) ?? p.last_prompt ?? null;
   const phases = phaseUniverse(p);
   const seenList = phasesSeenFrom(f, p);
   const seen = new Set(seenList || []);
-  const idx = phases.indexOf(p.phase);
+  const phase = authoritativePhase(p);
+  const idx = phases.indexOf(phase);
   const live = liveness(p);
   const ages = agentAges(p, lastEventTs(f));
   const divergence = phaseDivergence(p);
@@ -511,7 +526,7 @@ function AgentDrilldown(setBody) {
   const median = running ? (durs.find(d => d.verb === running.verb) || {}).median : null;
 
   const header = h('div', { class: 'gm-agent-head' },
-    Pill({ key: 'ph', children: p.phase || 'no phase' }),
+    Pill({ key: 'ph', children: phase || 'no phase' }),
     p.skill ? Pill({ key: 'sk', children: p.skill }) : null,
     Chip({
       key: 'lv',
@@ -527,7 +542,7 @@ function AgentDrilldown(setBody) {
     // Two ages, never collapsed: how long stuck in this phase, and how long
     // since it emitted anything at all.
     h('span', { key: 'age', class: 'gm-feed-muted gm-ml-6' },
-      [ages.inPhase != null ? `in ${p.phase || '?'} ${fmtDuration(ages.inPhase)}` : null,
+      [ages.inPhase != null ? `in ${phase || '?'} ${fmtDuration(ages.inPhase)}` : null,
        ages.lastEvt != null ? `last event ${fmtDuration(ages.lastEvt)} ago` : 'no events observed'].filter(Boolean).join(' · ')));
 
   // next-step.md (the served prose) can lag turn-state.json (the real FSM
@@ -607,7 +622,14 @@ function instructionBody(p) {
       hint: 'Discovery found it, but it has no .gm/next-step.md, so no instruction is being served.',
     });
   }
-  const body = p.instruction_excerpt || drilldownAux.full;
+  // The list route is a SUMMARY: it sends `instruction_preview` (240 chars) plus
+  // `instruction_length`/`instruction_truncated`, and the full body only via the
+  // drilldown fetch. Rendering the preview as if it were the instruction would
+  // silently truncate a 5.6KB prose body at 240 chars with nothing saying so, so
+  // a preview is LABELLED as one and the full body replaces it when it lands.
+  const full = drilldownAux.full || p.instruction_excerpt || null;
+  const preview = p.instruction_preview || null;
+  const body = full || preview;
   if (!body) {
     return drilldownAux.fullLoading
       ? HonestState({ key: 'md', kind: 'loading', text: 'Loading served instruction...' })
@@ -617,7 +639,13 @@ function instructionBody(p) {
           hint: 'next-step.md exists but carries no instruction text below its header.',
         });
   }
-  return h('div', { key: 'md', class: 'gm-instruction-body' }, renderMarkdown(body));
+  const partial = !full && p.instruction_truncated;
+  return h('div', { key: 'md', class: 'gm-instruction-body' },
+    partial
+      ? h('div', { key: 'pv', class: 'gm-feed-muted gm-mb-4' },
+          `Preview -- first ${preview.length} of ${p.instruction_length} characters${drilldownAux.fullLoading ? ', loading the full body...' : ''}`)
+      : null,
+    renderMarkdown(body));
 }
 
 // A phase strip that renders a revisit as a revisit. Uses the visited SET when
@@ -645,7 +673,7 @@ function toAgent(p) {
   const running = currentDispatch(f.rows);
   const inflightAll = resolveInflight(f.rows);
   const abandoned = inflightAll.find(o => o.abandoned) || null;
-  const gates = liveState.gates.get(p.cwd) || null;
+  const gates = gatesFor(p);
   const burndown = prdBurndown(f.rows);
   const devTrend = deviationTrend(f.rows);
   const durs = verbDurations(f.rows);
@@ -685,7 +713,9 @@ function toCard(a) {
     agent: p.skill || 'gm',
     model: p.instruction_heading || p.instruction_key || null,
     cwd: p.cwd,
-    phase: p.phase || null,
+    // turn-state.json is authoritative; next-step.md's header can legitimately
+    // lag it, and showing the lagging one states a stale phase as fact.
+    phase: authoritativePhase(p),
     phases: phaseUniverse(p),
     phasesSeen: phasesSeenFrom(f, p),
     // elapsedMs is IN-PHASE; lastActivity is LAST-EVT. Two different questions,
@@ -824,34 +854,19 @@ export async function LiveAgents({ connState = 'connecting', onNav } = {}, setBo
 }
 
 // ---------------------------------------------------------------------------
-// SIDE-CHANNEL LOADS -- gates and driving prompts. Both routes are OPTIONAL:
-// the server does not publish them yet (readFsmGates and last_prompt exist in
-// src/ but are not wired to any route), so a 404 leaves the maps empty and
-// every consumer above renders the absence honestly instead of faking a value.
-// ---------------------------------------------------------------------------
-// The route is probed ONCE against a single cwd. A server that does not serve it
-// yet answers 404 exactly one time and the feature switches itself off -- firing
-// one doomed request per project would put a wall of 404s in the console and
-// blame the client for a route that simply has not landed.
-let agentContextAvailable = null; // null = unprobed, false = route absent
-
-export async function loadAgentContext(cwds, setBody) {
-  if (agentContextAvailable === false) return;
-  const wanted = (cwds || []).filter(c => c && !liveState.gates.has(c));
-  if (!wanted.length) return;
-
-  if (agentContextAvailable === null) {
-    const probe = await fetch('/api/agent-context?cwd=' + encodeURIComponent(wanted[0])).catch(() => null);
-    agentContextAvailable = !!(probe && probe.ok);
-    if (!agentContextAvailable) return;
-  }
-
-  let changed = false;
-  await Promise.all(wanted.slice(0, 12).map(async (cwd) => {
-    const g = await api('/api/agent-context?cwd=' + encodeURIComponent(cwd));
-    if (!g || g.error) return;
-    if (Array.isArray(g.gates)) { liveState.gates.set(cwd, g); changed = true; }
-    if (typeof g.last_prompt === 'string') { liveState.prompts.set(cwd, g.last_prompt); changed = true; }
-  }));
-  if (changed && setBody) setBody();
-}
+// AGENT CONTEXT -- gates and driving prompts.
+//
+// These once needed a side-channel `/api/agent-context` route that was never
+// implemented; the probe fired a guaranteed 404 on every boot (witnessed in the
+// real browser as `HTTP 404 /api/agent-context?cwd=...` on every page load).
+//
+// The live-state route now carries BOTH inline on every row -- `gates_blocked` /
+// `gates_failing` (read via gatesFor) and `last_prompt` -- and the drilldown
+// pulls the untruncated prompt from /api/projects/instruction. So there is
+// nothing left to side-load, and the dead request is gone rather than retained
+// as a permanently-failing probe.
+//
+// Kept as an explicit no-op because app.js's boot sequence calls it; removing
+// the call site too would be a behavioural change in a file a concurrent agent
+// is also editing.
+export async function loadAgentContext() { /* data now arrives inline on live-state rows */ }

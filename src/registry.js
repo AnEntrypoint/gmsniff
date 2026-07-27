@@ -205,6 +205,12 @@ export const GM_TOOLS_DIR = process.env.GM_TOOLS_DIR || path.join(os.homedir(), 
 // This is the ONLY place a real daemon pid liveness check belongs: the pid in each project's
 // .status.json is the same shared machine-wide daemon pid, so probing it per-project tells you
 // nothing about that project (all projects flip together).
+//
+// ~/.gm-tools/daemon-status.json is NOT self-healing: a daemon that dies without unwinding leaves
+// its pid there forever, and the successor daemon does not always rewrite it. Measured live, the
+// global file held pid 4304 with a ts 3 DAYS old and dead, while every project's own .status.json
+// carried pid 11132, freshly heartbeat and demonstrably alive. So this file alone answers
+// "is a daemon up" wrong in exactly the case that matters. See daemonAliveFor below.
 export function readDaemonStatus() {
   const j = readJsonOrNull(path.join(GM_TOOLS_DIR, 'daemon-status.json'));
   if (!j || !j.pid) return { present: false, pid: null, alive: false, ts: null, age_ms: null, active_projects: null };
@@ -217,6 +223,58 @@ export function readDaemonStatus() {
     ts: j.ts || null,
     age_ms: j.ts ? Date.now() - j.ts : null,
     active_projects: Number.isFinite(j.active_projects) ? j.active_projects : null,
+  };
+}
+
+// Resolves daemon liveness for one project from BOTH pid sources, preferring whichever is
+// actually verified alive rather than whichever file happened to be consulted.
+//
+// The bug this fixes: readWatcherStatus(cwd).daemon_alive probed the project's own .status.json
+// pid and said true, while readProjectLiveness(cwd).daemon_alive probed only the machine-global
+// daemon-status.json pid and said false -- for the same project in the same process at the same
+// instant. Both were reporting the same machine-wide fact and contradicting each other, because
+// the global file is stale-prone and the per-project one is rewritten every ~200ms.
+//
+// Precedence is by VERIFIED LIVENESS, not by file: an alive pid from either source wins over a
+// dead pid from the other, and when both are alive the fresher heartbeat names the pid. Only when
+// neither pid responds is daemon_alive false. This can never report false while a real daemon pid
+// is demonstrably serving the project, which was the whole failure.
+function pidAlive(pid) {
+  if (!pid) return false;
+  try { process.kill(pid, 0); return true; } catch (_) { return false; }
+}
+
+export function daemonAliveFor(status, daemon, { now = Date.now() } = {}) {
+  const projectPid = status && status.pid ? status.pid : null;
+  const globalPid = daemon && daemon.pid ? daemon.pid : null;
+  const projectAlive = pidAlive(projectPid);
+  const globalAlive = !!(daemon && daemon.alive);
+  const projectAge = status && status.ts ? now - status.ts : null;
+  const globalAge = daemon && daemon.ts ? now - daemon.ts : null;
+
+  let pid = null, source = null;
+  if (projectAlive && globalAlive) {
+    // Both respond. The fresher heartbeat is the one actually serving; ties go to the
+    // per-project file, which the live daemon rewrites continuously.
+    const preferGlobal = projectAge !== null && globalAge !== null && globalAge < projectAge;
+    pid = preferGlobal ? globalPid : projectPid;
+    source = preferGlobal ? 'daemon-status.json' : 'status.json';
+  } else if (projectAlive) {
+    pid = projectPid; source = 'status.json';
+  } else if (globalAlive) {
+    pid = globalPid; source = 'daemon-status.json';
+  }
+
+  return {
+    daemon_alive: projectAlive || globalAlive,
+    daemon_pid: pid,
+    daemon_pid_source: source,
+    // Both pids are surfaced whenever they disagree, so a stale global file is visible as the
+    // diagnostic it is rather than being silently papered over by the precedence rule.
+    daemon_pid_project: projectPid,
+    daemon_pid_global: globalPid,
+    daemon_pid_conflict: !!(projectPid && globalPid && projectPid !== globalPid),
+    daemon_status_stale: !!(globalPid && !globalAlive),
   };
 }
 
@@ -277,6 +335,7 @@ export function readProjectLiveness(cwd, { now = Date.now() } = {}) {
   const last_activity_age_ms = ages.length ? Math.min(...ages) : null;
   const queue_depth = spoolQueueDepth(spoolDir);
   const daemon = readDaemonStatus();
+  const daemonState = daemonAliveFor(status, daemon, { now });
 
   return {
     // Real per-project activity, the field a caller should badge on: derived only from signals
@@ -290,9 +349,8 @@ export function readProjectLiveness(cwd, { now = Date.now() } = {}) {
     turn_age_ms,
     queue_depth,
     // Machine-level, deliberately named apart from `active` so it can never be mistaken for a
-    // per-project signal.
-    daemon_alive: daemon.alive,
-    daemon_pid: daemon.pid,
+    // per-project signal. Resolved across both pid sources -- see daemonAliveFor.
+    ...daemonState,
     shared_process: !!(status && status.shared_process),
   };
 }
@@ -300,16 +358,31 @@ export function readProjectLiveness(cwd, { now = Date.now() } = {}) {
 // .gm/turn-state.json -- the authoritative live phase source, written on every transition.
 // Two real on-disk shapes exist: the current {phase, session_id, last_skill, updated_at_ms,
 // pending_step_id, pending_step_deadline_ms}, and a legacy shape carrying only
-// {turnId, execCallsSinceMemorize, firstToolFired, recallFiredThisTurn} and NO phase at all
-// (confirmed live in C:\dev\test). The legacy shape is reported as present-but-phaseless rather
-// than being mistaken for a project sitting in a null phase.
+// {turnId, execCallsSinceMemorize, firstToolFired, recallFiredThisTurn} and NO phase at all.
+//
+// The legacy branch is KEPT even though no current code path writes it. ../gm's only writer is
+// orchestrator/state.rs::write_state, which serializes the current six-field TurnState struct, so
+// nothing produces the legacy shape any more -- but 20 of 85 real projects on this machine still
+// HAVE that file on disk (ai-animate-vrm, cam, flatspace, test, ...), unmodified since before the
+// cutover. gmsniff reads what is on disk, not what the current writer emits, so removing the
+// branch would silently reclassify 20 real projects as "phase: null" -- a project idle in no
+// phase -- instead of "present but phaseless", which is what they actually are.
+//
+// A third state exists and is distinct from both: gm's lib.rs resets the file by writing `{}`,
+// which its own deserializer then rejects (phase/session_id/last_skill/updated_at_ms carry no
+// serde default), backing the file up to turn-state.json.corrupted-<ts> and restarting at PLAN.
+// 98 such backups exist on disk right now. A bare `{}` is a RESET, not a legacy file, and is
+// reported as reset_shape so it is not misread as either.
 export function readTurnState(cwd) {
   const j = readJsonOrNull(path.join(cwd, '.gm', 'turn-state.json'));
   if (!j) return null;
+  const keys = Object.keys(j);
   const legacy = !('phase' in j) && ('turnId' in j);
+  const reset = keys.length === 0;
   return {
     present: true,
     legacy_shape: legacy,
+    reset_shape: reset,
     phase: typeof j.phase === 'string' ? j.phase : null,
     session_id: j.session_id || null,
     last_skill: j.last_skill || null,
@@ -397,8 +470,13 @@ export function readWatcherStatus(cwd) {
     // `alive` is DAEMON liveness, not project liveness: this pid is one machine-wide daemon
     // shared by every project, so it is identical across all of them and flips them together.
     // Use readProjectLiveness(cwd).active for a real per-project answer.
-    let alive = false;
-    try { process.kill(j.pid, 0); alive = true; } catch (_) {}
+    //
+    // Resolved through the SAME daemonAliveFor precedence readProjectLiveness uses, so the two
+    // functions can never again return opposite daemon_alive values for one project in one
+    // process at one instant (the real contradiction: this said true on the live per-project pid
+    // while readProjectLiveness said false on a 3-day-stale global pid).
+    const d = daemonAliveFor(j, readDaemonStatus());
+    const alive = d.daemon_alive;
     const runtime = j.runtime || (j.version ? 'wrapper' : null);
     return {
       pid: j.pid,
@@ -412,6 +490,10 @@ export function readWatcherStatus(cwd) {
       shared_process: !!j.shared_process,
       alive,
       daemon_alive: alive,
+      daemon_pid: d.daemon_pid,
+      daemon_pid_source: d.daemon_pid_source,
+      daemon_pid_conflict: d.daemon_pid_conflict,
+      daemon_status_stale: d.daemon_status_stale,
       shared_pid: !!j.shared_process,
       age_ms: age,
     };

@@ -732,6 +732,11 @@ const RECENT_EVENTS_LIMIT = parseInt(process.env.GM_RECENT_EVENTS_LIMIT, 10) || 
 // The list view needs enough output to show what an agent is doing, not its whole history.
 const LIST_EVENTS_LIMIT = parseInt(process.env.GM_LIST_EVENTS_LIMIT, 10) || 25;
 const INSTRUCTION_PREVIEW_CHARS = parseInt(process.env.GM_INSTRUCTION_PREVIEW_CHARS, 10) || 240;
+// .gm YAML row stores reach real size (spoint's prd.yml: 2.1MB / 965 rows, previously parsed and
+// serialized whole on every request). Default page keeps the common view cheap; GM_YAML_ROWS_MAX
+// bounds what an explicit ?limit= can ask for, so a client cannot re-create the unbounded read.
+const YAML_ROWS_LIMIT = parseInt(process.env.GM_YAML_ROWS_LIMIT, 10) || 250;
+const YAML_ROWS_MAX = parseInt(process.env.GM_YAML_ROWS_MAX, 10) || 2000;
 
 function hashText(s) {
   if (typeof s !== 'string' || !s) return null;
@@ -805,8 +810,17 @@ function classifyOutputNode(e) {
         prd_pending_count: e.prd_pending_count ?? null, mutables_pending_count: e.mutables_pending_count ?? null };
     case 'phase.transitioned':
       return { ...base, kind: 'transition', phase: e.phase ?? null, from: e.from ?? null, replan: isReplanEdge(e.from ?? null, e.phase ?? null) };
+    // The `[dispatch] <-` completion TEXT line is richer than the dispatch.end evt record: it
+    // carries `out=<n>b` response bytes alongside ms=. watcher-log.js already parses both, and
+    // this node dropped out_bytes on the floor -- so "how long did it take" was observable while
+    // "how much did it produce" was not, for the exact same event. task is carried too so a node
+    // can be paired back to its `[dispatch] ->` start.
+    // `inflight: true` (not a distinct kind) is what gui/live-agents.js normalizeStreamEvent
+    // already emits for dispatch.start, so a seeded row and a streamed row render identically.
+    case 'dispatch.start':
+      return { ...base, kind: 'dispatch', verb: e.verb ?? null, task: e.task ?? null, body_bytes: e.body_bytes ?? null, inflight: true };
     case 'dispatch.end':
-      return { ...base, kind: 'dispatch', verb: e.verb ?? null, ms: e.ms ?? null };
+      return { ...base, kind: 'dispatch', verb: e.verb ?? null, task: e.task ?? null, ms: e.ms ?? null, out_bytes: e.out_bytes ?? null };
     case 'prd.added': return { ...base, kind: 'prd-add', id: e.id ?? null, rescoped: e.rescoped ?? null };
     case 'prd.resolved': return { ...base, kind: 'prd-resolve', id: e.id ?? null };
     case 'mutable.added': return { ...base, kind: 'mutable-add', id: e.id ?? null };
@@ -1718,6 +1732,42 @@ function resolveScopedCwd(store, cwdParam) {
   return { ok: true, cwd };
 }
 
+// Bounded, honestly-degrading read of a .gm YAML row store (prd.yml / mutables.yml).
+//
+// Two real failures this fixes, both measured on live data:
+//
+// 1. COST. C:/dev/spoint's prd.yml is 2.1MB / 965 rows and was parsed AND serialized in full on
+//    every request (555KB response). Rows are now capped at YAML_ROWS_LIMIT with `total`,
+//    `returned`, `truncated` and `offset` reported, so a caller paging a huge store knows it is
+//    seeing a window rather than silently receiving a partial list as if it were the whole one.
+//    `file_bytes`/`parse_ms` make the cost visible instead of inferred.
+//
+// 2. HONEST ABSENCE. readPrd returns {mtimeMs: null, rows: []} for BOTH "no prd.yml exists"
+//    (C:/dev/gm has none) and "prd.yml exists and is empty" -- indistinguishable to a client, so
+//    a missing store rendered as a satisfied one. `present` is stat-derived and separates them.
+function yamlRowsPayload(cwd, filename, reader, q) {
+  const filePath = path.join(cwd, '.gm', filename);
+  let present = false, fileBytes = null;
+  try { const st = fs.statSync(filePath); present = st.isFile(); fileBytes = st.size; } catch (_) {}
+  const t0 = Date.now();
+  let mtimeMs = null, all = [], error = null;
+  try { const r = reader(cwd); mtimeMs = r.mtimeMs; all = r.rows || []; }
+  catch (e) { error = String(e?.message || e); }
+  const parseMs = Date.now() - t0;
+  const offset = Number.isFinite(q?.offset) && q.offset > 0 ? q.offset : 0;
+  const limit = Number.isFinite(q?.limit) && q.limit > 0
+    ? Math.min(q.limit, YAML_ROWS_MAX) : YAML_ROWS_LIMIT;
+  const rows = all.slice(offset, offset + limit);
+  return {
+    cwd, file: `.gm/${filename}`,
+    // The distinction a client cannot otherwise make: absent store vs empty store.
+    present, file_bytes: fileBytes, parse_ms: parseMs, error,
+    mtimeMs, rows,
+    total: all.length, returned: rows.length, offset, limit,
+    truncated: offset + rows.length < all.length,
+  };
+}
+
 // Turns a project cwd (absolute path) into a filesystem/header-safe slug for use in
 // Content-Disposition filenames: last path segment, non [a-zA-Z0-9-_] chars collapsed
 // to '-', falls back to 'project' if the result is empty.
@@ -2027,8 +2077,8 @@ const API_ROUTES = [
   { path: '/api/query', method: 'POST', params: ['body: {filter, projection, groupBy, sort, limit}'], response: '{total, groupBy?, groups?} or {total, returned, rows}' },
   { path: '/api/projects', method: 'GET', params: [], response: '{projects: [{cwd, alive, version, prd_pending, prd_total, mut_unknown, mut_total, watching}]}' },
   { path: '/api/health-summary', method: 'GET', params: [], response: '[{cwd, name, deviationRate, watcherAlive, staleSeconds}]' },
-  { path: '/api/prd', method: 'GET', params: ['cwd'], response: '{cwd, mtimeMs, rows}' },
-  { path: '/api/mutables', method: 'GET', params: ['cwd'], response: '{cwd, mtimeMs, rows}' },
+  { path: '/api/prd', method: 'GET', params: ['cwd', 'limit', 'offset'], response: '{cwd, file, present, file_bytes, parse_ms, error, mtimeMs, rows, total, returned, offset, limit, truncated}. `present` is stat-derived and distinguishes NO prd.yml (C:/dev/gm has none) from an empty one — both previously returned rows:[]. Rows are paged (spoint: 2.1MB/965 rows), so `total` vs `returned` is the whole-vs-window signal.' },
+  { path: '/api/mutables', method: 'GET', params: ['cwd', 'limit', 'offset'], response: '{cwd, file, present, file_bytes, parse_ms, error, mtimeMs, rows, total, returned, offset, limit, truncated}. Same bounded/honest-absence contract as /api/prd.' },
   { path: '/api/export', method: 'GET', params: ['cwd'], response: 'file download: {snapshot, sessions, deviations, prd, mutables, exportedAt, cwd}' },
   { path: '/api/prd/edit', method: 'POST', params: ['body: {cwd, id, since?, status?, text?}'], response: '{ok, cwd, id, row, mtimeMs} | 409 conflict {error, mtimeMs, currentRow}' },
   { path: '/api/mutables/edit', method: 'POST', params: ['body: {cwd, id, since?, status?, witness?}'], response: '{ok, cwd, id, row, mtimeMs} | 409 conflict {error, mtimeMs, currentRow}' },
@@ -2277,14 +2327,12 @@ export function createServer({ logDir, port = 0, host = '127.0.0.1' } = {}) {
       if (p === '/api/prd') {
         const scope = resolveScopedCwd(store, q.cwd);
         if (!scope.ok) return send(res, 403, { error: scope.error });
-        const { mtimeMs, rows } = readPrd(scope.cwd);
-        return send(res, 200, { cwd: scope.cwd, mtimeMs, rows });
+        return send(res, 200, yamlRowsPayload(scope.cwd, 'prd.yml', readPrd, q));
       }
       if (p === '/api/mutables') {
         const scope = resolveScopedCwd(store, q.cwd);
         if (!scope.ok) return send(res, 403, { error: scope.error });
-        const { mtimeMs, rows } = readMutables(scope.cwd);
-        return send(res, 200, { cwd: scope.cwd, mtimeMs, rows });
+        return send(res, 200, yamlRowsPayload(scope.cwd, 'mutables.yml', readMutables, q));
       }
       if (p === '/api/export') {
         const scope = resolveScopedCwd(store, q.cwd);

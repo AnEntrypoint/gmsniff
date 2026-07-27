@@ -20,13 +20,36 @@ export { correlationOf, correlationKey, correlationCoverage, CORRELATION_KINDS }
 // grows it from whatever tags real events actually carry, which is the only defence against the
 // hardcode drifting stale again.
 //
-// Verified against live per-project watcher.log data (the real current source; ~/.claude/gm-log
-// is dead): plugkit (untagged default, 11,979), hook (955), rs_learn (666), memory (88).
-// 'rs_learn' is restored -- the rs-learn CRATE is retired, but the TAG is still what every
-// pre-cutover recall event in real log history carries, and dropping it silently hid 666 real
-// events. 'memory' is the same event class under its current tag (recall.rs). 'bootstrap' has
-// zero live events in any discovered project but is retained as a seed only, since its absence
-// is an absence of activity rather than proof the tag was retired.
+// Reconciled against BOTH ../gm source and a full-history replay of all 60 discovered projects
+// (233,443 events). Only two tags are ever written as a real `sub` field by current gm:
+//
+//   hook     -- 4 emit sites in rs-plugkit/crates/plugkit-core (wasm_dispatch/events.rs:9,
+//               gates.rs:119, lib.rs:128, orchestrator/instructions/mod.rs:251). 2,781 events
+//               across 60 projects, spanning 2026-05-22..now. Every deviation.* event.
+//   memory   -- 1 emit site (orchestrator/recall.rs:39). 5,516 events across 47 projects,
+//               2026-07-07..now. All `recall`.
+//
+//   rs_learn -- RETAINED, and the reason is the whole point of this list. It has zero string
+//               literals left in ../gm source, so a source-only check concludes it is retired and
+//               drops it. But it carries 5,295 real events across 28 projects spanning
+//               2026-06-20..2026-07-07, and it is the SAME `recall` event that `memory` carries
+//               after that date -- a clean rename cutover on 2026-07-07, not a retirement.
+//               Dropping it makes 5,295 events in real, still-readable history untaggable.
+//               Commit 17af397 ("fix subsystem tags (memory not rs_learn)") read the rename as a
+//               correction and removed the old tag; both tags are required, because gmsniff reads
+//               history as well as live data.
+//   plugkit  -- never emitted as a `sub` field by gm at all. It is THIS PARSER's default tag for
+//               an evt record with no `sub` (41,925 such records) and for every synthesized
+//               line-event, so it is a real tag in gmsniff's own output and must stay.
+//   bootstrap -- retained as a seed only. bin/bootstrap.js does emit it, but through obsEvent(),
+//               which writes ~/.claude/gm-log/<day>/bootstrap.jsonl -- the ARCHIVE tree, never
+//               .gm/exec-spool/.watcher.log. So it is reachable on an explicit {archive:true}
+//               read and structurally unreachable on the live spool path. Zero live events is
+//               therefore expected, not evidence of retirement.
+//
+// This is a SEED, not a closed set: observeSubsystem grows it from whatever tags real events
+// actually carry, which is the only defence against the hardcode drifting stale again.
+// gui/panels.js SUB_LIST must carry this identical literal.
 export const SUBSYSTEMS = ['plugkit', 'hook', 'bootstrap', 'memory', 'rs_learn'];
 
 const _observedSubsystems = new Set(SUBSYSTEMS);
@@ -93,19 +116,34 @@ export const GM_LOG_DIR_EXPLICIT = !!process.env.GM_LOG_DIR;
 // numbers silently -- the present failure mode is entirely invisible.
 export const STALE_SOURCE_MS = parseInt(process.env.GM_STALE_SOURCE_MS, 10) || 6 * 60 * 60 * 1000;
 
+// `events` is REQUIRED. Called with no argument it used to fall through the empty-loop and return
+// {stale:true, reason:'no timestamped events'} -- a confident STALE verdict about a source it had
+// never looked at, which fed a user-facing warning. A missing argument is a programming error at
+// the call site, not evidence about the data, and the two must not produce the same output. It now
+// throws, while a genuinely empty/untimed array still returns the honest stale verdict.
+//
+// `untimed` counts events carrying no parseable ts. Those events are structurally invisible to
+// every time-based surface (sort, day-bucket, age, window), so the count is reported rather than
+// left as a silent shortfall between total events and events any time view can see.
 export function sourceStaleness(events, now = Date.now()) {
-  let newest = 0;
-  for (const e of events || []) {
-    const t = e && e.ts ? Date.parse(e.ts) : NaN;
-    if (Number.isFinite(t) && t > newest) newest = t;
+  if (events === undefined || events === null) {
+    throw new TypeError('sourceStaleness(events) requires an events array; call it with the events whose source you are auditing');
   }
-  if (!newest) return { newest_ts: null, age_ms: null, stale: true, reason: 'no timestamped events' };
+  let newest = 0;
+  let timed = 0, untimed = 0;
+  for (const e of events) {
+    const t = e && e.ts ? Date.parse(e.ts) : NaN;
+    if (Number.isFinite(t)) { timed++; if (t > newest) newest = t; } else untimed++;
+  }
+  if (!newest) return { newest_ts: null, age_ms: null, stale: true, reason: 'no timestamped events', timed, untimed };
   const age = now - newest;
   return {
     newest_ts: new Date(newest).toISOString(),
     age_ms: age,
     stale: age > STALE_SOURCE_MS,
     reason: age > STALE_SOURCE_MS ? `newest event is ${Math.round(age / 3600000)}h old` : null,
+    timed,
+    untimed,
   };
 }
 
