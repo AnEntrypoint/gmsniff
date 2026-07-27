@@ -18,6 +18,10 @@ Roughly 15% of watcher-log lines are `evt: {json}`; the remaining structured-tex
 
 Parse coverage is reported, not assumed: every replay carries `parse_stats` with `modeled_ratio` / `unmodeled_ratio`. A change that drops modeled coverage is a regression even if nothing throws. Do not "simplify" the parser to the JSON path only.
 
+**Not every unmodeled line is a gap — some are already modeled through the other channel.** gm's panic hook emits *both* halves from one handler: a `host_log` `WASM PANIC at …` text line **and** an `emit_event("wasm_panic", …)` record carrying structured `location`/`message`/`ts`. Measured 13 text lines against 14 evt records, 13/13 twinned, zero orphans. Modeling that text line as its own event would double-count every panic. Before parsing an unmodeled shape, check whether an `evt` record already carries it.
+
+**Counting bugs hide as bigger, more credible numbers.** The live tailer once re-read every line the boot replay had already ingested, doubling every count, rate and per-project total with nothing erroring. It surfaced only because a test asserted an *exact* count against a fixture writing exactly one line. Keep exact-count assertions scoped to a fixture cwd; never relax one to a threshold or paper over it with a dedupe.
+
 ## Comments are a liability when names and structure encode the same thing
 
 Write code that explains itself, and delete the comment that was compensating. A comment restating what the line does is a defect: rename the variable, extract the predicate, or name the constant until the code carries the meaning, then remove the prose. `spoofMarker` plus a comment explaining the spoof becomes `markerOnLineClaimingAnotherProjectsCwd` with no comment; a `[src, dest]` tuple list needing a comment to explain the tuple becomes a flat path list; a 26-line usage banner becomes a real `--help`.
@@ -55,6 +59,8 @@ Keep them separate; substituting one for another is the recurring bug.
 `.gm/exec-spool/.status.json` is `{pid, ts, daemon: true, shared_process: true, runtime: "agentplug"}`. There is no `busy_until`, no `version`, no `wrapper_sha`, no `idle_limit_ms`, and `pid` is a machine-wide shared daemon pid — never treat it as this project's own process. Machine-global state lives in `~/.gm-tools/` (`daemon-status.json`, `daemon-registry.txt`, `plugkit.version`, `gm-plugkit.version`), and that is where the runtime version comes from.
 
 `~/.gm-tools/daemon-registry.txt` is the daemon's own list of served cwds and is the discovery hint that reaches deep worktree paths a one-level scan misses. It is append-only and never self-prunes, so every candidate must be filtered against real filesystem existence before use.
+
+**`GM_SPOOL_DIRS` adds a discovery root; it does not restrict discovery.** `C:/dev` and `process.cwd()` are always scanned as well. A test that sets it and then asserts a fleet-wide total is machine-dependent and will fail elsewhere — scope every fixture assertion to the fixture's own cwd.
 
 ## Correlation identity is ranked, never assumed
 

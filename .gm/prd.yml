@@ -790,3 +790,19 @@
   text: gui-extra.css declares gm-bar-visual, gm-center-mt-14, gm-conflict, gm-flex-2, gm-graph-node and gm-muted-12 with no consumer anywhere. Note gm-health-amber and gm-health-red are NOT orphans despite appearing so -- they are built by string concatenation, which a naive grep misses.
   witness: GUI agent verified consumers for each; the two false positives are concatenated at their use site
   status: pending
+- id: gui-consume-runtime-failures
+  text: 'The GUI shows snapshot.errors, which is STRUCTURALLY always 0 because gm runtime failures carry neither ok:false nor err. Verified live: errors 0 while runtimeFailures reports wasm_panic 1 in the same payload. A panel displaying errors is displaying a number that can never be non-zero. Consume runtimeFailures and runtimeFailuresTotal instead, per-name and unranked.'
+  witness: 'live /api/snapshot: errors 0, runtimeFailuresTotal 1, runtimeFailures {wasm_panic:1}'
+  status: pending
+- id: gui-consume-parse-health
+  text: '/api/parse-health is unconsumed by any panel. It reports per-project parse coverage for all 70 projects unfiltered, plus correlation honesty (dominant_kind run at 71.8 percent, best_kind sess, has_true_session true) and the full line-class breakdown (378065 lines: 55992 event, 121083 dispatch, 19649 spawn, 19752 blank). Surfacing it makes an unparsed upstream format change visible instead of silent.'
+  witness: live /api/parse-health with 70 project rows and a populated correlation block
+  status: pending
+- id: document-panic-emitted-twice-by-design
+  text: 'gm emits a panic through BOTH channels from one handler (rs-plugkit wasm_dispatch/events.rs:38-55): a host_log WASM PANIC at text line AND an emit_event wasm_panic record. Measured 13 text lines against 14 evt records with 13/13 twinned and zero orphans. Modeling the text line as its own event would double-count every panic. Record this so a future parser pass does not add it.'
+  witness: server agent measured the twinning against real data and read the gm emitter source
+  status: pending
+- id: gm-spool-dirs-adds-not-restricts
+  text: GM_SPOOL_DIRS ADDS a discovery root rather than restricting discovery -- C:/dev and process.cwd() are always scanned (src/index.js:309). Existing tests pass only because each asserts against its own projects rows; a future test asserting a fleet-wide total would be machine-dependent and fail on another machine. Document the semantics, and keep fixture assertions scoped to their own cwd.
+  witness: server agent traced it to src/index.js:309 while diagnosing a fixture count
+  status: pending
