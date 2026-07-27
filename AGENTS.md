@@ -107,20 +107,16 @@ No test framework, no `test/` directory. `test.js` at repo root is the single, m
 
 ## gui/ds vendoring
 
-`gui/ds/` is vendored from the sibling repo `../anentrypoint-design` via `scripts/sync-ds.mjs` (byte-for-byte copy of the paths listed in `VENDORED_PATHS_RELATIVE_TO_BOTH_ROOTS`). Never hand-edit a file under `gui/ds/` directly — the next `npm run sync:ds` silently overwrites it. Fix the file in `../anentrypoint-design` first, then `npm run sync:ds` to pull it down, then `npm run sync:ds:check` to confirm zero drift before committing.
-
-Vendoring exists because the published package must run standalone: `gui/ds` ships as static files served verbatim, there is no bundler and no runtime dependency resolution, so a live filesystem import from a sibling checkout cannot work for an installed user. For the same reason the sync is deliberately **not** wired into `npm install`/`prepare` — that would make installing gmsniff require a sibling checkout. Vendor the raw unprefixed component sources, never the upstream `dist/` bundle (its classes are scoped under a prefix gmsniff does not use) and never via the package `exports` map (it does not expose these subpaths).
-
-**Vendoring a CSS import manifest means vendoring its targets.** `gui/ds/app-shell.css` is a manifest of `@import url('./src/css/app-shell/*.css')` — it contains no rules of its own. If those parts are absent, every rule it references is silently inert: no error, no console warning, only 404s and unstyled components that look like a design bug. When vendoring any file, follow its imports and vendor the whole closure, then confirm in the browser that the rules actually apply.
+Never hand-edit a file under `gui/ds/` — fix it in `../anentrypoint-design`, then `npm run sync:ds`, then `npm run sync:ds:check` for zero drift. **Vendoring a file means vendoring its whole import closure**, and confirming in a browser that the rules actually apply: a CSS manifest whose targets are absent is silently inert, with only 404s to show for it. (Mechanics — why vendored rather than a dep or a live import, which sources to take, the `npm pack --dry-run` check — recall `gui/ds vendoring`.)
 
 ## Packaging
 
-`package.json` `files` is `["src/", "gui/"]`, which ships everything under both trees plus `package.json` and `README.md`. Any new module under `src/` or asset under `gui/` is included automatically — but a partial vendor is not caught by packaging, it is caught by the closure rule above. Verify with a real `npm pack --dry-run` after adding or vendoring files; the published tarball is the only thing an installed user has.
+`files` is `["src/", "gui/"]`, so anything added under either tree ships automatically — but a *partial vendor* is caught by the closure rule above, never by packaging. Verify with a real `npm pack --dry-run`; the tarball is all an installed user has.
 
 ## Information tiering (deliberate)
 
-The GUI sidebar (`gui/app.js` renderShell) and CLI help (`src/cli.js` printHelp) are tiered daily-first for the observer: the live-agents/manager view leads, then Daily and Investigate; Subsystems, Analytics, and Control panels sit behind a collapsed-by-default "Show advanced" toggle (localStorage key `gmsniff.nav.advanced`, whitelist-validated). `--help` opens with QUICK START before INVESTIGATION/DIAGNOSTICS/AGENT-FACING, and `--schema` subcommands carry a matching `tier` field. Do not flatten, merge, or re-alphabetize this ordering as cleanup. Demoted panels stay reachable via the Ctrl+K palette and `#panel=` deep links, which auto-expand the group session-only.
+The GUI sidebar and CLI help are tiered daily-first, live-manager-view leading, with Subsystems/Analytics/Control behind a collapsed "Show advanced" toggle. **Do not flatten, merge, or re-alphabetize that ordering as cleanup** — demoted panels stay reachable via the Ctrl+K palette and `#panel=` deep links.
 
-`src/index.js` `SUBSYSTEMS` is the hardcoded seed for the subsystem-tag universe; `gui/panels.js` `SUB_LIST` seeds from the identical literal because the browser bundle cannot import the Node module. Both grow at runtime from `Dashboard`'s `snap.observedSubsystems` merge when a genuinely new tag appears in real data. Do not add or remove a subsystem tag in either list without confirming against current `../gm` source and recent real watcher-log data — the two literals must stay identical to each other.
+`src/index.js` `SUBSYSTEMS` and `gui/panels.js` `SUB_LIST` are the same literal, duplicated because the browser cannot import the Node module. **The two must stay identical**, and neither changes without confirming against current `../gm` source and real watcher-log data. (Toggle key, tier fields, the runtime `observedSubsystems` merge — recall `gmsniff information-tiering`.)
 
 @.gm/next-step.md
