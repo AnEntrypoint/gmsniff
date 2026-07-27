@@ -46,6 +46,10 @@ The failure this rule exists to prevent is concrete: `stuck-projects` once decid
 
 So: report the measurement **and how old it is**, for **every** project, and let the caller sort or threshold. A threshold that only affects *presentation* is fine (the health banner, the CLI's working-only default) provided the underlying numbers stay reachable and the reason is always named alongside the flag — a bare word with no measurement behind it is exactly what this forbids. Naming a real causal chain the data implies (`embed_query_failed` cascading into dropped vector hits, so codesearch silently answers from bm25 only) is an observation, not a verdict, and is encouraged.
 
+**Ranking is not scoring.** `attentionScore` weights ten conditions and orders the agent list by the result — and that is fine, because it ranks a *complete* list, attaches a `reasons` array naming each contributing cause, and drops nothing. `stuckProjects` used the same shape and was wrong, because it returned only the projects scoring above zero. The line is whether anything becomes unreachable: order freely, surface the cause, never omit. A ranked list with its reasons hidden degrades back into a bare number and fails this rule again.
+
+**Reporting another system's classification is not minting your own.** `DEVIATION_META` maps each gm deviation kind to the recovery verb gm itself documents, and gm writes a `severity` field into its own `prd.yml` rows; passing those through is reporting gm's facts. Inventing a severity gmsniff computed is not.
+
 ## Liveness has three distinct meanings
 
 Keep them separate; substituting one for another is the recurring bug.
