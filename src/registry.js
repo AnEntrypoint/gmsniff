@@ -16,7 +16,12 @@ const EMPTY_FIELD_VALUE = '';
 // the boundary line onward, so rewriteRow can put every untouched row back byte-for-byte.
 export function parseYamlRows(text) {
   if (!text) return [];
-  const lines = text.split('\n');
+  // gm writes these files with the host's own line endings, so on Windows they arrive CRLF. A
+  // trailing \r left on each line makes every boundary and field regex fail its `$` anchor, and
+  // the file parses to ZERO rows -- gmsniff reading its own PRD store as empty while 15 rows sit
+  // in it. Strip the \r for matching only; _start/_end still index the original lines so
+  // rewriteRow puts every untouched row back byte-for-byte, CRLF included.
+  const lines = text.split('\n').map(l => (l.endsWith('\r') ? l.slice(0, -1) : l));
   const rows = [];
   let cur = null;
   let fieldAccumulatingBlockList = null;
