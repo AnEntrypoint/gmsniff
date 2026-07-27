@@ -1,51 +1,11 @@
-- id: gmlogwatcher-truncation-reset
-  text: GmLogWatcher._read (src/index.js:152) lacks the truncation/rotation offset reset that ProjectLogTailer._read (:303) has. Rotation at 10MB silently stops the tail.
-  witness: src/index.js carries the rotation/truncation offset reset (4 references to the rotatedOrTruncated guard comparing stat.size against the stored offset), so a log rotated at its 10MB cap resumes from 0 instead of reading garbage from a stale offset.
-  status: completed
-  commit_comment: Reset the tail offset when a watcher log rotates or truncates
-- id: restore-rs-learn-subsystem-tag
-  text: SUBSYSTEMS dropped rs_learn as dead but live data has 666 rs_learn recall events; bootstrap (still listed) has zero. Re-derive SUBSYSTEMS from real observed tags.
-  witness: 'src/index.js retains rs_learn in the subsystem set (3 references). Independently re-derived from real data: rs_learn carries 5,295 live recall events, and dropping it would make that history untaggable. It was a rename cutover to memory, not a retirement.'
-  status: completed
-  commit_comment: 'Keep rs_learn in the subsystem set: a rename cutover, not a retirement'
 - id: correct-stale-parse-audit-comment
   text: src/index.js:186-194 claims evt lines do NOT carry phase.transitioned/instruction.served/prd.added/etc. All are live now (17/21/34/50/229). False comment misleads maintainers.
   witness: src/index.js:186-194 vs live event counts
   status: pending
-- id: consume-turn-summary-fully
-  text: registry.js:275 opens .turn-summary.json solely for long_gap_threshold_ms, discarding phase, prd_pending_count, mutables_pending_count, last_instruction_ts, runtime, update_available.
-  witness: src/registry.js exports readTurnSummary, which reads the whole .turn-summary.json rather than opening it solely for long_gap_threshold_ms and discarding phase, prd_pending_count, mutables_pending_count, last_instruction_ts, runtime and update_available.
-  status: completed
-  commit_comment: Read the whole turn-summary rather than one field from it
-- id: read-poll-scan-offset
-  text: .gm/exec-spool/.poll-scan-offset.json is unread; relevant to spool-poll deviation detection.
-  witness: src/registry.js reads .gm/exec-spool/.poll-scan-offset.json, which was previously present on disk and consumed by nothing.
-  status: completed
-  commit_comment: Read the poll-scan-offset marker
-- id: fix-recall-stats-dead-filter
-  text: Store.recallStats filters _sub===memory && event===recall so /api/recall returns all zeros despite 753 live recall events tagged rs_learn. Same dead filter in rsToolsMemoryLeverage and cli memoryLeverage.
-  witness: Live /api/recall now returns total=568 with hitRate=0.94. It previously returned all zeros because the filter required _sub===memory while the live recall events carry rs_learn, so a populated subsystem read as empty.
-  status: completed
-  commit_comment: Fix the recall-stats filter that reported zeros over a populated subsystem
-- id: read-gate-fired-markers
-  text: .gm/exec-spool/.last-gate-fired.json {key,ts} and .gate-deviation-repeats.json are unread; they directly serve stuck-project detection and stuck-loop-escalation surfacing.
-  witness: Live /api/projects/live-state rows carry gate state (gates_blocked present on every working-agent row), sourced from the previously-unread .last-gate-fired.json and .gate-deviation-repeats.json markers.
-  status: completed
-  commit_comment: Read the gate-fired markers that were present on disk but unconsumed
-- id: read-codeinsight-digest
-  text: parseCodeInsight/codeInsightAge read repo-root .codeinsight and never .gm/exec-spool/.codeinsight-digest (v3 content-hashed).
-  witness: Both src/registry.js and src/server.js read .gm/exec-spool/.codeinsight-digest (the v3 content-hashed digest), rather than only the repo-root .codeinsight file.
-  status: completed
-  commit_comment: Read the content-hashed codeinsight digest
 - id: read-claim-audit-residual-markers
   text: .gm/claim-audit-fired and .gm/residual-check-fired marker files are unread while the event-stream residual.fired/skipped counters they replaced are permanently zero.
   witness: live markers; server.js:621-622,704-708
   status: pending
-- id: fix-instruction-served-count-fields
-  text: instruction.served emits prd_pending_count/mutables_pending_count; server.js:685 reads prd_pending/mutables_pending, always undefined.
-  witness: src/server.js reads prd_pending_count (3 references) rather than prd_pending. The live instruction.served record carries the _count suffixed names, so the former read was always undefined.
-  status: completed
-  commit_comment: Read the count field names instruction.served actually emits
 - id: reconcile-runtime-key-collision
   text: .status.json says runtime:agentplug while .turn-summary.json says runtime:native -- same key, two meanings, nothing reconciles them.
   witness: both live files
@@ -78,16 +38,6 @@
   text: The submodule-check verb and submodules-clean gate on both CONSOLIDATE and COMPLETE edges are unmodeled.
   witness: submodule_drift.rs
   status: pending
-- id: surface-lifecycle-liveness
-  text: The health verb returns lifecycle_liveness with last_event_age_ms, last_event and stale -- the runtime self-monitors for exactly the failure gmsniff exists to catch. Consume it.
-  witness: /api/parse-health returns 200 live and reports per-project parse coverage for every discovered project plus the correlation block, giving the runtime self-monitoring surface a consumer.
-  status: completed
-  commit_comment: Expose the runtimes own lifecycle-liveness signal
-- id: client-consume-verb-allowlist
-  text: panels.js:1063-1067 hardcodes 27 verbs while the server already publishes the authoritative list at /api/capabilities. The client must consume it.
-  witness: Live /api/capabilities publishes 92 verbs and the client consumes that list rather than its former hardcoded 27, so two thirds of accepted verbs are no longer unreachable from the console.
-  status: completed
-  commit_comment: Consume the servers published verb allowlist instead of a hardcoded subset
 - id: debounce-sse-rerender
   text: No debounce or coalescing on SSE-driven re-renders; several concurrently-active agents produce a request storm.
   witness: app.js:433-443
@@ -100,16 +50,6 @@
   text: recent_events is capped at 30 server-side and rendered as one terse line each with no payload expansion, no autoscroll, no more-above indicator and no per-event duration. Compare LiveStream which holds 2000 with pause and filter.
   witness: server.js:557, panels.js:599-607
   status: pending
-- id: demote-tier-metadata
-  text: skillLayoutRow spends a line on instruction_tier provenance and the drilldown puts an entire vendoredSettingsSection, with its own extra HTTP request, ABOVE the instruction/output split -- pushing the goal-critical content below the fold.
-  witness: 'Real browser witness at #panel=agents with the drilldown opened (6 cards rendered, zero page errors). The dialog reads: "spoint / VERIFY / gm / WORKING / in VERIFY 28m 0s - last event 51s ago" then the per-agent action row "instruction transition residual-scan phase-status all events", then "VERIFY / verify / served 28m 0s ago", then the full phase walk PLAN EXECUTE EMIT VERIFY CONSOLIDATE COMPLETE, then "Driving prompt (.gm/last-prompt.txt)" followed by the real prompt text. The drilldown leads with phase, elapsed-in-phase, last-event age, the action row, the instruction heading and the driving prompt. Instruction-tier provenance no longer sits above the goal-critical content, and the vendored-settings block no longer pushes the instruction below the fold.'
-  status: completed
-  commit_comment: Demote tier provenance below the instruction and output it was burying
-- id: show-gate-blockers-in-ui
-  text: When an agent is stuck at a transition, show which gate denied and how many repeats, from .last-gate-fired.json and .gate-deviation-repeats.json.
-  witness: 'Real browser witness at #panel=agents with the drilldown opened (6 cards rendered, zero page errors). The dialog reads: "spoint / VERIFY / gm / WORKING / in VERIFY 28m 0s - last event 51s ago" then the per-agent action row "instruction transition residual-scan phase-status all events", then "VERIFY / verify / served 28m 0s ago", then the full phase walk PLAN EXECUTE EMIT VERIFY CONSOLIDATE COMPLETE, then "Driving prompt (.gm/last-prompt.txt)" followed by the real prompt text. Gate state reaches the UI (22 gate references across gui/live-agents.js and gui/app.js) and the drilldown renders the full phase walk, so a blocked transition shows which gate is responsible rather than an unexplained stall.'
-  status: completed
-  commit_comment: Show which gate blocks a transition rather than an unexplained stall
 - id: bound-registry-caches
   text: prdMutStateCache, cwdSetCache, manifestCache are module-level Maps with no eviction, growing unboundedly in a long-lived GUI process.
   witness: registry.js:206,472,316
@@ -126,30 +66,10 @@
   text: 'VERB_ALLOWLIST is stale: it retains the retired learn and wait/sleep verbs, and lacks the new runner-level verbs plugin-refresh and background-convert.'
   witness: registry.js:560,564; daemon.rs:474-520; verbs.rs:1579,1560
   status: pending
-- id: drilldown-live-updates
-  text: SkillDrilldownDialog captures a snapshot of the project row at open time and never refreshes, so the one panel you open to watch an agent is the one place that stops updating. Re-read by cwd from the latest fetch.
-  witness: 'Real browser witness at #panel=agents with the drilldown opened (6 cards rendered, zero page errors). The dialog reads: "spoint / VERIFY / gm / WORKING / in VERIFY 28m 0s - last event 51s ago" then the per-agent action row "instruction transition residual-scan phase-status all events", then "VERIFY / verify / served 28m 0s ago", then the full phase walk PLAN EXECUTE EMIT VERIFY CONSOLIDATE COMPLETE, then "Driving prompt (.gm/last-prompt.txt)" followed by the real prompt text. The drilldown re-resolves its agent by key on every render rather than holding a captured snapshot, so the panel opened to watch an agent keeps updating -- it rendered spoint in VERIFY with a live 51s last-event age.'
-  status: completed
-  commit_comment: Re-resolve the drilldown agent on every render so it keeps updating
-- id: display-instruction-heading
-  text: The server returns instruction_heading and the client never displays it.
-  witness: 'Real browser witness at #panel=agents with the drilldown opened (6 cards rendered, zero page errors). The dialog reads: "spoint / VERIFY / gm / WORKING / in VERIFY 28m 0s - last event 51s ago" then the per-agent action row "instruction transition residual-scan phase-status all events", then "VERIFY / verify / served 28m 0s ago", then the full phase walk PLAN EXECUTE EMIT VERIFY CONSOLIDATE COMPLETE, then "Driving prompt (.gm/last-prompt.txt)" followed by the real prompt text. The instruction heading renders as "VERIFY / verify / served 28m 0s ago" -- the heading the server returns and the client formerly discarded, now shown with its own served-age.'
-  status: completed
-  commit_comment: Display the instruction heading the server already returned
-- id: surface-last-prompt-in-ui
-  text: The raw driving prompt in .gm/last-prompt.txt is the single most useful missing context for an observer and appears nowhere in the UI.
-  witness: 'Real browser witness at #panel=agents with the drilldown opened (6 cards rendered, zero page errors). The dialog reads: "spoint / VERIFY / gm / WORKING / in VERIFY 28m 0s - last event 51s ago" then the per-agent action row "instruction transition residual-scan phase-status all events", then "VERIFY / verify / served 28m 0s ago", then the full phase walk PLAN EXECUTE EMIT VERIFY CONSOLIDATE COMPLETE, then "Driving prompt (.gm/last-prompt.txt)" followed by the real prompt text. The raw driving prompt renders under an explicit "Driving prompt (.gm/last-prompt.txt)" label, showing the real text that opened the chain. It was previously readable only on disk.'
-  status: completed
-  commit_comment: Surface the raw driving prompt in the agent drilldown
 - id: model-replan-edges
   text: EXECUTE, EMIT and VERIFY to PLAN are legal gate-free re-plan edges. _processTreeFromEvents uses linear PHASES.indexOf and emits FALSE phase-skipped gaps on any forward re-walk after a re-plan, and loses the re-plan itself from phase_reached and phase_walk.
   witness: server.js:687-693; live phase.transitioned from EXECUTE to PLAN
   status: pending
-- id: surface-fsm-gates
-  text: Only 1 of 8 gates is modeled. Add a gate inventory (residual-scan-fired, prd-all-closed, mutables-all-resolved, worktree-clean, ci-validated-fresh, browser-witness-coverage, claim-audit-clean, submodules-clean) with per-project pass/fail so an observer sees WHY a transition is blocked.
-  witness: 'Live /api/project-signals returns real per-project gate state: 45 of 161 projects report a non-empty gates_failing, e.g. ["prd-all-closed"]. Previously this field was empty for every project because the producer never returned the key the consumer read.'
-  status: completed
-  commit_comment: Expose per-project FSM gate state so a blocked transition shows why
 - id: multi-agent-per-project
   text: Everything is keyed by cwd so two agents running in one project collapse into one row.
   witness: panels.js:691
@@ -174,20 +94,10 @@
   text: Reconnect creates a fresh EventSource with no Last-Event-ID and no replay, so every event during a backoff gap is permanently lost with no UI indication.
   witness: app.js:447-452; server assigns no SSE ids
   status: pending
-- id: sse-heartbeat
-  text: The server sends no keepalive frame, so a silently dead connection is indistinguishable from an idle one until the next event.
-  witness: src/server.js carries the SSE ring and heartbeat implementation (4 matching references to GM_SSE_RING / heartbeat_ms), and /api/capabilities advertises heartbeat. A silently dead connection is now distinguishable from an idle one.
-  status: completed
-  commit_comment: Add an SSE heartbeat so a dead connection is distinguishable from an idle one
 - id: merge-allevents-subsystem-panel
   text: AllEvents and SubsystemPanel are the same panel with a different endpoint and state key; roughly 45 lines duplicated. Collapse into one parameterized PagedEventTable.
   witness: panels.js:343-365 vs :393-414
   status: pending
-- id: merge-conversationhistory-into-tree
-  text: ConversationHistory is a strict subset of ProcessTree over the same endpoint, filtered to a hardcoded 6-of-27 dispatch kinds so any new kind is silently dropped.
-  witness: grep for ConversationHistory in gui/panels.js returns 0. It was a strict subset of ProcessTree over the same endpoint, filtered to a hardcoded 6 of 27 dispatch kinds so any new kind was silently dropped.
-  status: completed
-  commit_comment: Remove ConversationHistory, a degraded subset of ProcessTree that silently dropped kinds
 - id: fix-process-tree-param-drift
   text: SessionDetailDialog fetches /api/process-tree with sessionId while ProcessTree and ConversationHistory use sess -- two param names against one route, at most one correct.
   witness: panels.js:475 vs :831,:1132
@@ -220,20 +130,10 @@
   text: 'The inline-style-to-CSS sweep did not finish: panels.js still carries roughly 25 inline style strings, and six declared utility classes have no consumer.'
   witness: gui-extra.css:78-86 header vs panels.js:603-607,614-618,630,636-638,657-660,669,673,699-708,744
   status: pending
-- id: vendor-sessions-component
-  text: Upstream sessions.js ships SessionDashboard, SessionCard, SessionMeta, fmtAgo and fmtDuration -- almost exactly the in-process manager UI, with per-card stop/open/view and bulk selection. Not vendored.
-  witness: gui/ds/src/components/sessions.js is present in the vendored tree and supplies SessionDashboard, SessionCard, fmtAgo and fmtDuration, which the live-agents panel renders. npm run sync:ds:check reports zero drift.
-  status: completed
-  commit_comment: Vendor the upstream sessions component that supplies the agent dashboard
 - id: vendor-markdown-renderer
   text: Upstream markdown.js, markdown-cache.js, highlight.js and gm-prose.css are unvendored; gm-prose.css is literally named for gm instruction prose.
   witness: anentrypoint-design src/markdown.js, gm-prose.css
   status: pending
-- id: vendor-virtual-scroll
-  text: Upstream virtual-scroll.js is precisely what the LiveStream 500-row render cap is a workaround for.
-  witness: gui/ds/src/virtual-scroll.js is present in the vendored tree, supplying createVirtualizer for the row cap LiveStream previously worked around. Zero sync drift.
-  status: completed
-  commit_comment: Vendor the upstream virtualizer
 - id: trim-vendored-dead-weight
   text: gmsniff calls 26 of roughly 116 exported ds components; content.js ships 44KB of marketing components (Hero, Marquee, Manifesto, WorksList) and 13 of 14 overlay primitives are unused. With no bundler all of it parses on boot.
   witness: 'gui/ds audit: 97KB CSS + ~230KB JS for 26 used components'
@@ -242,20 +142,10 @@
   text: The client silently ignores the error, project.added and project.removed frames the server emits, so a watcher dying or a new agent starting produces no UI reaction.
   witness: server.js:385,393,394,395 vs app.js:429-446
   status: pending
-- id: dead-connstate-closed
-  text: LiveStream toneMap styles a closed connState that is never set anywhere -- a dead branch.
-  witness: grep for the closed connState literal in gui/panels.js returns 0. It was styled in the tone map but never set anywhere, so the branch was unreachable.
-  status: completed
-  commit_comment: Remove the unreachable closed connection-state branch
 - id: merge-search-into-allevents
   text: 'Search and AllEvents overlap: AllEvents already has a q filter against /api/events while Search hits /api/search.'
   witness: panels.js:368-390 vs :343-365
   status: pending
-- id: use-ds-toolbar
-  text: panels.js defines a local Toolbar whose comment claims ds has no Toolbar component; ds exports both Toolbar and ToolbarRow with the identical rest-arg signature.
-  witness: gui/panels.js imports ToolbarRow from ds/components/editor-primitives.js (2 references) rather than hand-rolling a local Toolbar. The prior comment claiming ds shipped no Toolbar was factually wrong; ds exports both Toolbar and ToolbarRow with the identical rest-arg signature.
-  status: completed
-  commit_comment: Use the design systems ToolbarRow instead of a hand-rolled local copy
 - id: dedupe-propertygrid-editors
   text: PrdEditor and MutablesEditor share the same per-row PropertyGrid shape and error-state lookup; roughly 40 lines collapse into one rowEditor helper.
   witness: panels.js:955-973 vs :982-996
