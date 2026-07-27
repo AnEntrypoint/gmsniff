@@ -522,12 +522,16 @@ async function go(id) {
 // Deliberately one poller for both the deviation badge and the cross-project
 // health banner, not a second setInterval alongside it.
 async function refreshDeviationBadge() {
+  // observed=1 because the banner scopes to working agents anyway: the
+  // unfiltered route measured 38KB/173 rows of which 159 had never been observed
+  // at all, shipped every poll only to be filtered out client-side.
   const [devR, healthR] = await Promise.all([
     api('/api/deviations?limit=1'),
-    api('/api/health-summary'),
+    api('/api/health-summary?observed=1'),
   ]);
   ui.devTotal = devR.total || 0;
   ui.health = Array.isArray(healthR) ? healthR : (healthR.rows || []);
+  ui.healthOmittedNeverObserved = healthR && healthR.omitted_never_observed || 0;
   renderShell();
 }
 

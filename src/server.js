@@ -1544,11 +1544,29 @@ function serveStatic(req, res) {
   });
 }
 
+// A parsed limit reaches slice() directly, so `limit=-5` sliced from the END of
+// the array and `limit=99999999` from the start -- both measured returning the
+// entire 10026-row store as a 3.5MB response, the largest payload the server can
+// be made to produce, from one malformed query. A non-finite or non-positive
+// limit falls back to the route's own default by staying undefined.
+// 2000 rows measured at ~700KB. A 10000 ceiling was tried and rejected: it
+// exceeded the live 10026-row store, so `limit=99999999` still clamped to a
+// 3.5MB near-complete dump -- a bound above the data it bounds is not a bound.
+// `total` is always returned alongside, so a capped caller can see the whole
+// count and page for the rest.
+const REQUEST_LIMIT_MAX = 2000;
+
 function pq(u) {
   const q = {};
   for (const [k, v] of u.searchParams) q[k] = v;
-  if (q.limit) q.limit = parseInt(q.limit, 10);
-  if (q.offset) q.offset = parseInt(q.offset, 10);
+  if (q.limit !== undefined) {
+    const n = parseInt(q.limit, 10);
+    q.limit = Number.isFinite(n) && n > 0 ? Math.min(n, REQUEST_LIMIT_MAX) : undefined;
+  }
+  if (q.offset !== undefined) {
+    const n = parseInt(q.offset, 10);
+    q.offset = Number.isFinite(n) && n > 0 ? n : undefined;
+  }
   return q;
 }
 
@@ -1931,18 +1949,26 @@ export function createServer({ logDir, port = 0, host = '127.0.0.1' } = {}) {
       }
       if (p === '/api/projects') {
         const watchedKeys = new Set((store.watchedProjects || []).map(w => path.resolve(w.cwd).replace(/\\/g, '/').toLowerCase()));
+        // The 23-field `liveness` sub-object is 657 of each row's 962 bytes --
+        // 110KB of the measured 163KB across 173 rows -- and no GUI surface
+        // reads it; the panels take their liveness from live-state instead. It
+        // stays on by default so no existing caller loses a field, and
+        // `liveness=0` drops it for callers that only need the roster. The
+        // component clocks remain reachable per project via readProjectLiveness
+        // through /api/projects/live-state.
+        const includeLiveness = q.liveness !== '0';
         const projects = discoverProjectsCached(store.events).map(proj => {
           const liveness = readProjectLiveness(proj.cwd);
           return {
             ...proj,
             alive: liveness.alive,
             activity: liveness.activity,
-            liveness,
+            ...(includeLiveness ? { liveness } : {}),
             version: readServedVersion(proj.cwd).version,
             watching: watchedKeys.has(path.resolve(proj.cwd).replace(/\\/g, '/').toLowerCase()),
           };
         });
-        return send(res, 200, { projects, source: store.sourceHealth() });
+        return send(res, 200, { projects, liveness_included: includeLiveness, source: store.sourceHealth() });
       }
       // Split out of live-state so the list view never pays for 63 multi-KB instruction bodies.
       if (p === '/api/projects/instruction') {
@@ -2061,7 +2087,22 @@ export function createServer({ logDir, port = 0, host = '127.0.0.1' } = {}) {
         });
       }
       if (p === '/api/health-summary') {
-        return send(res, 200, healthSummary(store));
+        const all = healthSummary(store);
+        // Measured 173 rows / 38KB, of which 159 have staleSeconds null -- never
+        // observed at all -- while the banner renders only the handful
+        // live-state reports as working. `observed=1` skips the never-seen rows
+        // and NAMES how many it left out; the unfiltered set stays the default
+        // so nothing becomes unreachable by asking for it plainly.
+        if (q.observed === '1') {
+          const observed = all.filter((r) => r.staleSeconds != null);
+          return send(res, 200, {
+            rows: observed,
+            total: all.length,
+            returned: observed.length,
+            omitted_never_observed: all.length - observed.length,
+          }, 'application/json', p);
+        }
+        return send(res, 200, all, 'application/json', p);
       }
       if (p === '/api/prd') {
         const scope = resolveScopedCwd(store, q.cwd);

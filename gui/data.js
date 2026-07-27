@@ -42,8 +42,10 @@ export async function apiPost(path, body, { scoped = false } = {}) {
   }
 }
 
+// liveness=0 because no panel reads that sub-object -- it was 110KB of the
+// route's measured 163KB across 173 rows, fetched on every roster refresh.
 export async function loadProjects() {
-  const r = await api('/api/projects');
+  const r = await api('/api/projects?liveness=0');
   state.projects = Array.isArray(r.projects) ? r.projects : [];
   return state.projects;
 }
