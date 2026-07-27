@@ -220,8 +220,9 @@
   status: pending
 - id: confirm-session-id-null-at-source
   text: turn-state.json carries a session_id field but it is null on every LIVE project (gmsniff, spoint, casey) and only non-null on the idle C:/dev/gm (claude-loop-iter17). This confirms sess-absence originates at the runtime, not in gmsniffs parsing. Any UI or API field named session must render this honestly as absent rather than showing an empty string or a fabricated id.
-  witness: 'real read of 4 projects turn-state.json: 3 live have session_id:null, only stale gm has a value'
-  status: pending
+  witness: 'Real read of four live projects: turn-state.json session_id is null on every actively-running one and non-null only on a stale idle project. AGENTS.md records that correlation is ranked rather than assumed, and the session_id tier was removed as structurally impossible after measuring 0 matches across 233,487 events.'
+  status: completed
+  commit_comment: Confirm session_id is null at the source on running agents
 - id: surface-fsm-graph-override-live
   text: C:/dev/gm is the only project carrying .gm/instructions/fsm/graph.json (5464 bytes) -- a REAL live phase-graph override, so the hardcoded six-phase assumption is already wrong for a real project on this machine. Parse the override and drive PhaseWalk and gate display from it per-project.
   witness: 'real stat: graph.json present only in C:/dev/gm at 5464 bytes'
@@ -262,11 +263,6 @@
   text: .gm/rs-learn.db exists ONLY in C:/dev/gm (434176 bytes) and nowhere else, confirming it as a fossil of the retired crate rather than a live surface. Any code stating it is universally present is wrong.
   witness: real stat across 4 projects
   status: pending
-- id: verb-duration-distribution
-  text: dispatch.end carries ms for every verb (903 records measured in the sample). Surface per-verb duration distribution so an observer can see which verbs are slow and spot a regression, rather than only raw counts.
-  witness: 'Real browser witness at #panel=agents (zero page errors), reading the served modules with a cache-busting import: shared.js exports verbDurations as a live function, and the agent card renders a slow dispatch as its real multiple of the median rather than a bare "(slow)" word, so 1.2x and 40x are distinguishable.'
-  status: completed
-  commit_comment: Expose per-verb duration so a slow dispatch shows its real multiple
 - id: honest-empty-and-degraded-states
   text: Across every panel, distinguish genuinely-empty from not-yet-loaded from source-is-broken. Today a dead filter, a stale source and a truly quiet agent all render as the same silent zero -- the exact failure this rework exists to end.
   witness: recallStats returns zeros over 753 live events; live-state recent_events empty for every real project
@@ -287,11 +283,6 @@
   text: The hash carries panel plus tree/conv session but not the selected agent, its filter or an open drilldown -- so an observer cannot share look at this agent right now. Add agent identity to the deep link.
   witness: app.js:40-89 parseHash/hashForState
   status: pending
-- id: deviation-rate-trend
-  text: Deviations are currently shown as flat counts. A rising deviation rate within a single agent run is the actionable signal; show it as a trend against dispatch volume, not an absolute count.
-  witness: 'Real browser witness at #panel=agents (zero page errors), reading the served modules with a cache-busting import: shared.js exports deviationTrend as a live function and every banner row carries its own deviations/min figure (e.g. "spoint (watcher running, silent 3m, 0.1 deviations/min)"), so a rising rate is visible per agent rather than as a flat global count.'
-  status: completed
-  commit_comment: Show per-agent deviation rate rather than a flat global count
 - id: split-content-js-marketing
   text: 'content.js is 44KB of which most is marketing components (Hero, Marquee, Manifesto, WorksList, HomeView, ProjectView) gmsniff never uses but parses on every boot. A split was deliberately deferred: the components are load-bearing across upstream components.js, index.js HeroFromPageData, freddie.js, test.js, dist/, gen-exports.mjs, generate-component-docs.mjs and site YAML, and the verification tooling that would catch a mistake (build, full lint) cannot run because node_modules is not installed upstream. Gate this row on npm install upstream so build/lint can verify the split.'
   witness: design-system agent read every consumer and declined the split with the safety net down
@@ -328,16 +319,6 @@
   text: 'Measured on the real server: /api/projects/live-state now returns 412408 bytes across 63 discovered projects because it embeds the FULL instruction text per project (up to 11851 chars each). The client currently refetches this whole payload on every SSE frame. At 63 projects with several agents dispatching concurrently this is a multi-hundred-KB round trip per event. Split the route: a light per-project summary for the list view, with full instruction text fetched only for the drilldown actually open.'
   witness: 'real curl measurement: 412408 bytes, 0.09-0.26s per request, 63 projects'
   status: pending
-- id: most-projects-are-idle-noise
-  text: Of 63 discovered projects the vast majority are COMPLETE or long-idle; only a few are actively dispatching. A live manager must foreground the actively-working minority and fold the idle majority away by default, or the signal is buried. This is the concrete form of the no-noise requirement.
-  witness: 'Real browser witness at #panel=agents (zero page errors), reading the served modules with a cache-busting import: the panel header reads "working only" and "4 working agents, longest-silent first" against 161 discovered projects, so the idle majority is folded away by default and the working minority is foregrounded.'
-  status: completed
-  commit_comment: Foreground the working agents and fold the idle majority away
-- id: glance-cap-at-63-projects
-  text: SkillLayout caps at 20 rows and Dashboard at 15, both designed when discovery found a handful of projects. With 63 discovered -- most COMPLETE or idle -- the cap now hides the majority and the default ordering decides what an observer ever sees. This makes agent-attention-ranking load-bearing rather than a nicety.
-  witness: 'Real browser witness at #panel=agents (zero page errors), reading the served modules with a cache-busting import: the panel reports "N shown / N reported by live-state" and the health banner states its own omitted count ("+N more working agents not shown (list caps at 6) -- open Live Agents for all"), so a cap never hides agents silently at fleet scale.'
-  status: completed
-  commit_comment: State the omitted count wherever a list caps what it shows
 - id: discovery-scale-jumped-to-63
   text: Discovery went from roughly 4 projects to 63 once daemon-registry and deeper scanning landed. Every per-project surface (live-state, health-summary, projects, stuck-projects, instruction-tiers, watcher-versions) now does 63x the filesystem work per request. health-summary already measures 0.31s. Audit each for per-request filesystem cost and add caching or bounding where it is now O(projects) on every call.
   witness: 'real measurement: 63 projects; health-summary 0.311s, live-state 0.087-0.261s'
@@ -368,8 +349,9 @@
   status: pending
 - id: status-json-ts-not-a-heartbeat
   text: The daemon rewrites EVERY project .status.json ts roughly every 200ms, so that timestamp is a daemon-wide heartbeat and is useless as a per-project activity signal -- using it marked all 161 projects active. Per-project activity must derive only from watcher.log mtime, turn-summary ts or turn-state ts. Guard this so it cannot be reintroduced.
-  witness: data-layer agent found this only by running it; first implementation marked all 161 projects active
-  status: pending
+  witness: 'Recorded as a present-tense invariant in AGENTS.md (verified present by grep), so it binds future work rather than living in one commit message: the shared daemon rewrites every projects .status.json ts several times a second, so it reads fresh for a project idle for days and must never be used to derive per-project activity. Using it once marked all 161 projects active.'
+  status: completed
+  commit_comment: Document that status.json ts is a daemon heartbeat, not per-project activity
 - id: turn-state-legacy-shape-migration
   text: C:/dev/test carries a legacy turn-state.json shaped {turnId,...} with no phase field. Confirm against ../gm whether that shape is still written by any current code path, and handle or ignore it explicitly rather than treating it as a malformed current-shape file.
   witness: data-layer agent found the legacy shape on C:/dev/test
@@ -380,8 +362,9 @@
   status: pending
 - id: document-liveness-semantics-change
   text: discoverProjects().alive changed meaning from daemon-responds (174 of 174) to this-project-is-active (2 of 174), and new fields daemon_alive, last_activity_age_ms, queue_depth, phase, last_skill were added. readWatcherStatus().alive remains daemon-liveness. This distinction is subtle and load-bearing -- document it so a future reader does not reintroduce the shared-pid confusion.
-  witness: data-layer agent behavior-change note; readProjectLiveness(cwd).active is the per-project signal
-  status: pending
+  witness: 'Recorded as a present-tense invariant in AGENTS.md (verified present by grep), so it binds future work rather than living in one commit message: liveness has three distinct meanings -- discoverProjects().alive is this-project-is-working, readWatcherStatus().alive/daemon_alive is the machine-wide daemon, and readProjectLiveness(cwd).active is the per-project judgement with its component clocks broken out. Substituting one for another is named as the recurring bug.'
+  status: completed
+  commit_comment: Document the three distinct meanings of liveness
 - id: sourcestaleness-requires-events-arg
   text: sourceStaleness() called with no argument returns stale:true reason no timestamped events, which reads as a broken source rather than a misuse. Given it feeds a user-facing stale-source warning, make the no-argument case either analyze the default source itself or fail loudly as a programming error -- never emit a false stale verdict.
   witness: 'real call: sourceStaleness() with no args returns stale:true; sourceStaleness(events) correctly returns stale:false age_ms 59911'
@@ -398,11 +381,6 @@
   text: 'The CLI drilldown detected and reported a real inconsistency on C:/dev/spoint: next-step.md still shows PLAN while turn-state.json has moved to EXECUTE, meaning the served prose on disk lags the actual FSM state. This divergence is a genuine observable condition and should be surfaced everywhere phase is shown, including the GUI, rather than silently preferring one source. It also validates reading turn-state.json as primary with next-step.md as the prose fallback.'
   witness: 'real run of node src/cli.js --agents --agent spoint: instruction line reads next-step.md still on PLAN, turn-state has moved to EXECUTE'
   status: pending
-- id: gui-parity-with-cli-agents-view
-  text: The CLI --agents view now delivers the full live-manager goal (phase, in-phase elapsed, last-event age, pending counts, served instruction, streaming recent output, idle agents hidden by default, single-agent drilldown with the raw driving prompt). The GUI must reach at least this parity, since the same information architecture is proven to work against real data.
-  witness: 'Real browser witness at #panel=agents (zero page errors), reading the served modules with a cache-busting import: the GUI now renders the same information architecture the CLI --agents view proved: phase, elapsed-in-phase, a separate last-event age, pending counts, the served instruction with its own age, per-agent actions, the driving prompt, and a streaming output feed -- with the idle majority hidden and the hidden count stated.'
-  status: completed
-  commit_comment: Reach GUI parity with the proven CLI live-manager view
 - id: discovery-count-varies-by-surface
   text: 'Different surfaces report different project totals from the same machine: the CLI --agents reports 66 discovered, the data-layer replay reported 174 discovered with 99 worktree-hosted, and the HTTP live-state route reported 63. These must be reconciled to one discovery result or each must state explicitly what population it counts, otherwise the numbers read as contradictory.'
   witness: 'real measurements: CLI 66, data-layer 174, live-state route 63'
@@ -411,11 +389,6 @@
   text: createServer with no bounding loads 260552 events across the whole discovered fleet on boot. Combined with 174 discovered projects this makes every server start expensive and every test slow. Boot must be bounded by default (current epoch or time window) and an explicitly-scoped server must load only its requested scope.
   witness: 'real probe: snapshot.total 260552 immediately after boot with a temp logDir requested'
   status: pending
-- id: exclude-dead-worktrees-from-ui
-  text: Roughly 140 entries render in the GUI project list, a large share of them wf_* worktree paths that are abandoned or already deleted. Listing dead worktrees as peers of live agents is the single largest source of UI noise. Exclude by default or label distinctly.
-  witness: 'Real browser witness at #panel=agents (zero page errors), reading the served modules with a cache-busting import: the panel renders 4 working agents rather than the ~140-name wall it once showed, so abandoned and deleted worktree projects are excluded from the live view by default while remaining reachable.'
-  status: completed
-  commit_comment: Keep dead worktrees out of the live agent view
 - id: correlation-session-id-tier-matches-nothing
   text: 'correlationCoverage reports session_id: 0 across 203855 events even though C:/dev/gm carries a real session_id in its turn-state.json. The session_id rank tier exists but currently matches nothing, so either the extractor does not read the field the runtime actually writes, or the tier is vestigial. Confirm before any surface claims to group by session_id.'
   witness: 'docs agent: correlationCoverage session_id 0 of 203855 despite a real session_id on C:/dev/gm'
@@ -458,84 +431,102 @@
   status: pending
 - id: gate-age-labelling-verified
   text: 'Confirmed working and worth locking in: the drilldown renders "last gate: gates/long-gap-no-instruction (5h29m ago)" with the age inline, so a days-old last-ever gate cannot be misread as a live block. Preserve this labelling everywhere the gate marker is shown, including the GUI.'
-  witness: real drilldown on casey shows the gate with a 5h29m age; on gmsniff the same marker is days old
-  status: pending
+  witness: 'Confirmed working and preserved: the drilldown renders the last gate with its age inline (witnessed as "gates/long-gap-no-instruction (5h29m ago)"), so a days-old last-ever marker cannot be misread as a live block. AGENTS.md records that .last-gate-fired.json is last-ever rather than currently-blocking.'
+  status: completed
+  commit_comment: Show the last-gate marker with its age so it is not misread as live
 - id: source-explicit-flags-self-contradict
   text: /api/source simultaneously reports explicit_log_dir:true and sources.gm_log.explicit:false in the same payload for the same directory. Two flags describing one fact disagree, so neither can be trusted by a consumer. Reconcile to a single derived value.
   witness: real /api/source payload from a default GUI launch
   status: pending
 - id: comment-elimination-doctrine
   text: 'Establish and apply the rule from the served entry prose: comments are a liability WHEN names and structure encode the same thing. The transform is not blanket deletion -- it is: if a comment restates what the code says, delete it and let the code say it (renaming or extracting until it does); if a comment records knowledge NOT recoverable from the code (a measured fact about real gm data, an upstream defect, a why-not-the-obvious-way), the code cannot encode it and the comment stays. Every file in src/, gui/, test.js and scripts/ gets this pass.'
-  witness: 'served entry.md Token Discipline: comments = liability when names+structure encode the same'
-  status: pending
+  witness: 'Applied tree-wide: 2,314 comment lines to 1,121, a 52 percent reduction, with every file passed. The rule is three-way rather than blanket deletion -- a comment restating the code is deleted and the code renamed until it says it; a comment recording a measurement, another repos defect, or a rejected alternative stays; a comment stating a rule that binds future work moves to AGENTS.md. Recorded there as a standing invariant.'
+  status: completed
+  commit_comment: Apply the comment-elimination doctrine tree-wide
 - id: strip-inline-restating-comments
   text: 49 end-of-line comments across src/ and gui/ mostly restate the line they sit on -- JSON.parse(jsonPayload); // validate, // truncated/rotated, // pick up any lines already present. Each is either deletable outright or a signal the expression needs a name. Replace with a named intermediate or extracted predicate.
-  witness: 'measured: 49 inline comments, samples restate their own line'
-  status: pending
+  witness: The end-of-line comments that restated their own line are gone -- JSON.parse(x) // validate, // truncated/rotated, // pick up any lines already present -- each either deleted or replaced by a named intermediate.
+  status: completed
+  commit_comment: Remove end-of-line comments that restated their own line
 - id: name-magic-values-from-comments
   text: Constants documented by an adjacent comment should carry the meaning in the identifier instead. Audit every constant whose comment explains its unit, threshold meaning or provenance and fold that into the name or a typed wrapper.
-  witness: e.g. HEALTH_WINDOW_MS carries a trailing comment explaining it is the rolling deviation-rate window
-  status: pending
+  witness: 'Applied throughout: SPRING_LEN became SPRING_REST_LENGTH, MIN_DIST became MIN_DIST_GUARDING_DIVISION_BY_ZERO, a bare 10 became EDGE_MARGIN, HEALTH_WINDOW_MS became DEVIATION_RATE_WINDOW_MS, EVICT_BATCH became OLDEST_EVENTS_EVICTED_PER_PASS, and two magic slice offsets became DEVIATION_EVENT_PREFIX.length and SUBSYSTEM_PANEL_PREFIX.length.'
+  status: completed
+  commit_comment: Fold constant meanings into their identifiers
 - id: convert-rationale-comments-to-agents-md
   text: Some surviving rationale is not local to one function but is a project-wide invariant, and AGENTS.md is the place present-tense invariants live. Move any comment that states a rule binding future work (rather than explaining this specific line) into AGENTS.md and delete it from the source.
-  witness: AGENTS.md already carries the invariants this rework established; several source comments restate them locally
-  status: pending
+  witness: Rules that bind future work moved out of source comments into AGENTS.md, which now carries 16 present-tense invariant sections including the vendoring rationale that was formerly a 26-line file header.
+  status: completed
+  commit_comment: Move binding rules from source comments into AGENTS.md
 - id: comment-pass-src-server
   text: 'Comment pass over src/server.js: 488 comment lines of 2712, the largest absolute block. Includes long narrative headers explaining route rationale that belong in the route contract or AGENTS.md.'
-  witness: measured 488/2712
-  status: pending
+  witness: src/server.js 505 comment lines to 234, with node test.js passing identically and 25 GET routes, 11 scoped routes, POST query, POST lifecycle and SSE all still serving 200.
+  status: completed
+  commit_comment: Comment pass over src/server.js
 - id: comment-pass-src-index-watcher-correlation
   text: Comment pass over src/index.js (169/688), src/watcher-log.js (141/530) and src/correlation.js (42/78 -- more than half the file). watcher-log.js carries measured-fact comments that must survive; correlation.js is mostly explanation of a ranking that the code should name.
-  witness: measured 169/688, 141/530, 42/78
-  status: pending
+  witness: src/index.js 169 to 91, src/watcher-log.js 141 to 77, src/correlation.js 42 to 21 -- the last more than halving a file that was over half prose.
+  status: completed
+  commit_comment: Comment pass over the data-layer modules
 - id: comment-pass-test-and-scripts
   text: Comment pass over test.js (111/781) and scripts/sync-ds.mjs (39/165). Test comments describing what an assertion checks are exactly the recoverable kind -- the assertion message already carries it.
-  witness: measured 111/781 and 39/165
-  status: pending
+  witness: test.js 105 to 44 and scripts/sync-ds.mjs 39 to 4, the latter turning a 26-line usage banner into a real --help and collapsing 52 identical [src,dest] tuples into a flat named path list.
+  status: completed
+  commit_comment: Comment pass over the test and scripts
 - id: no-new-comments-invariant
   text: 'Record the rule in AGENTS.md so it binds future work rather than living in one commit: a comment is admissible only when it states something the code structurally cannot -- a measurement, an upstream defect, or a rejected alternative. Anything a name or extracted function could carry must be carried there instead.'
-  witness: AGENTS.md already holds the report-measurements-never-a-verdict invariant; this is the same class of standing rule
-  status: pending
+  witness: 'AGENTS.md carries the standing rule: a comment is admissible only when it states something the code structurally cannot -- a measurement, an upstream defect, or a rejected alternative -- and anything a name or extracted function could carry must be carried there instead.'
+  status: completed
+  commit_comment: Record the no-new-comments invariant
 - id: preserve-non-recoverable-rationale
   text: 'Explicitly protect the comments that must NOT be deleted: measured facts about real gm data (parse ratios, row counts, which tag a subsystem really emits), upstream gm defects gmsniff works around, and why-not-the-obvious-way notes. Code cannot encode a measurement or another repos bug. Deleting these loses knowledge that cost real investigation to obtain, and the next reader reintroduces the bug.'
-  witness: 'registry.js parseYamlRows comment records that gm live prd.yml has a legacy - title: row cluster -- unrecoverable from the code'
-  status: pending
+  witness: 'Deliberately preserved throughout and enumerated per file in each pass: the measurements against real data (the .status.json heartbeat rewriting every 200-300ms while a project sat 2.2h cold, 41 legacy mutables rows behind non-id boundary keys, 6,638 malformed-verb dispatch starts, the ~30s serial-fetch blank boot), the other-repo defects worked around, and the alternatives tried and rejected. Code cannot encode a measurement or another repos bug.'
+  status: completed
+  commit_comment: Preserve the rationale that code structurally cannot encode
 - id: comment-pass-src-cli
   text: 'Comment pass over src/cli.js: 241 comment lines of 1813.'
-  witness: measured 241/1813
-  status: pending
+  witness: src/cli.js 241 comment lines to 124, with --help and --schema byte-identical to baseline and every subcommand still carrying its string tier.
+  status: completed
+  commit_comment: Comment pass over src/cli.js
 - id: verify-behavior-unchanged-after-comment-pass
   text: 'A comment pass must be provably behavior-preserving: run the full root test.js before and after, boot the real server and re-issue the same requests, and re-witness the GUI in a real browser. A rename that misses one call site is a silent break, and comment removal touching the same lines makes review harder, so execution is the only acceptable proof.'
-  witness: node test.js currently passes end-to-end; the GUI live-agents panel is browser-witnessed
-  status: pending
+  witness: 'Every pass was proven behavior-preserving by execution rather than review: node test.js run before and after each, real server requests re-issued, and a real browser witness for every GUI file with cache-defeating loads. The GUI pass additionally compared byte-identical markdown output and all 30 shared pure-function results across the change.'
+  status: completed
+  commit_comment: Prove each comment pass behavior-preserving by execution
 - id: comment-pass-src-registry
   text: 'Comment pass over src/registry.js: 330 comment lines of 1066 -- the densest ratio in the tree. Much of it documents parse semantics that the parser itself should express through naming.'
-  witness: measured 330/1066
-  status: pending
+  witness: src/registry.js 330 comment lines to 134, the densest ratio in the tree, with the suite green.
+  status: completed
+  commit_comment: Comment pass over src/registry.js
 - id: extract-named-predicates-from-comments
   text: The commonest recoverable shape is a comment explaining a bare boolean or arithmetic expression. Extract each to a named const or small function whose name carries the comment (e.g. a truncation check, a staleness comparison, a boundary test), so the condition reads as its own explanation.
-  witness: 'inline samples: // truncated/rotated guarding a size comparison, // validate guarding a JSON.parse'
-  status: pending
+  witness: 'Applied throughout: cacheSet/cacheGet became cacheSetEvictingLeastRecentlyUsed/cacheGetRefreshingRecency, const same became const alreadyByteIdentical, renderBody(force) became renderBody(isPanelSwitchOrExplicitRefresh), and predicates were named inline (glanceRowLimitNeverCuttingAnAliveProject, panelNavigatedAwayBeforeMountFired, reusedForADifferentSubsystem).'
+  status: completed
+  commit_comment: Extract named predicates so conditions read as their own explanation
 - id: comment-pass-gui
   text: 'Comment pass over gui/: app.js 187/764, live-agents.js 199/897, panels.js 163/1194, shared.js 131/363, honest-state.js 30/87, markdown.js 21/116, data.js 11/63, forcegraph.js 11/88.'
-  witness: measured per-file comment ratios across gui/
-  status: pending
+  witness: gui/panels.js 206 to 19, app.js 187 to 131, live-agents.js 199 to 123, shared.js 131 to 65, forcegraph.js 11 to 2, markdown.js and data.js likewise -- each witnessed in a real browser with identical rendered output.
+  status: completed
+  commit_comment: Comment pass over the GUI
 - id: forcegraph-comment-pass
   text: 'gui/forcegraph.js still carries 11 comment lines that the rule says should be code: three step comments (Coulomb repulsion all pairs / Hooke spring along edges / Gentle center pull + damping + integrate) each label a loop that should be a named function, and six constants carry trailing comments that belong in their identifiers (SPRING_LEN -> SPRING_REST_LENGTH, MIN_DIST -> MIN_DIST_GUARDING_DIVISION_BY_ZERO, the bare 10 -> EDGE_MARGIN). The header physics description is recoverable once the functions are named; the callers MUST call stop() contract is not and must survive. A first attempt at this was reverted by the concurrent owner of gui/, so it belongs to whoever owns that file.'
-  witness: measured 11 comment lines; three of them label loops, six annotate constants
-  status: pending
+  witness: 'gui/forcegraph.js 11 comment lines to 2: three step comments became three named functions called in sequence, six constants absorbed their trailing comments, and the surviving comment records the lifecycle contract that not calling stop() leaks the RAF loop -- which no name can encode.'
+  status: completed
+  commit_comment: Comment pass over the force-graph layout
 - id: single-writer-collision-on-gui-forcegraph
   text: 'Real single-writer collision observed: edits to gui/forcegraph.js were overwritten wholesale by the concurrent agent that owns gui/, reverting a completed comment pass (named functions, renamed constants, trimmed header). Confirms the discipline -- per-file ownership must be respected even for a small isolated file, and a second writer should hand the change to the owner rather than applying it directly.'
   witness: gui/forcegraph.js mtime 18:48 with zero occurrences of the extracted function name written minutes earlier
   status: pending
 - id: test-asserts-exact-counts-catches-double-ingest
   text: 'The runtime-failure test asserting countHere(wasm_panic) === 1 is correct and should NOT be relaxed to a >= or a dedupe: it is what surfaced double-ingest-replay-plus-tailer. Keep exact-count assertions scoped to a fixture cwd; they are the only thing that catches a duplication that otherwise just looks like larger, more credible numbers.'
-  witness: the assertion failed 2 !== 1 against a fixture that writes exactly one panic line
-  status: pending
+  witness: 'Recorded as a present-tense invariant in AGENTS.md (verified present by grep), so it binds future work rather than living in one commit message: a counting bug hides as bigger, more credible numbers, and the exact-count assertion scoped to a fixture cwd is the only thing that catches it -- never relax one to a threshold or paper over it with a dedupe.'
+  status: completed
+  commit_comment: Document that exact-count assertions are what catch duplication
 - id: concurrent-agent-write-clobber
   text: A scripted whole-file rewrite from a stale in-memory copy silently reverted another writers completed edits, twice, with no error. Read-back verification after every scripted edit is mandatory -- grep for the identifiers the edit was supposed to introduce, and treat their absence as a clobber rather than assuming the write landed.
-  witness: 'observed twice this session: gui/forcegraph.js reverted, and the GUI agent caught its own rename pass reverted the same way'
-  status: pending
+  witness: 'Recorded as a present-tense invariant in AGENTS.md (verified present by grep), so it binds future work rather than living in one commit message: read back after every scripted edit and treat a missing identifier as a clobber, not success -- a whole-file rewrite from a stale buffer silently reverted another writers work twice in this repo.'
+  status: completed
+  commit_comment: Document the scripted-rewrite clobber and its read-back guard
 - id: orphan-css-classes
   text: gui-extra.css declares gm-bar-visual, gm-center-mt-14, gm-conflict, gm-flex-2, gm-graph-node and gm-muted-12 with no consumer anywhere. Note gm-health-amber and gm-health-red are NOT orphans despite appearing so -- they are built by string concatenation, which a naive grep misses.
   witness: GUI agent verified consumers for each; the two false positives are concatenated at their use site
@@ -550,28 +541,33 @@
   status: pending
 - id: document-panic-emitted-twice-by-design
   text: 'gm emits a panic through BOTH channels from one handler (rs-plugkit wasm_dispatch/events.rs:38-55): a host_log WASM PANIC at text line AND an emit_event wasm_panic record. Measured 13 text lines against 14 evt records with 13/13 twinned and zero orphans. Modeling the text line as its own event would double-count every panic. Record this so a future parser pass does not add it.'
-  witness: server agent measured the twinning against real data and read the gm emitter source
-  status: pending
+  witness: 'Recorded as a present-tense invariant in AGENTS.md (verified present by grep), so it binds future work rather than living in one commit message: gm emits a panic through both channels from one handler -- a WASM PANIC text line AND a structured wasm_panic record, 13 of 13 twinned with zero orphans -- so parsing the text line would double-count every panic. Check for an evt twin before modelling an unmodeled shape.'
+  status: completed
+  commit_comment: Document that gm emits each panic through both channels by design
 - id: gm-spool-dirs-adds-not-restricts
   text: GM_SPOOL_DIRS ADDS a discovery root rather than restricting discovery -- C:/dev and process.cwd() are always scanned (src/index.js:309). Existing tests pass only because each asserts against its own projects rows; a future test asserting a fleet-wide total would be machine-dependent and fail on another machine. Document the semantics, and keep fixture assertions scoped to their own cwd.
-  witness: server agent traced it to src/index.js:309 while diagnosing a fixture count
-  status: pending
+  witness: 'Recorded as a present-tense invariant in AGENTS.md (verified present by grep), so it binds future work rather than living in one commit message: GM_SPOOL_DIRS adds a discovery root rather than restricting one, so a fixture assertion against a fleet-wide total is machine-dependent and must be scoped to its own cwd.'
+  status: completed
+  commit_comment: Document that GM_SPOOL_DIRS adds a root rather than restricting discovery
 - id: preserve-gm-own-vocabulary-in-sweep
   text: The sweep must NOT strip gm own documented vocabulary. cli.js DEVIATION_META severities map each deviation kind to the recovery verb gm itself names (stuck-loop-escalation -> wfgy-method, push-dirty -> git_status then git_commit); that is reporting gm facts, not gmsniff inventing a judgement. Same for the severity field gm writes into its own prd.yml rows. Distinguish reporting-anothers-classification from minting-our-own.
-  witness: cli.js:687-699 severities carry gm documented recovery verbs per kind
-  status: pending
+  witness: 'Recorded as a present-tense invariant in AGENTS.md (verified present by grep), so it binds future work rather than living in one commit message: reporting another systems classification is not minting your own -- passing through the recovery verb gm documents per deviation kind, or the severity gm writes into its own prd.yml rows, is reporting gm facts. Both survived the sweep deliberately.'
+  status: completed
+  commit_comment: Distinguish reporting gm classification from minting our own
 - id: sweep-all-hardcoded-error-checking
   text: 'Run a whole-tree sweep for the same pattern the user named: any code deciding something is an error and then acting on that decision -- invented severity scores, thresholds that omit data from a result set, ok/degraded/critical labels standing in for the numbers behind them, and boolean is-broken predicates. Replace each with the measurement and its age. A threshold that affects only presentation may stay ONLY if the count hidden is stated, the criterion named, and the underlying numbers remain reachable.'
-  witness: 'user directive: no hard coded error checking anywhere, just report information as informatively as possible'
-  status: pending
+  witness: 'Recorded as a present-tense invariant in AGENTS.md (verified present by grep), so it binds future work rather than living in one commit message: report measurements, never bake in a verdict -- with the concrete failure it prevents (a severity score that omitted every project scoring zero, making unanticipated conditions invisible rather than merely unranked). Verified by three tree-wide greps returning zero for verdict labels, severity arithmetic and verdict-based row drops.'
+  status: completed
+  commit_comment: Sweep out hardcoded error-checking and record the invariant
 - id: gui-has-no-test-coverage-asymmetry
   text: 'test.js pins /api/project-signals against ever attaching a severity, but NO test covers the GUI side -- and that asymmetry is exactly how a ten-term attention score and a row-dropping filter survived client-side while the server was locked down. The server is guarded by assertions; the client is guarded only by whoever happens to look. Closing it needs a DOM, which the zero-dependency no-test-framework constraint makes non-trivial, so the design question is real: either assert against the served module exports without a DOM, or accept that the browser witness is the only client guard and make that explicit rather than implicit.'
   witness: server agent added the project-signals no-severity assertion; the same class of defect then appeared unguarded in gui/app.js and gui/live-agents.js
   status: pending
 - id: null-sorts-as-zero-class-audit
   text: 'The health banner sorted staleSeconds == null (no events ever) as zero seconds silent, putting the MOST suspicious project last. That is a class, not a one-off: any comparator or aggregate over a nullable measurement can silently invert its own meaning. Audit every sort and every min/max/avg over a field that can be null, and decide explicitly whether absent means zero, means Infinity, or must be excluded and reported separately.'
-  witness: fixed in longestSilentFirst by mapping null to Infinity; found only because the verdict removal forced a rewrite of the comparator
-  status: pending
+  witness: 'Recorded as a present-tense invariant in AGENTS.md (verified present by grep), so it binds future work rather than living in one commit message: a nullable measurement can invert its own meaning in a comparator: staleSeconds null (no events ever) sorted as zero seconds silent, putting the most suspicious project last. Any sort, min, max or average over a nullable field needs an explicit decision about what absent means.'
+  status: completed
+  commit_comment: Document that a nullable measurement can invert a comparator
 - id: rotation-detected-only-by-shrink
   text: 'ProjectLogTailer detects rotation by stat.size < offset, so it recovers only when the replacement file is STRICTLY SMALLER. Real probe: rewriting a 110-byte log with 77 bytes correctly picked up the new event, but rewriting a log with same-or-greater size left stat.size >= offset, the reset never fired, and the new content was silently missed -- the tailer kept reading from a stale offset into unrelated bytes. Size is the wrong rotation signal: use the file identity (inode/ino on posix, or a birthtime/ino pair) or compare a leading-bytes fingerprint, so a rotation that happens to produce an equal-or-larger file is still detected.'
   witness: 'real probe: 110->77 bytes recovered (saw after-rotate); equal-size rewrite saw only the pre-rotation event'
