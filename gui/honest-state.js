@@ -59,16 +59,18 @@ export function HonestState({ kind = 'empty', text, hint, action } = {}) {
 }
 
 /**
- * The scoped-panel guidance eight panels were missing: a panel that can only
- * show data for a selected project must SAY that when nothing is selected,
- * rather than rendering a bare "no rows" that reads as "this project has none".
+ * Unscoped, these panels read the server's OWN launch directory -- an arbitrary
+ * path for an installed user, whose `.gm/` is usually absent. Verified on the
+ * live route: GET /api/prd with no cwd returned the server's cwd with
+ * present:false, while ?cwd=C:/dev/gmsniff returned 195 real rows. A bare
+ * "no rows" therefore reported a real zero for a project the reader never chose.
  */
 export function ScopedPanelState({ panel, cwd, onPick } = {}) {
   if (!cwd) {
     return HonestState({
       kind: 'unscoped',
-      text: `${panel} needs a project selected.`,
-      hint: 'Pick one from the project switcher in the topbar, or open an agent from Live Agents and use its "all events" action.',
+      text: `${panel} is showing no project.`,
+      hint: 'With no project selected this panel reads whatever directory the gmsniff server was started in, which usually has no .gm/ state. Pick a project from the switcher in the topbar, or open an agent from Live Agents.',
       action: onPick ? { label: 'Go to Live Agents', onClick: onPick } : undefined,
     });
   }

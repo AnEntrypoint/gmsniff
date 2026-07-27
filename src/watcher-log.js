@@ -200,7 +200,6 @@ export function backfillUntimedFromNextKnownTs(events) {
   }
   return events;
 }
-export { backfillUntimedFromNextKnownTs as backfillUntimed };
 
 export function newParseContext() {
   return { epoch: null, epoch_ts: null, lastTs: '', version: null, spawns: [], versions: [] };
@@ -350,58 +349,53 @@ export function parseEventLine(raw, opts = {}) {
   return parseLine(raw, opts);
 }
 
+// `task` is the wrapper's own per-dispatch handle; pairing on verb alone mis-pairs concurrent
+// dispatches of the same verb.
+const dispatchPairingKey = (e) => `${e.cwd}|${e.verb}|${e.task}`;
+
 // Pairs synthesized dispatch.start lines to their dispatch.end partners, producing per-dispatch
-// duration AND response size -- a richer record than the upstream `dispatch.end` evt, which
-// carries `ms` but no `out` byte count and has no start counterpart at all.
+// duration AND response size -- richer than the upstream `dispatch.end` evt, which carries `ms`
+// but no `out` byte count and has no start counterpart at all.
 //
-// Pairing is BY TASK ID within a cwd, not by verb: task is the wrapper's own per-dispatch handle,
-// and pairing on verb alone mis-pairs concurrent dispatches of the same verb. A start is matched
-// by the next unconsumed end with the same (cwd, verb, task).
-//
-// ORPHAN STARTS ARE NORMAL, NOT CORRUPTION. Two effects produce them legitimately: a dispatch
-// genuinely in flight when the log was read, and a bounded tail read (the default) slicing a
-// start away from an end that lies outside the window. Measured on full-history reads, orphan
-// starts run well under 1% of dispatches. The count is exposed so a consumer can show it as
-// in-flight rather than inferring a fault. Note the counts here are LINE-derived only: comparing
-// them against the separate `dispatch.end` evt-record population is comparing two different
-// populations and manufactures a phantom imbalance.
+// MEASURED on full-history reads: orphan starts run well under 1% of dispatches, and both causes
+// are benign -- a dispatch genuinely in flight when the log was read, and a bounded tail read
+// (the default) slicing a start away from an end outside the window. They are never a fault.
+// The counts here are LINE-derived only; comparing them against the separate `dispatch.end`
+// evt-record population compares two different populations and manufactures a phantom imbalance.
 export function pairDispatches(events) {
-  const openByKey = new Map();
+  const unclosedStartsByKey = new Map();
   const pairs = [];
-  let starts = 0, ends = 0, orphanEnds = 0, malformed = 0;
+  let starts = 0, ends = 0, orphanEnds = 0, malformedVerbStarts = 0;
   for (const e of events) {
     if (e._origin !== 'line') continue;
-    // Excluded from pairing entirely -- an upstream filename-split bug produced these and they
-    // have no close line by construction. Counting them would report 6,637 permanently-dead
-    // dispatches as in-flight work.
-    if (e._malformed_verb) { if (e.event === 'dispatch.start') malformed++; continue; }
+    // No close line exists by construction (see VERB_NAME_CONTAINING_PATH_SEPARATOR_RE), so
+    // pairing these would report 6,637 permanently-dead dispatches as in-flight work.
+    if (e._malformed_verb) { if (e.event === 'dispatch.start') malformedVerbStarts++; continue; }
     if (e.event === 'dispatch.start') {
       starts++;
-      const k = `${e.cwd}|${e.verb}|${e.task}`;
-      if (!openByKey.has(k)) openByKey.set(k, []);
-      openByKey.get(k).push(e);
+      const k = dispatchPairingKey(e);
+      if (!unclosedStartsByKey.has(k)) unclosedStartsByKey.set(k, []);
+      unclosedStartsByKey.get(k).push(e);
     } else if (e.event === 'dispatch.end') {
       ends++;
-      const k = `${e.cwd}|${e.verb}|${e.task}`;
-      const q = openByKey.get(k);
-      const start = q && q.length ? q.shift() : null;
-      if (!start) { orphanEnds++; continue; }
+      const q = unclosedStartsByKey.get(dispatchPairingKey(e));
+      const oldestUnclosedStart = q && q.length ? q.shift() : null;
+      if (!oldestUnclosedStart) { orphanEnds++; continue; }
       pairs.push({
         cwd: e.cwd, verb: e.verb, task: e.task,
-        start_ts: start.ts || null, end_ts: e.ts || null,
-        // ms comes from the wrapper's own measurement, not from a ts subtraction: the synthesized
-        // start inherits a ts from a preceding evt line and so is only as precise as that line.
+        start_ts: oldestUnclosedStart.ts || null, end_ts: e.ts || null,
+        // The wrapper's own measurement, never an end_ts - start_ts subtraction: a synthesized
+        // start inherits its ts from a preceding evt line and is only as precise as that line.
         ms: e.ms ?? null,
-        body_bytes: start.body_bytes ?? null,
+        body_bytes: oldestUnclosedStart.body_bytes ?? null,
         out_bytes: e.out_bytes ?? null,
       });
     }
   }
   let orphanStarts = 0;
-  for (const q of openByKey.values()) orphanStarts += q.length;
-  const withMs = pairs.filter(p => p.ms !== null);
-  const durations = withMs.map(p => p.ms).sort((a, b) => a - b);
-  const pct = (p) => (durations.length ? durations[Math.min(durations.length - 1, Math.floor(durations.length * p))] : null);
+  for (const q of unclosedStartsByKey.values()) orphanStarts += q.length;
+  const sortedDurationsMs = pairs.filter(p => p.ms !== null).map(p => p.ms).sort((a, b) => a - b);
+  const msPercentile = (p) => (sortedDurationsMs.length ? sortedDurationsMs[Math.min(sortedDurationsMs.length - 1, Math.floor(sortedDurationsMs.length * p))] : null);
   let outTotal = 0, bodyTotal = 0;
   for (const p of pairs) { outTotal += p.out_bytes || 0; bodyTotal += p.body_bytes || 0; }
   return {
@@ -409,24 +403,19 @@ export function pairDispatches(events) {
     starts,
     ends,
     paired: pairs.length,
-    // In-flight or window-clipped, never presented as an error condition.
     orphan_starts: orphanStarts,
     orphan_start_ratio: starts ? Number((orphanStarts / starts).toFixed(4)) : null,
-    // Starts excluded by the upstream malformed-verb bug -- a real defect count, kept apart from
-    // orphan_starts so the benign in-flight figure is not inflated by it.
-    malformed_verb_starts: malformed,
-    // An end with no start is the tail-window mirror of an orphan start, same benign cause.
+    malformed_verb_starts: malformedVerbStarts,
     orphan_ends: orphanEnds,
-    ms_p50: pct(0.5),
-    ms_p95: pct(0.95),
-    ms_max: durations.length ? durations[durations.length - 1] : null,
+    ms_p50: msPercentile(0.5),
+    ms_p95: msPercentile(0.95),
+    ms_max: sortedDurationsMs.length ? sortedDurationsMs[sortedDurationsMs.length - 1] : null,
     out_bytes_total: outTotal,
     body_bytes_total: bodyTotal,
   };
 }
 
-// Aggregates paired dispatches per verb: call count, duration distribution and response size.
-// This is the per-verb cost surface the `out=` field makes possible and the evt record cannot.
+// The per-verb cost surface the `out=` field makes possible and the evt record cannot.
 export function dispatchVerbStats(pairing) {
   const byVerb = new Map();
   for (const p of (pairing && pairing.pairs) || []) {
@@ -454,9 +443,8 @@ export function dispatchVerbStats(pairing) {
   return rows.sort((a, b) => b.ms_total - a.ms_total);
 }
 
-// Reads only the tail of a large file. watcher.log reaches 6.1MB/85k lines in real use, and
-// reading full history on every CLI invocation and GUI boot is the dominant cost of a cold read.
-// Reads the last `maxBytes` and discards the first (likely partial) line.
+// MEASURED: watcher.log reaches 6.1MB/85k lines in real use, and reading full history on every
+// CLI invocation and GUI boot is the dominant cost of a cold read.
 export function readTail(fp, maxBytes) {
   const stat = fs.statSync(fp);
   if (!maxBytes || stat.size <= maxBytes) return { text: fs.readFileSync(fp, 'utf8'), truncated: false, size: stat.size };
@@ -465,16 +453,15 @@ export function readTail(fp, maxBytes) {
     const buf = Buffer.allocUnsafe(maxBytes);
     const n = fs.readSync(fd, buf, 0, maxBytes, stat.size - maxBytes);
     const text = buf.toString('utf8', 0, n);
-    const nl = text.indexOf('\n');
-    return { text: nl >= 0 ? text.slice(nl + 1) : text, truncated: true, size: stat.size };
+    const firstNewline = text.indexOf('\n');
+    const afterTheLikelyPartialFirstLine = firstNewline >= 0 ? text.slice(firstNewline + 1) : text;
+    return { text: afterTheLikelyPartialFirstLine, truncated: true, size: stat.size };
   } finally { fs.closeSync(fd); }
 }
 
-// Default replay window. Bounded by default so a cold read is O(window), not O(history); a
-// caller wanting the full file passes maxBytes:0.
+// Bounded by default so a cold read is O(window), not O(history). Pass maxBytes:0 for full history.
 export const DEFAULT_REPLAY_BYTES = parseInt(process.env.GM_REPLAY_MAX_BYTES, 10) || 2 * 1024 * 1024;
 
-// Full replay with parse-coverage accounting and epoch/version extraction.
 export function replayWatcherLogWithStats(fp, cwd, schema, opts = {}) {
   const events = [];
   const stats = newParseStats();

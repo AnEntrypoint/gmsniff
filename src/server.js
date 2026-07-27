@@ -99,6 +99,19 @@ const PHASES = ['PLAN', 'EXECUTE', 'EMIT', 'VERIFY', 'CONSOLIDATE', 'COMPLETE'];
 const MEMORY_SUBS = new Set(['memory', 'rs_learn']);
 function isMemorySub(sub) { return MEMORY_SUBS.has(sub); }
 
+// gm's runtime-failure vocabulary. None of these events carry `ok:false` or `err`, so the
+// snapshot's `errors` counter reads 0 while 23 wasm panics, 9,288 unprocessable spool requests
+// and 1,221 failed retention sweeps sit in the same event set (measured across 161 projects,
+// 304k events). Counted per name rather than summed into one number: a panic and an EPERM sweep
+// are different failures, and `retention.failed` specifically means spool space is never
+// reclaimed. `wasm_panic` is the evt record gm's panic hook emits alongside its "WASM PANIC at"
+// text line (rs-plugkit wasm_dispatch/events.rs install_panic_hook writes both from one handler);
+// the evt record is the structured half and the only one counted, so a panic is not double-counted.
+const RUNTIME_FAILURE_EVENTS = new Set([
+  'wasm_panic', 'spool.process-error', 'retention.failed', 'turn-state.parse-failed',
+  'spool.stale-swept', 'lock.stale-takeover', 'wrapper.drift',
+]);
+
 // Real embed/vector failure event names, measured against live watcher.log data. `embed_fail`
 // (the name the old filter used) has zero live occurrences.
 const EMBED_FAILURE_EVENTS = new Set([
@@ -1021,7 +1034,10 @@ class Store {
     // Fleet-wide spool fanout is the DEFAULT, not an override: a server explicitly scoped to one
     // log tree stays scoped to it, so a temp-dir-scoped server (every test) observes only its own
     // events rather than the whole machine's 260k-event fleet.
-    this.fanout = new MultiProjectWatcher();
+    // Store.load()'s replay has already delivered every line currently on disk, so the fanout's
+    // first sync seeks each existing project's tailer to EOF instead of re-reading from offset 0.
+    // Projects discovered on a LATER sync still get their full history.
+    this.fanout = new MultiProjectWatcher({ replayHasConsumedExistingContent: true });
     this.fanout.on('event', ev => {
       this._ingestLive(ev);
     });
@@ -1172,16 +1188,23 @@ class Store {
     if (this._snapshotCache && this._snapshotCache.len === this.events.length) return this._snapshotCache.value;
     const bySub = {}, byEvent = {}, byDay = {}, pids = new Set();
     let errors = 0;
+    const runtimeFailures = {};
+    let runtimeFailuresTotal = 0;
     for (const e of this.events) {
       bySub[e._sub] = (bySub[e._sub] || 0) + 1;
       byEvent[e.event || '?'] = (byEvent[e.event || '?'] || 0) + 1;
       if (e._day) byDay[e._day] = (byDay[e._day] || 0) + 1;
       if (e.pid) pids.add(e.pid);
       if (e.ok === false || e.err) errors++;
+      if (RUNTIME_FAILURE_EVENTS.has(e.event)) {
+        runtimeFailures[e.event] = (runtimeFailures[e.event] || 0) + 1;
+        runtimeFailuresTotal++;
+      }
     }
     const observed = this.observedSubsystems();
     const value = {
       total: this.events.length, bySub, byEvent, byDay, pids: pids.size, errors,
+      runtimeFailures, runtimeFailuresTotal,
       // Advertise what real data actually carries. The hardcoded seed named `bootstrap` and
       // `rs_learn`, both with zero events in this window, so a client rendering `subsystems`
       // showed tags that could never populate. The seed is still reported, separately labelled,
@@ -2018,7 +2041,7 @@ function codeInsightAge(store) {
 // this array is documentation of the handler rather than code the handler is generated from.
 const API_ROUTES = [
   { path: '/api/capabilities', method: 'GET', params: [], response: '{routes: API_ROUTES, verbAllowlist, subsystems}' },
-  { path: '/api/snapshot', method: 'GET', params: [], response: '{total, bySub, byEvent, byDay, pids, errors, subsystems, observedSubsystems}' },
+  { path: '/api/snapshot', method: 'GET', params: [], response: '{total, bySub, byEvent, byDay, pids, errors, runtimeFailures, runtimeFailuresTotal, subsystems, observedSubsystems}. `errors` counts events carrying ok:false/err and reads 0 on real data; gm\'s runtime failures carry neither flag, so runtimeFailures breaks them out BY NAME (wasm_panic, spool.process-error, retention.failed, turn-state.parse-failed, spool.stale-swept, lock.stale-takeover, wrapper.drift). Kept per-name, not summed into a severity: a wasm panic and an EPERM retention sweep are different failures, and retention.failed specifically means spool space is never reclaimed. Every name is independently queryable via /api/events?event=<name>.' },
   { path: '/api/days', method: 'GET', params: [], response: '[{day, total, bySub}]' },
   { path: '/api/events', method: 'GET', params: ['limit', 'offset', 'sub', 'event', 'day', 'q'], response: '{total, rows}' },
   { path: '/api/subsystem', method: 'GET', params: ['sub', 'limit', 'offset', 'event', 'day', 'q', 'pid'], response: '{total, rows}' },

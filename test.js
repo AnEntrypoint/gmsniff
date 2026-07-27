@@ -757,4 +757,86 @@ assert(schemaOut.subcommands.every(s => typeof s.tier === 'string'), 'schema sub
   fs.rmSync(legacyDir, { recursive: true, force: true });
 }
 
+{
+  // gm's runtime failures carry neither ok:false nor err, so the snapshot's `errors` counter
+  // reads 0 while real panics and unprocessable spool requests sit in the same event set.
+  // Every line below is a real watcher.log shape, written to a real spool and replayed.
+  const failRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gmsniff-runtime-fail-'));
+  const failProj = path.join(failRoot, 'panicky');
+  const failSpool = path.join(failProj, '.gm', 'exec-spool');
+  fs.mkdirSync(failSpool, { recursive: true });
+  fs.writeFileSync(path.join(failSpool, '.watcher.log'), [
+    '--- watcher spawn 2026-07-27T10:00:00.000Z supervisor=111 reason=boot ---',
+    '[plugkit-wasm] evt: {"event":"wasm_panic","location":"src/orchestrator/mod.rs:73:5","message":"gm_dir: project root resolution failed","ts":"2026-07-27T10:00:01.000Z"}',
+    '[plugkit-wasm:err] error processing prd-resolve.txt: ENOENT: no such file or directory',
+    "[retention] failed to sweep browser: EPERM: operation not permitted, unlink 'out/browser'",
+    'turn-state.json parse failed (missing field `phase`)',
+    '[plugkit-wasm] evt: {"event":"dispatch.end","verb":"recall","task":"t1","ms":5,"ts":"2026-07-27T10:00:02.000Z"}',
+    '',
+  ].join('\n'));
+
+  const prevFailSpool = process.env.GM_SPOOL_DIRS;
+  process.env.GM_SPOOL_DIRS = failProj;
+  const failSrv = await createServer({ logDir: DEFAULT_LOG_DIR, port: 0 });
+  const failSnap = await (await fetch(failSrv.url + '/api/snapshot')).json();
+
+  // GM_SPOOL_DIRS ADDS a root, it does not restrict discovery (C:/dev and cwd are always
+  // scanned), so fleet-wide totals include real projects. Every count below is therefore scoped
+  // to the fixture's own cwd rather than asserted against a machine-dependent total.
+  const failEventsHere = failSrv.store.events.filter(e => e.cwd === failProj);
+  const countHere = (name) => failEventsHere.filter(e => e.event === name).length;
+
+  assert.strictEqual(failSnap.errors, 0,
+    'none of these failures carry ok:false/err -- which is exactly why `errors` alone hides them');
+  // EXACT counts, deliberately. Store.load() replays every line on disk and the fanout's tailer
+  // then starts at EOF rather than offset 0; without that, each of these is ingested twice and
+  // every count gmsniff reports doubles -- a failure that just looks like larger, more credible
+  // numbers. A >= here would not catch it.
+  assert.strictEqual(countHere('wasm_panic'), 1, 'a real wasm panic is parsed exactly once');
+  assert.strictEqual(countHere('spool.process-error'), 1, 'an unprocessable spool request is parsed exactly once');
+  assert.strictEqual(countHere('retention.failed'), 1,
+    'a failed retention sweep is parsed exactly once -- spool space never reclaimed');
+  assert.strictEqual(countHere('turn-state.parse-failed'), 1, 'a rejected turn-state.json is parsed exactly once');
+  for (const name of ['wasm_panic', 'spool.process-error', 'retention.failed', 'turn-state.parse-failed']) {
+    assert(failSnap.runtimeFailures[name] >= 1, `${name} reaches the snapshot's runtime-failure breakdown`);
+  }
+  assert.strictEqual('dispatch.end' in failSnap.runtimeFailures, false,
+    'a healthy dispatch is never counted as a failure');
+  assert.strictEqual(
+    failSnap.runtimeFailuresTotal,
+    Object.values(failSnap.runtimeFailures).reduce((n, x) => n + x, 0),
+    'the total is exactly the sum of the named counts, with no unnamed residue');
+
+  // The breakdown is per-name, never collapsed into a score, and each name stays queryable.
+  const panicHere = failEventsHere.find(e => e.event === 'wasm_panic');
+  assert.strictEqual(panicHere.location, 'src/orchestrator/mod.rs:73:5',
+    'the panic keeps gm\'s own structured location field');
+
+  // parse-health reports every project with no filtering, and splits modeled coverage into the
+  // half that is gm telemetry and the half that is host noise.
+  const ph = await (await fetch(failSrv.url + '/api/parse-health')).json();
+  assert.strictEqual(ph.project_count, ph.projects.length, 'project_count matches the rows actually returned');
+  const panicky = ph.projects.find(p => p.name === 'panicky');
+  assert(panicky, 'the fixture project appears in parse-health');
+  assert.strictEqual(panicky.unmodeled_ratio, 0, 'every fixture line matches a modeled shape');
+  assert.strictEqual(typeof panicky.signal_ratio, 'number', 'signal_ratio splits modeled coverage from ignored noise');
+  assert.strictEqual(typeof ph.correlation.dominant_kind, 'string',
+    'correlation reports what the grouping is really worth, not just its best-available identity');
+
+  // A retired verb is a real match arm whose handler always errors, so the spool write is refused
+  // rather than queued to fail -- the CLI already refused it; the route did not.
+  const retired = await fetch(failSrv.url + '/api/lifecycle', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ cwd: failProj, verb: 'learn', payload: {} }),
+  });
+  assert.strictEqual(retired.status, 400, 'a retired verb is rejected by /api/lifecycle');
+  assert.strictEqual((await retired.json()).retired, true, 'the rejection names retirement as the reason');
+  assert.strictEqual(fs.existsSync(path.join(failSpool, 'in', 'learn')), false,
+    'a rejected retired verb writes nothing to the spool');
+
+  if (prevFailSpool === undefined) delete process.env.GM_SPOOL_DIRS; else process.env.GM_SPOOL_DIRS = prevFailSpool;
+  await failSrv.close();
+  fs.rmSync(failRoot, { recursive: true, force: true });
+}
+
 console.log(`gmsniff OK — ${snap.total} events across ${days.length} days · live-feedback verified · multi-project fanout verified · formal-spec verified · stuck-state+throughput+memory-health+codeinsight-age verified · total-parser verified · watcher-log-total-parse+source-priority+correlation+project-state verified`);

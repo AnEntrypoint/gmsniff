@@ -48,7 +48,7 @@ function Failed(what, error) {
 // instead of raw JSON punctuation. Used for table-cell summaries and the
 // live-stream preview (LiveLogEntry renders preview as plain text); expanded
 // views render full highlighted JSON via the ds JsonViewer.
-function kvPreview(obj, maxLen = 200) {
+function asKeyValueLine(obj, maxLen = 200) {
   const parts = [];
   for (const [k, v] of Object.entries(obj)) {
     let sv;
@@ -203,7 +203,7 @@ export function liveStreamDebugSnapshot() {
 export function pushLiveEntry(ev) {
   const payload = { ...ev };
   delete payload._sub; delete payload._day; delete payload._fp;
-  liveEntries.push({ key: liveEntrySeq++, ts: fmtTs(ev.ts), sub: ev._sub, tone: colorFor(ev._sub || ''), event: ev.event || '?', preview: kvPreview(payload, 200), cwd: ev.cwd || null });
+  liveEntries.push({ key: liveEntrySeq++, ts: fmtTs(ev.ts), sub: ev._sub, tone: colorFor(ev._sub || ''), event: ev.event || '?', preview: asKeyValueLine(payload, 200), cwd: ev.cwd || null });
   if (liveEntries.length > 2000) liveEntries.shift();
   if (livePaused) liveNewCount++;
 }
@@ -294,8 +294,8 @@ export function renderEventTable(rows, tableId, setBody) {
         if (typeof v === 'object') {
           const full = JSON.stringify(v);
           return h('td', {}, full.length > 80
-            ? h('details', {}, h('summary', {}, kvPreview(v, 40) + '...'), JsonViewer({ value: v, mode: 'highlight', maxHeight: '260px' }))
-            : kvPreview(v, 80));
+            ? h('details', {}, h('summary', {}, asKeyValueLine(v, 40) + '...'), JsonViewer({ value: v, mode: 'highlight', maxHeight: '260px' }))
+            : asKeyValueLine(v, 80));
         }
         const sv = String(v);
         return h('td', { title: sv.length > 120 ? sv : null }, sv.length > 120 ? sv.slice(0, 80) + '...' : sv);
@@ -344,23 +344,23 @@ async function fetchEvTypesAndDays(sub) {
 // same substring job /api/events already does via its own `q` filter -- so it is
 // folded in as this panel's text filter rather than a separate destination.
 //
-// Everything below is one function parameterized by {endpoint, fixedSub, tableId}.
+// Everything below is one function parameterized by {endpoint, subsystemFixedByRoute, tableId}.
 // Panel-visible behavior is deliberately unchanged; only the duplication is gone.
 // ---------------------------------------------------------------------------
-const pagedEventState = new Map(); // stateKey -> {offset, limit, filters, current}
+const pagedEventStateByPanel = new Map(); // stateKey -> {offset, limit, filters, current}
 
-function pageStateFor(stateKey, fixedSub) {
-  let st = pagedEventState.get(stateKey);
-  if (!st) { st = { offset: 0, limit: 100, filters: {}, current: fixedSub ?? null }; pagedEventState.set(stateKey, st); }
+function pageStateForPanel(stateKey, subsystemFixedByRoute) {
+  let st = pagedEventStateByPanel.get(stateKey);
+  if (!st) { st = { offset: 0, limit: 100, filters: {}, current: subsystemFixedByRoute ?? null }; pagedEventStateByPanel.set(stateKey, st); }
   // A subsystem panel reused for a DIFFERENT subsystem resets paging/filters --
   // carrying page 7 of `plugkit` into `hook` would silently show the wrong slice.
-  if (fixedSub != null && st.current !== fixedSub) { st.current = fixedSub; st.offset = 0; st.filters = {}; }
+  if (subsystemFixedByRoute != null && st.current !== subsystemFixedByRoute) { st.current = subsystemFixedByRoute; st.offset = 0; st.filters = {}; }
   return st;
 }
 
 // The prev/next/count strip, previously copy-pasted per panel. Always states the
 // real window and the real total -- never hides how many rows exist behind it.
-function Pager(st, total, setBody) {
+function PagerStrip(st, total, setBody) {
   const atStart = st.offset === 0;
   const atEnd = st.offset + st.limit >= total;
   return h('div', { class: 'gm-pager' },
@@ -375,15 +375,15 @@ function Pager(st, total, setBody) {
     }, 'next ->'));
 }
 
-async function PagedEventTable({ endpoint, stateKey, tableId, fixedSub = null, heading = null }, setBody) {
-  const st = pageStateFor(stateKey, fixedSub);
+async function PagedEventTable({ endpoint, stateKey, tableId, subsystemFixedByRoute = null, heading = null }, setBody) {
+  const st = pageStateForPanel(stateKey, subsystemFixedByRoute);
   const params = new URLSearchParams({ limit: st.limit, offset: st.offset });
-  if (fixedSub != null) params.set('sub', fixedSub);
+  if (subsystemFixedByRoute != null) params.set('sub', subsystemFixedByRoute);
   for (const [k, v] of Object.entries(st.filters)) if (v) params.set(k, v);
 
   const [data, { evTypes, days }] = await Promise.all([
     api(endpoint + '?' + params, { scoped: false }),
-    fetchEvTypesAndDays(fixedSub ?? undefined),
+    fetchEvTypesAndDays(subsystemFixedByRoute ?? undefined),
   ]);
   if (data.error) return Failed(heading || 'events', data.error);
 
@@ -395,7 +395,7 @@ async function PagedEventTable({ endpoint, stateKey, tableId, fixedSub = null, h
 
   const total = data.total || 0;
   const rows = data.rows || [];
-  const filtering = Object.values(st.filters).some(Boolean);
+  const someFilterIsActive = Object.values(st.filters).some(Boolean);
 
   return h('div', { class: 'ds-panel' },
     heading ? h('h2', {}, heading) : null,
@@ -406,16 +406,16 @@ async function PagedEventTable({ endpoint, stateKey, tableId, fixedSub = null, h
       }),
       // A subsystem-scoped table has its subsystem fixed by the route, so the
       // selector would be a control that cannot change anything.
-      fixedSub == null ? filterSelect('sub', 'all subsystems', subsystemList()) : null,
+      subsystemFixedByRoute == null ? filterSelect('sub', 'all subsystems', subsystemList()) : null,
       filterSelect('event', 'all events', (evTypes || []).map(e => e.event)),
       filterSelect('day', 'all days', (days || []).map(d => d.day))),
     rows.length
       ? renderEventTable(rows, tableId, setBody)
       : Empty(
-          filtering ? 'No events match this filter.' : 'No events recorded.',
-          filtering ? 'filtered' : 'empty',
-          filtering ? `${total} row(s) matched the current filter across the whole source.` : undefined),
-    Pager(st, total, setBody));
+          someFilterIsActive ? 'No events match this filter.' : 'No events recorded.',
+          someFilterIsActive ? 'filtered' : 'empty',
+          someFilterIsActive ? `${total} row(s) matched the current filter across the whole source.` : undefined),
+    PagerStrip(st, total, setBody));
 }
 
 export async function AllEvents(setBody) {
@@ -427,7 +427,7 @@ export async function AllEvents(setBody) {
 export async function SubsystemPanel(sub, setBody) {
   return PagedEventTable({
     endpoint: '/api/subsystem', stateKey: 'subsystem', tableId: 'subsystem-' + sub,
-    fixedSub: sub, heading: sub,
+    subsystemFixedByRoute: sub, heading: sub,
   }, setBody);
 }
 
@@ -620,16 +620,6 @@ function buildProcessTreeHierarchy(sess, nodes) {
   };
 }
 
-// Flatten to the currently-visible rows (root + expanded descendants only),
-// depth-first, for roving-focus index math (Up/Down/Right/Left navigation).
-function visibleTreeRows(root, expanded, depth = 0, out = []) {
-  out.push({ item: root, depth });
-  if (root.children && root.children.length && expanded.has(root.id)) {
-    for (const c of root.children) visibleTreeRows(c, expanded, depth + 1, out);
-  }
-  return out;
-}
-
 const treeUiState = { expanded: new Set(), focusId: null };
 export async function ProcessTree(sess, sessList, onSelect, onOpenSession, onRefresh) {
   const selector = h('select', {
@@ -652,8 +642,6 @@ export async function ProcessTree(sess, sessList, onSelect, onOpenSession, onRef
   // Collapsed by default below depth 1: root (depth 0) starts expanded so its
   // phase groups (depth 1) show; phase groups themselves start collapsed.
   if (!treeUiState.expanded.has(root.id) && !r._seeded) treeUiState.expanded.add(root.id);
-
-  const rerender = () => { /* re-render is driven by caller's setBody via onSelect(sess) re-invoke path below */ renderTreePanelInPlace(); };
   // A local re-render hook: the caller (app.js) re-computes the whole body on
   // most actions, but expand/collapse must not require a network refetch --
   // stash a rerender callback the row handlers can call synchronously.
@@ -664,7 +652,7 @@ export async function ProcessTree(sess, sessList, onSelect, onOpenSession, onRef
     else if (onSelect) onSelect(targetSess);
   }
 
-  function renderNode(item, depth, visRows) {
+  function renderNode(item, depth) {
     const hasKids = !!(item.children && item.children.length);
     const expanded = treeUiState.expanded.has(item.id);
     const isFocused = treeUiState.focusId === item.id;
@@ -683,7 +671,7 @@ export async function ProcessTree(sess, sessList, onSelect, onOpenSession, onRef
         else if (hasKids) { if (!expanded) treeUiState.expanded.add(item.id); else treeUiState.expanded.delete(item.id); }
         doRerender();
       },
-      children: hasKids ? item.children.map(c => renderNode(c, depth + 1, visRows)) : null,
+      children: hasKids ? item.children.map(c => renderNode(c, depth + 1)) : null,
     });
   }
 
@@ -695,7 +683,7 @@ export async function ProcessTree(sess, sessList, onSelect, onOpenSession, onRef
       gapsBlock,
       h('h2', { class: 'gm-mt-10' }, `Process Tree (${(r.nodes || []).length} events)`),
       (r.nodes || []).length
-        ? TreeView({ children: [renderNode(root, 0, [])] })
+        ? TreeView({ children: [renderNode(root, 0)] })
         : Empty('No process events for this session.'));
   }
 

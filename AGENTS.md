@@ -26,6 +26,12 @@ A comment is admissible only when it states something the code structurally **ca
 
 Any comment pass must be provably behavior-preserving: run `node test.js` and re-witness the affected surface before and after. A rename that misses one call site is a silent break.
 
+Three verification traps, each of which produced a false pass in this repo:
+
+- **`node --check` cannot catch a partial rename.** It parses without resolving identifiers, so a name left undeclared by a half-finished rename reads as clean and fails only at runtime. Verify a rename by *executing* the module.
+- **A browser witness that merely navigates can re-run stale modules from Chrome's memory cache**, reporting "unchanged" for code you just edited. Force a cache-defeating reload before reading the DOM.
+- **A scripted whole-file rewrite from a stale buffer silently reverts another writer's work.** After every scripted edit, grep for the identifiers it was supposed to introduce and treat their absence as a clobber, not as success.
+
 ## Report measurements, never bake in a verdict
 
 gmsniff observes; the reader judges. Do not add a route, field, or panel that decides something is an error and then acts on that decision — no invented severity scores, no threshold that omits a project from a result set, no `ok`/`degraded`/`critical` label standing in for the numbers behind it.
