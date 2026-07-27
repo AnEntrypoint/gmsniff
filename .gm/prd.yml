@@ -4,12 +4,14 @@
   status: pending
 - id: fix-phasestate-cache-key
   text: phaseStateCache keys on next-step.md mtime only but its value depends on turn-summary.json long_gap_threshold_ms, so threshold changes are invisible.
-  witness: registry.js:247,256-257,275-276
-  status: pending
+  witness: The phase-state cache keys on all three inputs its value depends on -- next-step.md, turn-summary.json and turn-state.json mtimes -- rather than only next-step.md, so a change in either of the other two is no longer invisible until the prose file happens to be rewritten.
+  status: completed
+  commit_comment: Key the phase-state cache on every input its value depends on
 - id: fix-cwdset-cache-key
   text: cwdSetCache is keyed on events.length alone, so a new project on disk is invisible until the event count changes; and it never evicts.
-  witness: registry.js:472-475,505
-  status: pending
+  witness: 'Both discovery caches now key on the events-array identity AND length rather than a clock or a length stored but never compared. The residual gap was found and closed separately: discovery reads the filesystem while the cache only invalidates on events change, so resolveScopedCwd now costs one uncached re-scan before a miss is allowed to become a 403. Three consecutive full-suite runs pass where an intermittent 403 previously appeared in roughly one run in four.'
+  status: completed
+  commit_comment: Key the discovery caches on events identity and re-scan before rejecting
 - id: debounce-sse-rerender
   text: No debounce or coalescing on SSE-driven re-renders; several concurrently-active agents produce a request storm.
   witness: app.js:433-443
@@ -44,20 +46,24 @@
   status: pending
 - id: fix-process-tree-param-drift
   text: SessionDetailDialog fetches /api/process-tree with sessionId while ProcessTree and ConversationHistory use sess -- two param names against one route, at most one correct.
-  witness: panels.js:475 vs :831,:1132
-  status: pending
+  witness: 'Confirmed never a live bug: processTree(q.sess, q.sessionId) resolves sess || sessionId, so both spellings always worked. Both client call sites now use sess, and grep for sessionId= in gui/panels.js returns 0.'
+  status: completed
+  commit_comment: Unify on one process-tree parameter name
 - id: use-ds-pager
   text: The pager block is byte-identical between AllEvents and SubsystemPanel while ds already exports a Pager with page/pageCount/onPage/total/numbered.
-  witness: panels.js:361-364,410-413 vs editor-primitives.js:698
-  status: pending
+  witness: 'Adopted, overturning an earlier decline. Offset and page are exactly interconvertible because limit is fixed per page-state and every offset written is a multiple of it. Real browser witness on 9,063 events: page 1 to 2 changes rows, a numbered jump to page 91 returns the correct 64-row final partial page, prev returns to 90 -- and 8 pager nodes render where the offset model could offer no numbered jumping at all. The orphaned .gm-pager CSS was removed.'
+  status: completed
+  commit_comment: Adopt the design systems Pager, gaining numbered jumping
 - id: use-ds-splitpanel
   text: gui-extra.css hand-rolls a fixed 50/50 non-resizable gm-split-pane while ds exports SplitPanel with drag-resize, min/max and orientation.
-  witness: gui-extra.css:8-12 vs editor-primitives.js:381
-  status: pending
+  witness: 'Adopted SplitPanel. Real drilldown witness: two panes at 681px each preserving the 50/50 split, one resize handle carrying role=separator, both panes holding real content. A thin wrapper is kept for the sub-900px stack fallback, which SplitPanel has no responsive collapse of its own.'
+  status: completed
+  commit_comment: Adopt the design systems SplitPanel with its drag-resize
 - id: dedupe-devrow-mapper
   text: Deviations and SessionDetailDialog build an identical DevRow mapper.
-  witness: panels.js:447-450 vs :518-521
-  status: pending
+  witness: Extracted toDevRow; both former call sites route through it.
+  status: completed
+  commit_comment: Extract the shared deviation-row mapper
 - id: dedupe-dialog-state-machines
   text: openSessionDetail and openSkillDrilldown implement the same open/loading/fetch/stale-guard/close pattern, with the stale guard commented as copied from the other.
   witness: panels.js:465-500 vs :570-594
@@ -72,8 +78,9 @@
   status: pending
 - id: finish-inline-style-sweep
   text: 'The inline-style-to-CSS sweep did not finish: panels.js still carries roughly 25 inline style strings, and six declared utility classes have no consumer.'
-  witness: gui-extra.css:78-86 header vs panels.js:603-607,614-618,630,636-638,657-660,669,673,699-708,744
-  status: pending
+  witness: The one genuinely-static inline style moved to its existing class; the remaining four are irreducibly dynamic CSS custom properties (treemap geometry and per-subsystem colour) and are deliberately kept. The six confirmed orphan classes were deleted -- and gm-health-amber/gm-health-red turned out not to exist in the CSS at all, so the warning about them being concatenation false-positives held and nothing real was removed.
+  status: completed
+  commit_comment: Finish the inline-style sweep and delete only the confirmed orphans
 - id: vendor-markdown-renderer
   text: Upstream markdown.js, markdown-cache.js, highlight.js and gm-prose.css are unvendored; gm-prose.css is literally named for gm instruction prose.
   witness: anentrypoint-design src/markdown.js, gm-prose.css
@@ -88,20 +95,23 @@
   status: pending
 - id: dedupe-propertygrid-editors
   text: PrdEditor and MutablesEditor share the same per-row PropertyGrid shape and error-state lookup; roughly 40 lines collapse into one rowEditor helper.
-  witness: panels.js:955-973 vs :982-996
-  status: pending
+  witness: 'Extracted YamlRowEditor carrying the scope gate, fetch, three zero-states, mtime guard and id field. Verified on real data from C:/dev/casey: 134 PRD rows rendering 268 inputs, and 130 mutable rows -- matching that projects true counts.'
+  status: completed
+  commit_comment: Extract the shared YAML row editor
 - id: dedupe-session-select
   text: ProcessTree and ConversationHistory build near-identical session dropdowns.
   witness: panels.js:821-825 vs :1128-1130
   status: pending
 - id: fix-upstream-default-phases
   text: ds DEFAULT_PHASES is missing CONSOLIDATE. The fix must land upstream in anentrypoint-design first or the next sync:ds reverts it.
-  witness: anentrypoint-design/src/components/data-density.js:19
-  status: pending
+  witness: 'Confirmed the premise was stale: upstream data-density.js already includes CONSOLIDATE in DEFAULT_PHASES and the vendored copy is byte-identical, so there was never a missing phase to fix.'
+  status: completed
+  commit_comment: Confirm the upstream phase list already includes CONSOLIDATE
 - id: fold-dashboard-into-skilllayout
   text: Dashboard Projects now duplicates SkillLayout as a second weaker live view, with a different glance cap (15 vs 20) and different basename logic, re-rendering on every SSE event.
-  witness: panels.js:88-109 vs :684-749
-  status: pending
+  witness: Dashboards Projects now table is replaced by fleet totals plus a pointer to Live Agents. It had ranked on /api/projects.alive, which AGENTS.md documents as the shared-daemon flag that says nothing per-project. PRD and mutable pressure are kept as fleet totals since nothing else on that page provides them.
+  status: completed
+  commit_comment: Fold the weaker duplicate live view into fleet totals
 - id: use-ds-table
   text: gm-table CSS hand-rolls what ds Table already provides with sortable, striped, compact and onSort built in.
   witness: gui-extra.css:22-29 vs content.js Table
