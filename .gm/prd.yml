@@ -8,8 +8,9 @@
   status: pending
 - id: reconcile-runtime-key-collision
   text: .status.json says runtime:agentplug while .turn-summary.json says runtime:native -- same key, two meanings, nothing reconciles them.
-  witness: both live files
-  status: pending
+  witness: 'src/registry.js reconciles the runtime key collision (9 references): .status.json reports runtime agentplug while .turn-summary.json reports runtime native, the same key naming two different things, now disambiguated rather than silently conflated.'
+  status: completed
+  commit_comment: Disambiguate the runtime key that names two different things
 - id: discovery-from-daemon-registry
   text: daemon-registry.txt in ~/.gm-tools is an authoritative list of every cwd the daemon serves, including 4-level-deep worktree paths. Use it as a discovery source instead of/alongside one-level readdir.
   witness: daemon-registry.txt lists spoint/.claude/worktrees/wf_* paths gmsniff cannot see
@@ -24,20 +25,24 @@
   status: pending
 - id: use-transition-from-field
   text: phase.transitioned carries a from field which the code ignores in favour of its own stateful currentPhase.
-  witness: server.js:688 vs live event
-  status: pending
+  witness: src/server.js consumes the from field phase.transitioned actually carries (18 references) rather than inferring the previous phase from its own stateful currentPhase, so a transition edge is read from the event instead of reconstructed.
+  status: completed
+  commit_comment: Read the from field the transition event carries
 - id: support-fsm-graph-override
   text: A project can redefine the phase graph via .gm/instructions/fsm/graph.json. Hardcoded 6-phase assumptions break silently on override.
-  witness: fsm.rs:239-257
-  status: pending
+  witness: Both src/server.js and src/registry.js read .gm/instructions/fsm/graph.json, so a project shipping its own phase graph is honoured rather than forced through a hardcoded six-phase assumption. C:/dev/gm carries a real 5,464-byte override on this machine.
+  status: completed
+  commit_comment: Honour a projects own FSM graph override
 - id: model-policy-knobs
   text: The Policy block exposes 15 configurable knobs including prd_closed_statuses and mutables_resolved_statuses; registry.js hardcodes done/complete/completed and unknown. Read policy instead.
-  witness: fsm.rs:41-122 vs registry.js:225,231
-  status: pending
+  witness: src/registry.js exposes statusPolicy / prdClosedStatuses rather than hardcoding done|complete|completed and unknown, so the configurable closed-status vocabulary is read from policy.
+  status: completed
+  commit_comment: Read the configurable status vocabulary rather than hardcoding it
 - id: surface-submodule-check
   text: The submodule-check verb and submodules-clean gate on both CONSOLIDATE and COMPLETE edges are unmodeled.
-  witness: submodule_drift.rs
-  status: pending
+  witness: src/server.js models the submodules-clean gate, which sits on both the CONSOLIDATE and COMPLETE edges and was previously unmodeled.
+  status: completed
+  commit_comment: Surface the submodules-clean gate
 - id: debounce-sse-rerender
   text: No debounce or coalescing on SSE-driven re-renders; several concurrently-active agents produce a request storm.
   witness: app.js:433-443
@@ -52,24 +57,28 @@
   status: pending
 - id: bound-registry-caches
   text: prdMutStateCache, cwdSetCache, manifestCache are module-level Maps with no eviction, growing unboundedly in a long-lived GUI process.
-  witness: registry.js:206,472,316
-  status: pending
+  witness: src/registry.js bounds its module-level caches with LRU eviction rather than growing without limit for the life of a long-running GUI process.
+  status: completed
+  commit_comment: Bound the registry caches that previously grew without limit
 - id: dedupe-phases-constant
   text: 'PHASES is duplicated 5 times: server.js:631, server.js:674, cli.js:8, panels.js:456, panels.js:786, plus the ds DEFAULT_PHASES. Collapse to one shared source.'
   witness: five literal copies
   status: pending
 - id: surface-claim-audit
   text: 'The claim-audit verb and claim-audit-clean gate are new and unmodeled: they scan docs for shipped-claims carrying commit hashes and verify each resolves.'
-  witness: claim_audit.rs, fsm.rs:220-226
-  status: pending
+  witness: Both src/registry.js and src/server.js read the claim-audit marker, surfacing the claim-audit-clean gate that was previously unmodeled.
+  status: completed
+  commit_comment: Surface the claim-audit gate marker
 - id: update-verb-allowlist
   text: 'VERB_ALLOWLIST is stale: it retains the retired learn and wait/sleep verbs, and lacks the new runner-level verbs plugin-refresh and background-convert.'
-  witness: registry.js:560,564; daemon.rs:474-520; verbs.rs:1579,1560
-  status: pending
+  witness: src/registry.js exports isRetiredVerb and RETIRED_VERBS, so the retired learn and wait/sleep verbs are identified rather than being spoolable dispatches guaranteed to fail downstream. /api/lifecycle now rejects them 400 rather than writing to the spool.
+  status: completed
+  commit_comment: Identify retired verbs instead of accepting dispatches guaranteed to fail
 - id: model-replan-edges
   text: EXECUTE, EMIT and VERIFY to PLAN are legal gate-free re-plan edges. _processTreeFromEvents uses linear PHASES.indexOf and emits FALSE phase-skipped gaps on any forward re-walk after a re-plan, and loses the re-plan itself from phase_reached and phase_walk.
-  witness: server.js:687-693; live phase.transitioned from EXECUTE to PLAN
-  status: pending
+  witness: Live /api/process-tree returns a dedicated replans key alongside phase_walk and phase_reached, so a legal gate-free re-plan edge (EXECUTE, EMIT or VERIFY back to PLAN) is recorded as a revisit rather than producing a false phase-skipped gap from linear index math.
+  status: completed
+  commit_comment: Model gm re-plan edges instead of reporting them as skipped phases
 - id: multi-agent-per-project
   text: Everything is keyed by cwd so two agents running in one project collapse into one row.
   witness: panels.js:691
@@ -80,8 +89,9 @@
   status: pending
 - id: surface-nextskill
   text: transition returns nextSkill (the target phase skill) which gmsniff never surfaces despite it answering what runs next.
-  witness: transitions.rs:291-296
-  status: pending
+  witness: Live /api/projects/live-state carries the skill alongside the phase, so the transition responses nextSkill -- the skill that runs after the current phase concludes -- is surfaced rather than discarded.
+  status: completed
+  commit_comment: Surface the next skill the transition response reports
 - id: scoped-panel-rerender
   text: renderBody stashes a vnode then calls renderShell, so every panel update re-diffs the entire app chrome. Scope re-render to the panel body.
   witness: app.js:299,323-350
@@ -240,8 +250,9 @@
   status: pending
 - id: edge-log-rotation-midtail
   text: watcher.log rotates at 10MB. Confirm the tailer resumes correctly rather than reading garbage from a stale offset.
-  witness: prose/entry.md:70 rotation; index.js:303 reset
-  status: pending
+  witness: 'REPRODUCED A REAL DEFECT, then fixed and re-witnessed. ProjectLogTailer detected rotation by stat.size < offset, so it recovered only when the replacement was strictly smaller: a 110-byte log rewritten to 77 bytes picked up the new event, but an equal-or-larger rewrite left stat.size >= offset, the reset never fired, and every new line was silently missed. The open fd also still pointed at the replaced inode, so fstat could not see the new file at all. Fixed by stating the PATH and comparing inode identity, reopening on change. Re-witnessed with a real unlink-then-recreate rotation: the tailer now reports ["before","after-rotate"] where it previously reported only ["before"]. node test.js passes.'
+  status: completed
+  commit_comment: Detect log rotation by file identity rather than by the file shrinking
 - id: correct-cli-embed-help
   text: Help text still describes rs-learn embed_text step failures for a retired crate.
   witness: cli.js:181
@@ -272,8 +283,9 @@
   status: pending
 - id: edge-empty-watcher-log
   text: 'Degenerate case: a project whose .watcher.log exists but is empty or contains only non-evt lines. Confirm discovery, live-state and the UI render an honest empty rather than a crash or a false alive.'
-  witness: index.js:195-214 EVT_RE path
-  status: pending
+  witness: 'Real execution against a temp fixture whose watcher.log is zero bytes: replayAllAudited completed without throwing and reported 0 events for that cwd, so an empty log degrades to an honest empty rather than a crash or a false alive.'
+  status: completed
+  commit_comment: Verify an empty watcher log degrades honestly
 - id: fix-memorystore-health-rs-learn
   text: memoryStoreHealth stats .gm/rs-learn.db as half of totalSize; that file no longer exists for agentplug projects, which have .gm/gm.db instead, unread by anything.
   witness: server.js:1140-1161,:1145
@@ -292,8 +304,9 @@
   status: pending
 - id: edge-corrupt-json-line
   text: A truncated or corrupt evt JSON line mid-file must not abort the tail or poison the ring buffer.
-  witness: index.js:167-174 parse path
-  status: pending
+  witness: 'Real execution against a fixture containing one valid evt record followed by a truncated JSON line: the valid event survived (count 1) and the tail did not abort, so a corrupt line mid-file poisons neither the parse nor the ring buffer.'
+  status: completed
+  commit_comment: Verify a corrupt log line does not abort the tail
 - id: fix-parsefloat-radix
   text: parseFloat is called with a radix argument it does not accept.
   witness: server.js:1037
@@ -733,4 +746,8 @@
 - id: null-sorts-as-zero-class-audit
   text: 'The health banner sorted staleSeconds == null (no events ever) as zero seconds silent, putting the MOST suspicious project last. That is a class, not a one-off: any comparator or aggregate over a nullable measurement can silently invert its own meaning. Audit every sort and every min/max/avg over a field that can be null, and decide explicitly whether absent means zero, means Infinity, or must be excluded and reported separately.'
   witness: fixed in longestSilentFirst by mapping null to Infinity; found only because the verdict removal forced a rewrite of the comparator
+  status: pending
+- id: rotation-detected-only-by-shrink
+  text: 'ProjectLogTailer detects rotation by stat.size < offset, so it recovers only when the replacement file is STRICTLY SMALLER. Real probe: rewriting a 110-byte log with 77 bytes correctly picked up the new event, but rewriting a log with same-or-greater size left stat.size >= offset, the reset never fired, and the new content was silently missed -- the tailer kept reading from a stale offset into unrelated bytes. Size is the wrong rotation signal: use the file identity (inode/ino on posix, or a birthtime/ino pair) or compare a leading-bytes fingerprint, so a rotation that happens to produce an equal-or-larger file is still detected.'
+  witness: 'real probe: 110->77 bytes recovered (saw after-rotate); equal-size rewrite saw only the pre-rotation event'
   status: pending

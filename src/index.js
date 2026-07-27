@@ -381,6 +381,7 @@ class ProjectLogTailer extends EventEmitter {
     this._fp = fp;
     this._fd = null;
     this._skipExistingContent = skipExistingContent;
+    this._inode = null;
     this._offset = 0;
     this._partial = '';
     this._watcher = null;
@@ -423,9 +424,24 @@ class ProjectLogTailer extends EventEmitter {
   _read() {
     try {
       if (this._fd === null) this._fd = fs.openSync(this._fp, 'r');
+      // Size alone cannot detect rotation: a replacement file of equal or greater size leaves
+      // stat.size >= offset, so the reset never fires and the tail keeps reading a stale offset
+      // into unrelated bytes. Measured: a 110-byte log rewritten to 77 bytes recovered, the same
+      // log rewritten at equal size silently missed every new line. The open fd also still points
+      // at the replaced inode, so fstat cannot see the new file at all -- stat the PATH and
+      // compare identity, then reopen.
+      const onDisk = fs.statSync(this._fp);
+      const replacedOnDisk = this._inode != null && String(onDisk.ino) !== this._inode;
+      if (replacedOnDisk) {
+        try { fs.closeSync(this._fd); } catch (_) {}
+        this._fd = fs.openSync(this._fp, 'r');
+        this._offset = 0;
+        this._partial = '';
+      }
+      this._inode = String(onDisk.ino);
       const stat = fs.fstatSync(this._fd);
-      const rotatedOrTruncated = stat.size < this._offset;
-      if (rotatedOrTruncated) { this._offset = 0; this._partial = ''; }
+      const truncatedInPlace = stat.size < this._offset;
+      if (truncatedInPlace) { this._offset = 0; this._partial = ''; }
       if (stat.size <= this._offset) return;
       const buf = Buffer.allocUnsafe(stat.size - this._offset);
       const n = fs.readSync(this._fd, buf, 0, buf.length, this._offset);
