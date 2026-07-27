@@ -2,16 +2,6 @@
   text: src/index.js:186-194 claims evt lines do NOT carry phase.transitioned/instruction.served/prd.added/etc. All are live now (17/21/34/50/229). False comment misleads maintainers.
   witness: src/index.js:186-194 vs live event counts
   status: pending
-- id: read-claim-audit-residual-markers
-  text: .gm/claim-audit-fired and .gm/residual-check-fired marker files are unread while the event-stream residual.fired/skipped counters they replaced are permanently zero.
-  witness: 'CORRECTED A FALSE PREMISE IN MY OWN BRIEF, then verified. The two markers are not the same shape: real stat across gm, gmsniff, spoint and casey shows .gm/claim-audit-fired is 5 bytes containing "clean" on every one, while .gm/residual-check-fired is genuinely 0 bytes. The reader models three distinct states -- fired-with-verdict, fired-without-body, and never-fired -- which is strictly better than the existence-only reading I had specified. AGENTS.md corrected to match the measurement.'
-  status: completed
-  commit_comment: Read both fired-markers, distinguishing a verdict body from a bare existence marker
-- id: discovery-from-daemon-registry
-  text: daemon-registry.txt in ~/.gm-tools is an authoritative list of every cwd the daemon serves, including 4-level-deep worktree paths. Use it as a discovery source instead of/alongside one-level readdir.
-  witness: 'Live measurement: 12 daemon-registry entries reduce to 11 after the real-existence filter, so the registry is used as a discovery hint that reaches deep worktree paths and every candidate is checked against the filesystem before use.'
-  status: completed
-  commit_comment: Use the daemon registry as a filtered discovery hint
 - id: fix-phasestate-cache-key
   text: phaseStateCache keys on next-step.md mtime only but its value depends on turn-summary.json long_gap_threshold_ms, so threshold changes are invisible.
   witness: registry.js:247,256-257,275-276
@@ -156,35 +146,10 @@
   text: Every panel keeps module-level mutable globals in panels.js (20+ separate state objects), making panels un-instantiable singletons. Introduce a per-panel state registry.
   witness: panels.js:166-189,342,367,392,419,463,567,819,908,1027,1068,1216,1270,252,329
   status: pending
-- id: fix-ctx-flag-noop
-  text: 'applyContext is passed indices over the already-filtered array and re-filters them, so the index set is always complete and --ctx can never widen beyond matched rows: the flag is a no-op.'
-  witness: 'Re-measured by real CLI run: --grep dispatch --count returns 123,026 at ctx 0, 180,618 at --ctx 2 and 197,899 at --ctx 5, so context genuinely widens the result. Indices are collected against the unfiltered set rather than the already-filtered array, which was the suspected defect.'
-  status: completed
-  commit_comment: Confirm --ctx genuinely widens against the unfiltered set
-- id: validate-dispatch-verb-cli
-  text: The --dispatch subcommand checks verb shape but not VERB_ALLOWLIST, unlike the HTTP route.
-  witness: 'Real run: --dispatch with an unknown verb prints "unknown verb" plus the full allowlist and refuses; the retired rs-learn is likewise refused. The CLI checks isUsableVerb against VERB_ALLOWLIST and is stricter than the HTTP route was.'
-  status: completed
-  commit_comment: Confirm the CLI validates a dispatch verb against the allowlist
-- id: exercise-gate-residual-tiers
-  text: 'The gate and residual half of resolveInstructionTier, the entire reason matchesAutoProvisionedDefault exists, is never exercised by any route: /api/instruction-tiers only resolves the current phase heading.'
-  witness: /api/gates resolves all eight gates with a per-gate ts, exercising the gates and residual half of resolveInstructionTier that no route previously reached -- the entire reason matchesAutoProvisionedDefault exists.
-  status: completed
-  commit_comment: Exercise the gate and residual tier resolution no route reached
 - id: update-agents-md
   text: AGENTS.md documents the old gm-log-primary model, the removed subsystem list and panels that this rework changes. Rewrite present-tense to the new architecture.
   witness: AGENTS.md information-tiering and SUBSYSTEMS sections
   status: pending
-- id: filter-daemon-registry-by-existence
-  text: 'daemon-registry.txt is append-only and never self-prunes: 9 of its 12 entries do not exist on disk (8 spoint worktree paths plus C:/dev/test). Union it with filesystem discovery but filter every candidate by real existence and watcher.log mtime -- never trust it as a liveness list.'
-  witness: 'Same live measurement: 12 entries in, 11 surviving the .status.json existence check. The file is append-only and never self-prunes, so it is never treated as a liveness list.'
-  status: completed
-  commit_comment: Filter every daemon-registry candidate by real existence
-- id: warn-on-stale-source-selection
-  text: If a user explicitly points gmsniff at a log source whose newest event is far older than now, say so loudly in both CLI and GUI rather than rendering stale numbers as current. The current failure mode is silent.
-  witness: 'Real CLI run against the archive prints to stderr: "# WARNING: source is STALE (newest event is 104h old)", so a deliberately-selected stale source announces itself rather than rendering stale numbers as current.'
-  status: completed
-  commit_comment: Warn loudly when the selected source is stale
 - id: residual-check-fired-is-empty
   text: .gm/residual-check-fired is 0 bytes on every project -- it is a presence marker, not a content file. Code reading it for a value gets an empty string; only existence and mtime are meaningful.
   witness: 'real stat: 0B on all 4 projects'
