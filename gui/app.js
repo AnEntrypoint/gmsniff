@@ -20,16 +20,19 @@ import { loadCapabilities, subsystemList, basename } from './shared.js';
 const h = webjsx.createElement;
 const root = document.getElementById('root');
 
-// Panels removed in this rework, kept ONLY as redirect targets so an existing
-// bookmark or shared deep link lands somewhere sensible instead of dead-ending:
-//   skill-layout  -> agents      (renamed; this IS the same view, rebuilt)
-//   search-panel  -> events      (Search was a second UI over the same rows)
-//   conversations -> tree        (a strict 6-of-27-kind subset of Process Tree)
-const PANEL_ALIASES = {
+// Panels that no longer exist, kept only so an existing bookmark or shared deep
+// link lands on the panel that replaced it instead of dead-ending: skill-layout
+// was renamed to agents, search-panel was a second UI over the same rows as
+// events, and conversations was a strict 6-of-27-kind subset of tree.
+const REMOVED_PANEL_REDIRECTS = {
   'skill-layout': 'agents',
   'search-panel': 'events',
   conversations: 'tree',
 };
+
+// Subsystem panels are generated per observed tag rather than listed in NAV, so
+// their ids are the only ones carrying a prefix instead of a NAV entry.
+const SUBSYSTEM_PANEL_PREFIX = 'sub-';
 
 const NAV = {
   agents: 'Live Agents',
@@ -41,8 +44,10 @@ const NAV = {
   codeinsight: 'CodeInsight', 'memory-graph': 'Memory Graph',
 };
 
+const DEFAULT_PANEL = 'agents';
+
 const ui = {
-  panel: 'agents',
+  panel: DEFAULT_PANEL,
   connState: 'connecting',
   devTotal: 0,
   treeSess: '',
@@ -55,24 +60,22 @@ const ui = {
   streamNote: null,
 };
 
-// ---------------------------------------------------------------------------
-// HASH ROUTING -- the URL is a derived view of {panel, treeSess, convSess},
-// never the source of truth (ui.* stays authoritative in memory); read on
-// boot, written on every navigation, re-read on popstate/hashchange so browser
-// back/forward restores the exact prior panel+sub-state without a page reload.
-// Shape: #panel=<id>[&tree=<sess>][&conv=<sess>] -- query-string-in-hash so it
-// stays a single flat segment, no nested router needed for this app's depth.
-// ---------------------------------------------------------------------------
+// The URL is a derived VIEW of ui.*, never the source of truth: ui.* stays
+// authoritative in memory, and the hash is read on boot, written on every
+// navigation, and re-read on popstate so back/forward restores the exact prior
+// panel and sub-state without a page reload. Query-string-in-hash keeps it a
+// single flat segment; this app's depth never warranted a nested router.
 function parseHash(hash) {
-  const raw = (hash || '').replace(/^#/, '');
-  const params = new URLSearchParams(raw);
+  const params = new URLSearchParams((hash || '').replace(/^#/, ''));
   let panel = params.get('panel');
-  if (panel && PANEL_ALIASES[panel]) panel = PANEL_ALIASES[panel];
+  if (panel && REMOVED_PANEL_REDIRECTS[panel]) panel = REMOVED_PANEL_REDIRECTS[panel];
+  const isKnownPanel = panel && NAV[panel] !== undefined;
+  const isSubsystemPanel = panel && panel.startsWith(SUBSYSTEM_PANEL_PREFIX);
   return {
-    panel: panel && NAV[panel] !== undefined ? panel : (panel && panel.startsWith('sub-') ? panel : null),
+    panel: isKnownPanel ? panel : (isSubsystemPanel ? panel : null),
     treeSess: params.get('tree') || '',
-    // Live Agents sub-state: which agent's drilldown is open and what the list
-    // is filtered to, so "look at this agent right now" is a shareable link.
+    // Which agent's drilldown is open and what the list is filtered to, so
+    // "look at this agent right now" is a shareable link.
     agent: params.get('agent') || '',
     filter: params.get('q') || '',
   };
@@ -89,18 +92,16 @@ function hashForState() {
   return '#' + params.toString();
 }
 
-// Pushes a new history entry only when the target state actually differs from
-// the current hash -- prevents duplicate history entries on re-renders that
-// don't change panel/sub-state (e.g. periodic refreshes), which would
-// otherwise make a single Back press feel like it does nothing.
+// Pushing only when the target state actually differs keeps a periodic refresh
+// from stacking duplicate history entries, which would make a single Back press
+// feel like it does nothing.
 function syncHash() {
   const next = hashForState();
   if (location.hash !== next) history.pushState(null, '', next);
 }
 
-// Applies a parsed hash to ui.* without re-pushing history -- used by the
-// popstate/hashchange handler so navigating back/forward doesn't itself
-// generate a new forward-history entry (that would break Back).
+// Deliberately does NOT push history: the popstate handler calls this, and
+// pushing there would generate a new forward entry and break Back.
 function applyHashState(parsed) {
   if (parsed.panel) ui.panel = parsed.panel;
   ui.treeSess = parsed.treeSess;
@@ -114,24 +115,17 @@ window.addEventListener('popstate', () => {
   renderBody(true).then(focusMain);
 });
 
-// Health-banner thresholds: named constants so amber/red logic is auditable and
-// adjustable, never magic numbers inline in the render path.
-const HEALTH_DEV_RATE_AMBER_PER_MIN = 1; // deviations/min at or above this = amber
-const HEALTH_WATCHER_DEAD_MIN = 5; // watcher considered dead-for-N-min at this age
-const HEALTH_STALE_FULL_SEC = 5 * 60; // no events for this long = fully stale
+const HEALTH_DEV_RATE_AMBER_PER_MIN = 1;
+const HEALTH_WATCHER_DEAD_AFTER_SEC = 5 * 60;
+const HEALTH_FULLY_STALE_AFTER_SEC = 5 * 60;
+const HEALTH_BREACHES_MEANING_RED = 2;
 
 function navItem(id, label, extra) {
   return { label, href: '#panel=' + id, active: ui.panel === id, onClick: (e) => { e.preventDefault(); go(id); }, count: extra };
 }
 
-// ---------------------------------------------------------------------------
-// CTRL+K COMMAND PALETTE -- a combined registry of every sidebar nav target
-// plus every lifecycle/dispatch verb the panels already expose (Lifecycle
-// Control's dispatch buttons, Search/Codesearch's search trigger, GM Call
-// Console's dispatch). Selecting an entry invokes the exact same handler
-// function the panel's own control calls (never a simulated click) and
-// reports success/failure via the shared toast() helper.
-// ---------------------------------------------------------------------------
+// Every palette entry invokes the exact same handler function the panel's own
+// control calls, never a simulated click on a rendered element.
 function navPaletteEntries() {
   return Object.entries(NAV).map(([id, label]) => ({
     label, group: 'Navigate',
@@ -147,11 +141,10 @@ function lifecyclePaletteEntries() {
   ];
 }
 
+// PRD/Mutables edits are per-row inline inputs inside their panels, so the
+// palette's role is navigation to the editor; the field commit itself still
+// goes through the identical /api/prd/edit path once the row is in view.
 function editorPaletteEntries() {
-  // PRD/Mutables edits are per-row/per-field inline inputs in their panels
-  // (commitField), so the palette's role is fast navigation to the editor
-  // itself -- the actual field commit still goes through the identical
-  // /api/prd/edit and /api/mutables/edit path once the row is in view.
   return [
     { label: 'PRD Editor: open', group: 'Edit', action: () => go('prd') },
     { label: 'Mutables Editor: open', group: 'Edit', action: () => go('mutables') },
@@ -206,43 +199,44 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-// Reuses the same project-switch mechanism as the topbar <select> (state.cwd + renderBody).
 function switchToProject(cwd) {
   state.cwd = cwd || null;
   renderBody();
 }
 
-// Classifies a health row against the configured thresholds. Returns 'ok' | 'amber' | 'red'.
 function healthRowSeverity(row) {
-  const fullyStale = row.staleSeconds == null || row.staleSeconds >= HEALTH_STALE_FULL_SEC;
-  // "watcher dead for N min": not alive AND stale long enough to rule out a brief restart blip.
-  const watcherDeadForNMin = !row.watcherAlive && (row.staleSeconds == null || row.staleSeconds >= HEALTH_WATCHER_DEAD_MIN * 60);
+  const fullyStale = row.staleSeconds == null || row.staleSeconds >= HEALTH_FULLY_STALE_AFTER_SEC;
+  // Stale long enough to rule out a brief restart blip, on top of not being
+  // alive -- either alone is too weak to call a watcher dead.
+  const watcherDead = !row.watcherAlive
+    && (row.staleSeconds == null || row.staleSeconds >= HEALTH_WATCHER_DEAD_AFTER_SEC);
   const highDeviationRate = (row.deviationRate || 0) >= HEALTH_DEV_RATE_AMBER_PER_MIN;
-  const breaches = (highDeviationRate ? 1 : 0) + (watcherDeadForNMin ? 1 : 0) + (fullyStale ? 1 : 0);
-  if (fullyStale && watcherDeadForNMin) return 'red';
-  if (breaches >= 2) return 'red';
+  const breaches = (highDeviationRate ? 1 : 0) + (watcherDead ? 1 : 0) + (fullyStale ? 1 : 0);
+  if (fullyStale && watcherDead) return 'red';
+  if (breaches >= HEALTH_BREACHES_MEANING_RED) return 'red';
   if (breaches === 1) return 'amber';
   return 'ok';
 }
 
-// Says WHY each named project is unhealthy. A bare "Health: critical" followed
-// by 140 comma-separated names states a severity without a cause and buries the
-// live agents under the machine's entire abandoned backlog -- so the banner now
-// carries the reason per project, caps the list, and says how many it omitted.
-const HEALTH_BANNER_MAX = 6;
+// A bare "Health: critical" followed by 140 comma-separated names states a
+// severity without a cause and buries the live agents under the machine's entire
+// abandoned backlog, so the banner carries a reason per project, caps the list,
+// and says how many it omitted.
+const HEALTH_BANNER_PROJECTS_SHOWN = 6;
+const SEC_PER_MIN = 60;
 
 function healthReason(r) {
-  const bits = [];
-  if (!r.watcherAlive) bits.push('watcher not running');
-  if (r.staleSeconds == null) bits.push('no events ever');
-  else if (r.staleSeconds >= HEALTH_STALE_FULL_SEC) bits.push(`silent ${Math.round(r.staleSeconds / 60)}m`);
-  if ((r.deviationRate || 0) >= HEALTH_DEV_RATE_AMBER_PER_MIN) bits.push(`${r.deviationRate.toFixed(1)} deviations/min`);
-  // Never fall back to a bare verdict like "degraded": a word with no measurement behind it is
-  // the exact thing this banner was rebuilt to stop doing. If nothing crossed a display
-  // threshold, say so and show the numbers -- the reader decides whether they matter.
-  if (bits.length) return bits.join(', ');
-  const stale = r.staleSeconds == null ? 'no events' : `silent ${Math.round(r.staleSeconds / 60)}m`;
-  return `${stale}, ${(r.deviationRate || 0).toFixed(1)} deviations/min`;
+  const silentFor = r.staleSeconds == null ? null : `silent ${Math.round(r.staleSeconds / SEC_PER_MIN)}m`;
+  const breachedReasons = [];
+  if (!r.watcherAlive) breachedReasons.push('watcher not running');
+  if (r.staleSeconds == null) breachedReasons.push('no events ever');
+  else if (r.staleSeconds >= HEALTH_FULLY_STALE_AFTER_SEC) breachedReasons.push(silentFor);
+  if ((r.deviationRate || 0) >= HEALTH_DEV_RATE_AMBER_PER_MIN) breachedReasons.push(`${r.deviationRate.toFixed(1)} deviations/min`);
+  if (breachedReasons.length) return breachedReasons.join(', ');
+  // Never a bare verdict like "degraded": a word with no measurement behind it
+  // is the exact thing this banner was rebuilt to stop doing. When nothing
+  // crossed a display threshold, the raw numbers go out and the reader judges.
+  return `${silentFor ?? 'no events'}, ${(r.deviationRate || 0).toFixed(1)} deviations/min`;
 }
 
 // A stopped watcher on a project that FINISHED or was abandoned months ago is
@@ -250,30 +244,28 @@ function healthReason(r) {
 // directories discovery finds on this machine. Measured in the real browser, the
 // unscoped banner rendered "Health: critical (676 of 678 projects)" above the
 // live view on every page: a severity with no cause, computed over dead history.
+// Health is therefore judged only over the agents live-state reports as working.
 //
-// Health is therefore judged ONLY over the population the live view is actually
-// managing -- the agents live-state reports as working. A project nobody is
-// running cannot be unhealthy, so it is excluded rather than counted and capped.
-function healthScope() {
-  const working = new Set((liveState.rows || []).map(r => r.cwd));
-  const rows = ui.health || [];
-  // Before live-state has landed, scope to nothing rather than to everything:
-  // an unscoped banner is precisely the false alarm being removed, and it would
-  // flash during exactly the slow-boot window.
-  return { rows: rows.filter(r => working.has(r.cwd)), total: working.size };
+// Before live-state lands this scopes to NOTHING rather than to everything: an
+// unscoped banner is precisely the false alarm being removed here, and it would
+// otherwise flash during exactly the slow-boot window.
+function healthScopedToWorkingAgents() {
+  const workingCwds = new Set((liveState.rows || []).map(r => r.cwd));
+  return {
+    rows: (ui.health || []).filter(r => workingCwds.has(r.cwd)),
+    total: workingCwds.size,
+  };
 }
 
 function HealthBanner() {
-  const { rows, total } = healthScope();
+  const { rows, total } = healthScopedToWorkingAgents();
   const offending = rows.map(r => ({ ...r, severity: healthRowSeverity(r) })).filter(r => r.severity !== 'ok');
   if (!offending.length) return null;
   const tone = offending.some(r => r.severity === 'red') ? 'red' : 'amber';
-  const ranked = [...offending].sort((a, b) => (b.deviationRate || 0) - (a.deviationRate || 0));
-  const shown = ranked.slice(0, HEALTH_BANNER_MAX);
-  const omitted = ranked.length - shown.length;
+  const worstFirst = [...offending].sort((a, b) => (b.deviationRate || 0) - (a.deviationRate || 0));
+  const shown = worstFirst.slice(0, HEALTH_BANNER_PROJECTS_SHOWN);
+  const omitted = worstFirst.length - shown.length;
   return h('div', { class: 'gm-health-banner gm-health-' + tone, role: 'alert' },
-    // Names WHAT is wrong and over WHICH population, and every listed project is
-    // a button that scopes to it -- a severity you can act on, not a bare word.
     h('span', { class: 'gm-health-label' },
       `${offending.length} of ${total} working agent${total === 1 ? '' : 's'} ${tone === 'red' ? 'stalled' : 'degraded'}`),
     h('span', { class: 'gm-health-list' }, ...shown.map(r => h('button', {
@@ -286,9 +278,10 @@ function HealthBanner() {
     omitted > 0 ? h('span', { class: 'gm-health-omitted' }, `and ${omitted} more`) : null);
 }
 
-// A dropped/resumed stream, or a watcher failing, previously produced no visible
-// reaction at all -- the UI simply stopped updating and looked idle. This states
-// the transport's condition so a quiet screen is never mistaken for a quiet system.
+// A dropped stream or a failing watcher previously produced no visible reaction
+// at all: the UI simply stopped updating and looked idle. Stating the
+// transport's condition is what keeps a quiet screen from reading as a quiet
+// system.
 function StreamNote() {
   if (!ui.streamNote) return null;
   return h('div', {
@@ -302,38 +295,37 @@ function StreamNote() {
     }, 'x'));
 }
 
-// ---------------------------------------------------------------------------
-// NAV TIERING -- daily-first sidebar. Daily/Investigate groups always render;
-// Subsystems/Analytics/Control sit behind a collapsed-by-default Advanced
-// toggle so the observer's first contact is the handful of panels that answer
-// "what is happening right now". Demoted panels stay reachable three ways:
-// the toggle, the Ctrl+K palette (built from NAV, not from rendered sections),
-// and #panel= deep links (navigation auto-expands the group, session-only).
-// Persisted value is whitelist-validated: anything but the literal 'open'
-// (corrupt value, unavailable storage) falls back to collapsed.
-// ---------------------------------------------------------------------------
-const NAV_ADV_KEY = 'gmsniff.nav.advanced';
-const ADV_PANEL_IDS = new Set(['codeinsight', 'memory-graph',
+const NAV_ADVANCED_STORAGE_KEY = 'gmsniff.nav.advanced';
+const NAV_ADVANCED_OPEN = 'open';
+const NAV_ADVANCED_COLLAPSED = 'collapsed';
+const ADVANCED_PANEL_IDS = new Set(['codeinsight', 'memory-graph',
   'prd', 'mutables', 'lifecycle', 'codesearch', 'console', 'browser-sessions']);
-let navAdvanced = (() => { try { return localStorage.getItem(NAV_ADV_KEY) === 'open'; } catch (_) { return false; } })();
 
-function isAdvancedPanel(id) { return ADV_PANEL_IDS.has(id) || (typeof id === 'string' && id.startsWith('sub-')); }
+// Whitelist-validated rather than truthy-checked, so a corrupt stored value or
+// an unavailable localStorage both land on collapsed rather than on open.
+let navAdvanced = (() => {
+  try { return localStorage.getItem(NAV_ADVANCED_STORAGE_KEY) === NAV_ADVANCED_OPEN; } catch (_) { return false; }
+})();
 
-// One-shot: navigating to a demoted panel (deep link, palette, back/forward)
-// expands the group for this session without persisting -- a shared deep link
-// never overwrites the observer's stored collapsed preference.
+function isAdvancedPanel(id) {
+  return ADVANCED_PANEL_IDS.has(id) || (typeof id === 'string' && id.startsWith(SUBSYSTEM_PANEL_PREFIX));
+}
+
+// Session-only and never persisted, so a shared deep link into a demoted panel
+// cannot overwrite the observer's own stored collapsed preference.
 function expandAdvancedFor(id) { if (isAdvancedPanel(id)) navAdvanced = true; }
 
 function toggleAdvanced(e) {
   e.preventDefault();
   navAdvanced = !navAdvanced;
-  try { localStorage.setItem(NAV_ADV_KEY, navAdvanced ? 'open' : 'collapsed'); } catch (_) {}
+  try {
+    localStorage.setItem(NAV_ADVANCED_STORAGE_KEY, navAdvanced ? NAV_ADVANCED_OPEN : NAV_ADVANCED_COLLAPSED);
+  } catch (_) {}
   renderShell();
 }
 
-// Status-bar glance: PRD/mutable pressure for the scoped project, or a
-// watcher-liveness aggregate when unscoped -- all read from state.projects
-// (fetched once at boot), zero additional polling surface.
+// Reads only from state.projects, fetched once at boot, so the status bar adds
+// no polling surface of its own.
 function statusGlance() {
   if (state.cwd) {
     const p = state.projects.find(r => r.cwd === state.cwd);
@@ -345,16 +337,16 @@ function statusGlance() {
 }
 
 function renderShell() {
-  const advSections = [
-    { group: 'Subsystems', items: subsystemList().map(s => navItem('sub-' + s, s)) },
+  const advancedSections = [
+    { group: 'Subsystems', items: subsystemList().map(s => navItem(SUBSYSTEM_PANEL_PREFIX + s, s)) },
     { group: 'Analytics', items: [navItem('codeinsight', 'CodeInsight'), navItem('memory-graph', 'Memory Graph')] },
     { group: 'Control', items: [navItem('prd', 'PRD Editor'), navItem('mutables', 'Mutables Editor'), navItem('lifecycle', 'Lifecycle Control'), navItem('codesearch', 'Codesearch'), navItem('console', 'GM Call Console'), navItem('browser-sessions', 'Browser Sessions')] },
   ];
-  const advCount = advSections.reduce((n, s) => n + s.items.length, 0);
-  // Exactly ONE live view leads. Live Agents is the manager surface; everything
-  // else is a forensic tool you reach for after it tells you where to look, so
-  // Investigate is collapsed alongside the other secondary groups rather than
-  // competing with the lead view for first attention.
+  const advancedPanelCount = advancedSections.reduce((n, s) => n + s.items.length, 0);
+  // Exactly ONE live view leads: Live Agents is the manager surface and
+  // everything else is a forensic tool you reach for after it tells you where to
+  // look, so Investigate collapses alongside the other secondary groups rather
+  // than competing with the lead view for first attention.
   const side = Side({
     sections: [
       { group: 'Live', items: [navItem('agents', 'Live Agents')] },
@@ -367,8 +359,8 @@ function renderShell() {
         navItem('overview', 'Dashboard'),
         navItem('days', 'By Day'),
       ] },
-      { group: 'Advanced', items: [{ label: navAdvanced ? 'Hide advanced' : 'Show advanced', href: '#', onClick: toggleAdvanced, count: navAdvanced ? null : advCount }] },
-      ...(navAdvanced ? advSections : []),
+      { group: 'Advanced', items: [{ label: navAdvanced ? 'Hide advanced' : 'Show advanced', href: '#', onClick: toggleAdvanced, count: navAdvanced ? null : advancedPanelCount }] },
+      ...(navAdvanced ? advancedSections : []),
     ],
   });
 
@@ -389,9 +381,6 @@ function renderShell() {
         Chip({ tone: ui.connState === 'live' ? 'positive' : (ui.connState === 'reconnecting' ? 'warn' : 'neutral'), children: ui.connState }),
         ThemeToggle({ compact: true }))),
     side,
-    // Persistent health banner sits above the panel router (bodyContainer) inside main,
-    // so it is visible regardless of which panel is active, and hidden entirely (null) when
-    // every discovered project is healthy.
     main: [HealthBanner(), StreamNote(), bodyContainer],
     status: Status({ left: ['gmsniff'], right: [state.cwd || '(own root)', statusGlance()].filter(Boolean) }),
   });
@@ -411,18 +400,9 @@ function renderShell() {
   }));
 }
 
-// force=true means an actual panel switch or explicit refresh (go(), the
-// "refresh" affordance in ProcessTree, project-select onchange) -- those are
-// the moments the PRD names ("between panel-switch and data arrival") where
-// the previous panel's stale content would otherwise linger with zero
-// affordance a switch is in flight. force=false/undefined covers ambient
-// SSE-driven re-renders (live tick, deviation badge, session-list poll)
-// which resolve near-instantly against already-fetched/cached data and must
-// stay flicker-free -- gating the spinner on `force` keeps those silent.
-// Scoped re-render: an ambient data update only needs the panel container
-// re-diffed, not the whole shell (sidebar, topbar, status bar, palette host).
-// renderShell() stays the path for anything that actually changes the shell
-// (nav counts, connection chip, health banner) -- everything else lands here.
+// An ambient data update only needs the panel container re-diffed, not the whole
+// shell. renderShell() stays the path for anything that actually changes the
+// shell -- nav counts, the connection chip, the health banner.
 function renderPanelOnly() {
   const container = document.getElementById('panel-body');
   if (!container) { renderShell(); return; }
@@ -430,10 +410,10 @@ function renderPanelOnly() {
   applyAutoscroll();
 }
 
-// SSE frames arrive in bursts (a single agent turn emits dispatch.start,
-// several prd.*, instruction.served and dispatch.end within a few ms). Rendering
-// each one synchronously meant a full refetch + full shell re-diff per frame.
-// Coalescing into one animation frame collapses a burst into a single render.
+// SSE frames arrive in bursts -- a single agent turn emits dispatch.start,
+// several prd.*, instruction.served and dispatch.end within a few ms -- and
+// rendering each synchronously cost a full refetch plus a full shell re-diff per
+// frame. Coalescing into one animation frame collapses a burst into one render.
 let renderQueued = false;
 let renderWantsFetch = false;
 function scheduleRender({ refetch = false } = {}) {
@@ -446,31 +426,34 @@ function scheduleRender({ refetch = false } = {}) {
     renderWantsFetch = false;
     if (wantFetch) {
       await renderBody();
-    } else {
-      // No refetch: the panel's own client-held state already changed (a feed
-      // append), so re-render the panel from that state alone.
-      try {
-        ui.bodyNode = await computeBody(false);
-        renderPanelOnly();
-      } catch (_) { await renderBody(); }
+      return;
     }
+    // The panel's own client-held state already changed (a feed append), so the
+    // panel re-renders from that state alone.
+    try {
+      ui.bodyNode = await computeBody(false);
+      renderPanelOnly();
+    } catch (_) { await renderBody(); }
   });
 }
 
-async function renderBody(force) {
-  if (force) {
+// isPanelSwitchOrExplicitRefresh gates the spinner. A panel switch or an
+// explicit refresh is the one moment the previous panel's stale content would
+// otherwise linger with no affordance that a switch is in flight; ambient
+// SSE-driven re-renders resolve near-instantly against already-fetched data and
+// must stay flicker-free, so they pass it false.
+async function renderBody(isPanelSwitchOrExplicitRefresh) {
+  if (isPanelSwitchOrExplicitRefresh) {
     ui.bodyNode = h('div', { class: 'ds-panel gm-panel-loading' }, Spinner({ label: 'loading ' + (NAV[ui.panel] || ui.panel) }));
     renderShell();
   }
   try {
-    ui.bodyNode = await computeBody(force);
+    ui.bodyNode = await computeBody(isPanelSwitchOrExplicitRefresh);
   } catch (err) {
-    // A thrown exception inside a panel's render logic (as opposed to a
-    // failed api() fetch, which each panel already surfaces via Empty(...))
-    // previously left computeBody's rejection unhandled -- the panel body
-    // froze on its last-rendered content with no visible recovery. Surface
-    // it as a real error panel (message + stack, one-click back to Dashboard)
-    // instead of a silent blank/frozen app.
+    // A thrown exception inside a panel's own render logic -- as opposed to a
+    // failed api() fetch, which each panel already surfaces itself -- previously
+    // left this rejection unhandled and the panel body froze on its
+    // last-rendered content with no visible recovery.
     const message = err && err.message ? err.message : String(err);
     ui.bodyNode = h('div', { class: 'ds-panel' },
       Alert({
@@ -487,7 +470,7 @@ async function renderBody(force) {
   applyAutoscroll();
 }
 
-async function computeBody(force) {
+async function computeBody(isPanelSwitchOrExplicitRefresh) {
   const p = ui.panel;
   const setBody = (f) => renderBody(f);
   if (p !== 'memory-graph') stopMemoryGraphLayout();
@@ -496,14 +479,17 @@ async function computeBody(force) {
   if (p === 'days') return ByDay();
   if (p === 'live') return LiveStream({ connState: ui.connState }, setBody);
   if (p === 'events') return AllEvents(setBody);
-  if (p.startsWith('sub-')) return SubsystemPanel(p.slice(4), setBody);
+  if (p.startsWith(SUBSYSTEM_PANEL_PREFIX)) return SubsystemPanel(p.slice(SUBSYSTEM_PANEL_PREFIX.length), setBody);
   if (p === 'deviations') return Deviations(setBody);
   if (p === 'sessions') return Sessions((sess) => { ui.treeSess = sess; ui.panel = 'tree'; syncHash(); renderBody(true).then(focusMain); }, setBody);
   if (p === 'tree') {
-    if (!ui.sessListCache.length || force) { const r = await api('/api/sessions?limit=200'); ui.sessListCache = r.rows || []; }
-    return ProcessTree(ui.treeSess, ui.sessListCache, (sess) => { ui.treeSess = sess; syncHash(); renderBody(); },
-      null,
-      () => renderBody(true)); // refresh: force=true re-fetches sessListCache + process-tree via this same computeBody path
+    if (!ui.sessListCache.length || isPanelSwitchOrExplicitRefresh) {
+      const r = await api('/api/sessions?limit=200');
+      ui.sessListCache = r.rows || [];
+    }
+    const onSelectSession = (sess) => { ui.treeSess = sess; syncHash(); renderBody(); };
+    const onRefresh = () => renderBody(true);
+    return ProcessTree(ui.treeSess, ui.sessListCache, onSelectSession, null, onRefresh);
   }
   if (p === 'prd') return PrdEditor(setBody);
   if (p === 'mutables') return MutablesEditor(setBody);
@@ -513,23 +499,21 @@ async function computeBody(force) {
   if (p === 'browser-sessions') return BrowserSessions();
   if (p === 'codeinsight') return CodeInsightPanel(setBody);
   if (p === 'memory-graph') return MemoryGraphPanel();
-  // Unknown panel id (removed panel, stale bookmark/deep link) -- degrade to the
-  // default landing panel rather than a dead end. PANEL_ALIASES already redirects
-  // the ids this rework retired; this catches anything else.
-  ui.panel = 'agents';
+  // Any panel id REMOVED_PANEL_REDIRECTS does not name (a stale bookmark, a
+  // hand-edited hash) degrades to the default landing panel, never a dead end.
+  ui.panel = DEFAULT_PANEL;
   syncHash();
   return LiveAgents({ connState: ui.connState, onNav: go }, setBody);
 }
 
-// Keyboard-only nav: webjsx reuses the sidebar <a> DOM node across the
-// re-diff (same key/position), so without this the browser keeps native
-// focus parked on the sidebar link the user just activated -- the new
-// panel renders but focus never moves into it, silent for AT users.
-// #app-main already carries tabindex="-1" for the skip-link (shell.js);
-// reuse it as the programmatic landing target on every panel-identity
-// change (nav click, palette nav, browser back/forward), but never on a
-// same-panel refresh (SSE push, poll) -- that would steal focus from
-// whatever the user is doing mid-panel for no navigational reason.
+// webjsx reuses the sidebar <a> DOM node across the re-diff (same key, same
+// position), so without an explicit move the browser keeps native focus parked
+// on the link just activated: the new panel renders but focus never enters it,
+// silently, for AT users. #app-main already carries tabindex="-1" for the
+// skip-link, so it doubles as the landing target.
+//
+// Called only on a panel-IDENTITY change, never on a same-panel refresh -- an
+// SSE push stealing focus mid-panel has no navigational reason to.
 function focusMain() {
   const main = document.getElementById('app-main');
   if (main) main.focus();
@@ -543,8 +527,8 @@ async function go(id) {
   focusMain();
 }
 
-// Single shared poller for both the deviation-count badge and the cross-project health
-// banner -- intentionally not a second setInterval, both piggyback on the same 10s timer.
+// Deliberately one poller for both the deviation badge and the cross-project
+// health banner, not a second setInterval alongside it.
 async function refreshDeviationBadge() {
   const [devR, healthR] = await Promise.all([
     api('/api/deviations?limit=1'),
@@ -555,71 +539,78 @@ async function refreshDeviationBadge() {
   renderShell();
 }
 
-// ---------------------------------------------------------------------------
-// SSE SUBSCRIPTION REGISTRY -- panels declare which frame families they care
-// about instead of app.js carrying a hardcoded if-ladder on ui.panel. A frame
-// that matches no subscription costs nothing; a panel added later subscribes
-// here rather than editing the dispatch path.
-//
-// `wants` returns 'append' (the panel updated its own client-held state, so
-// re-render from that without a refetch) or 'refetch' (the panel's server data
-// genuinely changed) or false.
-// ---------------------------------------------------------------------------
+const DEVIATION_EVENT_PREFIX = 'deviation.';
+const PLUGKIT_SUBSYSTEM = 'plugkit';
+
+const RERENDER_FROM_CLIENT_STATE = 'append';
+const REFETCH_FROM_SERVER = 'refetch';
+const IGNORE_FRAME = false;
+
+function isDeviation(ev) {
+  return typeof ev.event === 'string' && ev.event.startsWith(DEVIATION_EVENT_PREFIX);
+}
+
+const refetchOnNewPlugkitFrame = (ev) => (ev._sub === PLUGKIT_SUBSYSTEM ? REFETCH_FROM_SERVER : IGNORE_FRAME);
+
+// Panels declare which frame families they care about here rather than app.js
+// carrying an if-ladder on ui.panel, so a panel added later subscribes instead
+// of editing the dispatch path. A frame matching no subscription costs nothing.
 const SSE_SUBSCRIPTIONS = [
   {
     panel: 'agents',
     wants: (ev) => {
-      // Incremental append: the frame lands directly in the matching agent's
-      // feed and the panel re-renders from client state -- no live-state
-      // refetch, no lost scroll position.
-      const key = appendLiveEvent(ev, liveState.rows);
-      if (key) return 'append';
-      // A plugkit frame for a project we are NOT tracking yet is a genuinely new
-      // agent, which does require pulling the roster.
-      return ev._sub === 'plugkit' ? 'refetch' : false;
+      // Landing the frame directly in the matching agent's feed means no
+      // live-state refetch and no lost scroll position.
+      const landedInAFeed = appendLiveEvent(ev, liveState.rows);
+      if (landedInAFeed) return RERENDER_FROM_CLIENT_STATE;
+      // A plugkit frame for a project not tracked yet is a genuinely new agent,
+      // which does require pulling the roster.
+      return refetchOnNewPlugkitFrame(ev);
     },
   },
-  { panel: 'live', wants: () => 'append' },
-  { panel: 'overview', wants: (ev) => (ev._sub === 'plugkit' ? 'refetch' : false) },
-  { panel: 'sessions', wants: (ev) => (ev._sub === 'plugkit' ? 'refetch' : false) },
-  { panel: 'deviations', wants: (ev) => (isDeviation(ev) ? 'refetch' : false) },
+  { panel: 'live', wants: () => RERENDER_FROM_CLIENT_STATE },
+  { panel: 'overview', wants: refetchOnNewPlugkitFrame },
+  { panel: 'sessions', wants: refetchOnNewPlugkitFrame },
+  { panel: 'deviations', wants: (ev) => (isDeviation(ev) ? REFETCH_FROM_SERVER : IGNORE_FRAME) },
 ];
 
-function isDeviation(ev) {
-  return typeof ev.event === 'string' && ev.event.startsWith('deviation.');
-}
-
-// Notify-on-state-change: transitions, deviations and gate denials bump a
-// title-bar counter while the tab is hidden, so gmsniff is useful unattended.
-let unseenCount = 0;
+// A title-bar counter while the tab is hidden is what makes gmsniff useful
+// unattended.
+let unseenWhileHiddenCount = 0;
 const BASE_TITLE = document.title;
+
 function noteStateChange(ev) {
   const notable = isDeviation(ev) || ev.event === 'phase.transitioned';
   if (!notable) return;
   if (document.visibilityState === 'hidden') {
-    unseenCount++;
-    document.title = `(${unseenCount}) ${BASE_TITLE}`;
+    unseenWhileHiddenCount++;
+    document.title = `(${unseenWhileHiddenCount}) ${BASE_TITLE}`;
   }
 }
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') { unseenCount = 0; document.title = BASE_TITLE; }
+  if (document.visibilityState === 'visible') { unseenWhileHiddenCount = 0; document.title = BASE_TITLE; }
 });
 
+const RECONNECT_DELAY_INITIAL_MS = 1000;
+const RECONNECT_DELAY_MAX_MS = 15000;
+const DEVIATION_BADGE_POLL_MS = 10000;
+const ELAPSED_TIME_REFRESH_MS = 15000;
+
 let sse = null;
-let reconnectDelay = 1000;
+let reconnectDelay = RECONNECT_DELAY_INITIAL_MS;
 
 function handleFrame(ev) {
   pushLiveEntry(ev);
   noteStateChange(ev);
   if (isDeviation(ev)) refreshDeviationBadge();
-  let mode = false;
+  let mode = IGNORE_FRAME;
   for (const sub of SSE_SUBSCRIPTIONS) {
     if (sub.panel !== ui.panel) continue;
     const want = sub.wants(ev);
-    if (want === 'refetch') { mode = 'refetch'; break; }
-    if (want === 'append') mode = mode || 'append';
+    if (want === REFETCH_FROM_SERVER) { mode = REFETCH_FROM_SERVER; break; }
+    if (want === RERENDER_FROM_CLIENT_STATE) mode = mode || RERENDER_FROM_CLIENT_STATE;
   }
-  if (mode) scheduleRender({ refetch: mode === 'refetch' });
+  if (mode) scheduleRender({ refetch: mode === REFETCH_FROM_SERVER });
 }
 
 function connectSSE() {
@@ -630,7 +621,7 @@ function connectSSE() {
 
   sse.addEventListener('hello', () => {
     ui.connState = 'live';
-    reconnectDelay = 1000;
+    reconnectDelay = RECONNECT_DELAY_INITIAL_MS;
     ui.streamNote = ui.missedFrames ? `resumed -- ${ui.missedFrames} frame(s) may have been missed while disconnected` : null;
     renderShell();
     if (ui.panel === 'live' || ui.panel === 'agents') scheduleRender({ refetch: true });
@@ -641,12 +632,12 @@ function connectSSE() {
     try { handleFrame(JSON.parse(e.data)); } catch (_) {}
   });
 
-  // Previously ignored entirely: a watcher dying or a new agent starting
-  // produced NO UI reaction at all. Each now updates the roster and says so.
+  // A server-sent `error` FRAME means a watcher failed, and is distinct from the
+  // transport-level sse.onerror below, which fires with no data at all. Both
+  // were previously ignored entirely: a watcher dying produced no UI reaction.
   sse.addEventListener('error', (e) => {
-    // A server-sent `error` FRAME (a watcher failed) -- distinct from the
-    // transport-level onerror below, which fires with no data.
-    if (!e || !e.data) return;
+    const isTransportErrorNotAWatcherFrame = !e || !e.data;
+    if (isTransportErrorNotAWatcherFrame) return;
     try {
       const payload = JSON.parse(e.data);
       toast(`Watcher error${payload.cwd ? ' in ' + basename(payload.cwd) : ''}: ${payload.error || payload.message || 'unknown'}`, true);
@@ -667,9 +658,8 @@ function connectSSE() {
     let cwd = null;
     try { cwd = JSON.parse(e.data).cwd; } catch (_) {}
     toast(`Agent stopped${cwd ? ': ' + basename(cwd) : ''}`);
-    // A project can vanish mid-watch (a removed worktree). Drop it from the
-    // roster so the open drilldown degrades to its "no longer present" state
-    // instead of rendering a row backed by nothing.
+    // Dropping it from the roster is what makes an open drilldown degrade to its
+    // "no longer present" state rather than render a row backed by nothing.
     if (cwd) liveState.rows = liveState.rows.filter(r => r.cwd !== cwd);
     loadProjects();
     scheduleRender({ refetch: true });
@@ -679,17 +669,15 @@ function connectSSE() {
     if (ui.panel === 'agents' || ui.panel === 'overview') scheduleRender({ refetch: true });
   });
 
-  // The incremental output frame: pre-normalized nodes for one agent, appended
-  // straight into its feed. Without this listener the server emits the frame and
-  // nothing receives it, so the panel falls back to refetching the whole
-  // live-state payload on every raw event -- the exact cost this frame exists to
-  // avoid.
+  // Without this listener the server emits the frame and nothing receives it, so
+  // the panel falls back to refetching the whole live-state payload on every raw
+  // event -- the exact cost this frame exists to avoid.
   sse.addEventListener('agent.output', (e) => {
     if (e.lastEventId) ui.lastEventId = e.lastEventId;
     let batch = null;
     try { batch = JSON.parse(e.data); } catch (_) { return; }
-    const key = appendOutputBatch(batch, liveState.rows);
-    if (key && ui.panel === 'agents') scheduleRender({ refetch: false });
+    const landedInAFeed = appendOutputBatch(batch, liveState.rows);
+    if (landedInAFeed && ui.panel === 'agents') scheduleRender({ refetch: false });
   });
 
   sse.onerror = () => {
@@ -698,36 +686,23 @@ function connectSSE() {
     ui.streamNote = 'live stream disconnected -- reconnecting, events during the gap will be replayed';
     renderShell();
     try { sse.close(); } catch (_) {}
-    setTimeout(connectSSE, Math.min(reconnectDelay, 15000));
-    reconnectDelay = Math.min(reconnectDelay * 2, 15000);
+    setTimeout(connectSSE, Math.min(reconnectDelay, RECONNECT_DELAY_MAX_MS));
+    reconnectDelay = Math.min(reconnectDelay * 2, RECONNECT_DELAY_MAX_MS);
   };
 }
 
 async function boot() {
   applyHashState(parseHash(location.hash));
   expandAdvancedFor(ui.panel);
-  // Capabilities before the first paint: the verb allowlist and subsystem
-  // universe are server-published, and painting a hardcoded copy of either
-  // first is exactly the drift this replaces.
-  // Canonicalize the hash immediately (covers both a bare load with no hash,
-  // where this establishes #panel=agents, and a hash naming an unknown
-  // panel, where applyHashState already fell back to the default and this
-  // writes that corrected value back) -- replaceState so boot never adds an
-  // extra history entry a single Back press would need to skip past.
+  // Canonicalizing the hash covers a bare load with no hash (establishing
+  // #panel=agents) and a hash naming an unknown panel (writing back the default
+  // applyHashState already fell to). replaceState, not pushState, so boot never
+  // leaves an extra entry a single Back press would have to skip past.
   history.replaceState(null, '', hashForState());
 
-  // BOOT MUST PAINT BEFORE IT FETCHES. Measured in real Chrome against this
-  // machine's 678 discovered projects: /api/capabilities 3.7s, live-state 10.9s,
-  // /api/projects 17.0s. Awaiting them in series before the first paint left the
-  // panel reading a bare "Loading..." for ~30s with no affordance -- the exact
-  // "empty vs loading vs broken must never render identically" failure this
-  // rework exists to remove, and the single worst first-contact defect in the UI.
-  //
-  // Order is now: shell -> panel (with its own honest loading state) -> the slow
-  // roster/capability loads in parallel, each re-rendering when it lands.
-  // Exposed BEFORE the awaits, not after: this is the debug/inspection surface,
-  // and hanging it off the end of boot meant it was undefined for exactly the
-  // ~30s window in which someone would want to inspect a slow boot.
+  // Exposed BEFORE the awaits below, never after: this is the debug surface, and
+  // hanging it off the end of boot left it undefined for exactly the slow-boot
+  // window in which someone would want to inspect a slow boot.
   window.gmsniff = {
     state, ui, go, renderBody, renderShell, openPalette, closePalette, buildCommandRegistry,
     parseHash, hashForState, syncHash, liveStreamDebugSnapshot, isAdvancedPanel,
@@ -735,30 +710,37 @@ async function boot() {
     liveState, agentKey, openDrilldown, closeDrilldown, scheduleRender,
   };
 
+  // BOOT PAINTS BEFORE IT FETCHES. Measured in real Chrome against this
+  // machine's 678 discovered projects: /api/capabilities 3.7s, live-state 10.9s,
+  // /api/projects 17.0s. Awaiting those in series ahead of the first paint left
+  // the panel reading a bare "Loading..." for ~30s with no affordance -- the
+  // single worst first-contact defect in this UI. Shell first, then the panel
+  // with its own honest loading state, then the slow loads in parallel.
   renderShell();
   const panelPaint = renderBody(true);
 
-  // Capabilities and the project roster are both refinements, not preconditions:
-  // the verb allowlist has a seed fallback and pendingLabel() degrades to an
-  // event count, so neither blocks first paint. They run concurrently and each
-  // repaints on arrival rather than gating the other.
-  const caps = loadCapabilities().then(() => renderShell());
-  const projects = loadProjects().then(() => { renderShell(); scheduleRender({ refetch: false }); });
+  // Refinements, not preconditions: the verb allowlist has a seed fallback and
+  // pendingLabel() degrades to an event count, so neither of these blocks first
+  // paint and neither gates the other.
+  const capabilitiesLoad = loadCapabilities().then(() => renderShell());
+  const projectRosterLoad = loadProjects().then(() => { renderShell(); scheduleRender({ refetch: false }); });
 
   await panelPaint;
   refreshDeviationBadge();
-  setInterval(refreshDeviationBadge, 10000);
-  // Elapsed times ("in EXECUTE for 4m", "last output 30s ago") are derived from
-  // wall-clock, so they go stale on a silent stream. A slow tick re-renders the
-  // lead view from already-held state -- no fetch, no flicker.
-  setInterval(() => { if (ui.panel === 'agents' && !liveState.open) scheduleRender({ refetch: false }); }, 15000);
+  setInterval(refreshDeviationBadge, DEVIATION_BADGE_POLL_MS);
+  // Elapsed times ("in EXECUTE for 4m") are derived from wall-clock, so they go
+  // stale on a silent stream. This tick re-renders the lead view from
+  // already-held state: no fetch, no flicker.
+  setInterval(() => {
+    if (ui.panel === 'agents' && !liveState.open) scheduleRender({ refetch: false });
+  }, ELAPSED_TIME_REFRESH_MS);
   connectSSE();
-  // Gates and driving prompts used to need a side-channel route. The live-state
-  // payload now carries `gates` and `last_prompt` on every row directly (measured
-  // against the real route), so this is a no-op fallback for an older server and
-  // is deliberately NOT awaited or relied upon.
+  // live-state now carries `gates` and `last_prompt` on every row directly
+  // (measured against the real route), so this is a no-op kept only as the
+  // fallback for an older server, and is deliberately neither awaited nor
+  // relied upon.
   loadAgentContext(liveState.rows.map(r => r.cwd), () => scheduleRender({ refetch: false }));
-  await Promise.allSettled([caps, projects]);
+  await Promise.allSettled([capabilitiesLoad, projectRosterLoad]);
 }
 
 boot();

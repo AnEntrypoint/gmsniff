@@ -1,32 +1,49 @@
-// Minimal, dependency-free, offline markdown renderer for the served
-// instruction body.
-//
-// The upstream markdown chain was deliberately NOT vendored (it pulls three
-// CDN dependencies) and gmsniff's GUI must stay fully offline-clean, so this
-// renders the small subset gm's instruction prose actually uses -- measured
-// against the real next-step.md bodies on this machine: ATX headings, fenced
-// code, bullet lists, blockquotes, bold/italic/inline-code, and paragraphs.
-//
-// Output is a webjsx vnode tree built node-by-node, never an innerHTML string:
-// instruction text is untrusted file content, and constructing real text nodes
-// means markup inside it can never become live DOM.
+// The upstream markdown chain was deliberately NOT vendored: its upstream form
+// fetches three CDN dependencies and the served gui/ tree must stay
+// offline-clean. What this renders instead is the subset measured against the
+// real next-step.md bodies on this machine -- ATX headings, fenced code, bullet
+// and ordered lists, blockquotes, bold/italic/inline-code, and paragraphs.
 
 import * as webjsx from 'webjsx';
 
 const h = webjsx.createElement;
 
-// Inline pass: **bold**, *italic*/_italic_, `code`. Splits on the first match
-// and recurses so nesting resolves without a regex that can backtrack badly.
-// Every leftover is emitted as a plain string, which webjsx renders as a text
-// node -- so `<script>` in an instruction is text, not an element.
-const INLINE = /(`[^`\n]+`)|(\*\*[^*\n]+\*\*)|(\*[^*\n]+\*)|(_[^_\n]+_)/;
+// Instruction text is untrusted file content, so every leftover run is emitted
+// as a plain JS string and webjsx turns it into a real text node -- `<script>`
+// inside an instruction can therefore never become live DOM. A regex-alternation
+// scan that splits on the FIRST match and recurses on the remainder was chosen
+// over a single whole-line pattern, which backtracks pathologically on the
+// unbalanced `*` and `_` runs that appear in real prose.
+const INLINE_TOKEN = /(`[^`\n]+`)|(\*\*[^*\n]+\*\*)|(\*[^*\n]+\*)|(_[^_\n]+_)/;
 
-function inline(text, keyPrefix) {
+const FENCE_OPEN = /^\s*```(\S*)\s*$/;
+const FENCE_CLOSE = /^\s*```\s*$/;
+const ATX_HEADING = /^(#{1,6})\s+(.*)$/;
+const THEMATIC_BREAK = /^\s*(?:[-*_]\s*){3,}$/;
+const BLOCKQUOTE_MARKER = /^\s*>\s?/;
+const LIST_ITEM = /^\s*([-*+]|\d+\.)\s+(.*)$/;
+
+const MAX_HEADING_LEVEL = 6;
+// The dialog hosting an instruction owns the <h1> in its own subtree, and
+// instruction bodies themselves start at h1, so every heading shifts down one
+// level rather than outranking the dialog's title.
+const HEADING_LEVEL_SHIFT_BELOW_DIALOG_TITLE = 1;
+
+// Deliberately looser than the block openers above: a paragraph must stop at
+// anything that even LOOKS like the start of another block, including a fence
+// line with trailing text that FENCE_OPEN itself rejects.
+const ANY_BLOCK_OPENER = [/^\s*```/, ATX_HEADING, /^\s*>/, LIST_ITEM];
+
+function startsAnotherBlock(line) {
+  return ANY_BLOCK_OPENER.some(re => re.test(line));
+}
+
+function inlineNodes(text, keyPrefix) {
   const out = [];
   let rest = String(text);
   let i = 0;
   while (rest) {
-    const m = INLINE.exec(rest);
+    const m = INLINE_TOKEN.exec(rest);
     if (!m) { out.push(rest); break; }
     if (m.index > 0) out.push(rest.slice(0, m.index));
     const tok = m[0];
@@ -48,51 +65,51 @@ export function renderMarkdown(src) {
   while (i < lines.length) {
     const line = lines[i];
 
-    // Fenced code -- content is emitted verbatim as one text node, never
-    // re-parsed for inline markup.
-    const fence = /^\s*```(\S*)\s*$/.exec(line);
+    const fence = FENCE_OPEN.exec(line);
     if (fence) {
       const lang = fence[1] || null;
-      const body = [];
+      const verbatimBody = [];
       i++;
-      while (i < lines.length && !/^\s*```\s*$/.test(lines[i])) { body.push(lines[i]); i++; }
-      i++; // closing fence (or EOF -- an unterminated fence still renders)
-      blocks.push(h('pre', { key: 'b' + key++, class: 'gm-md-code', 'data-lang': lang }, h('code', {}, body.join('\n'))));
+      while (i < lines.length && !FENCE_CLOSE.test(lines[i])) { verbatimBody.push(lines[i]); i++; }
+      i++;
+      blocks.push(h('pre', { key: 'b' + key++, class: 'gm-md-code', 'data-lang': lang },
+        h('code', {}, verbatimBody.join('\n'))));
       continue;
     }
 
-    const heading = /^(#{1,6})\s+(.*)$/.exec(line);
+    const heading = ATX_HEADING.exec(line);
     if (heading) {
-      const level = Math.min(6, heading[1].length);
-      // Instruction bodies start at h1; rendering that as a real <h1> inside a
-      // dialog would outrank the dialog's own title, so shift down one level.
-      const tag = 'h' + Math.min(6, level + 1);
-      blocks.push(h(tag, { key: 'b' + key++, class: 'gm-md-h' }, ...inline(heading[2], 'h' + key)));
+      const level = Math.min(MAX_HEADING_LEVEL, heading[1].length);
+      const tag = 'h' + Math.min(MAX_HEADING_LEVEL, level + HEADING_LEVEL_SHIFT_BELOW_DIALOG_TITLE);
+      blocks.push(h(tag, { key: 'b' + key++, class: 'gm-md-h' }, ...inlineNodes(heading[2], 'h' + key)));
       i++;
       continue;
     }
 
-    if (/^\s*(?:[-*_]\s*){3,}$/.test(line)) {
+    if (THEMATIC_BREAK.test(line)) {
       blocks.push(h('hr', { key: 'b' + key++, class: 'gm-md-hr' }));
       i++;
       continue;
     }
 
-    if (/^\s*>\s?/.test(line)) {
-      const body = [];
-      while (i < lines.length && /^\s*>\s?/.test(lines[i])) { body.push(lines[i].replace(/^\s*>\s?/, '')); i++; }
-      blocks.push(h('blockquote', { key: 'b' + key++, class: 'gm-md-quote' }, ...inline(body.join(' '), 'q' + key)));
+    if (BLOCKQUOTE_MARKER.test(line)) {
+      const quoted = [];
+      while (i < lines.length && BLOCKQUOTE_MARKER.test(lines[i])) {
+        quoted.push(lines[i].replace(BLOCKQUOTE_MARKER, ''));
+        i++;
+      }
+      blocks.push(h('blockquote', { key: 'b' + key++, class: 'gm-md-quote' }, ...inlineNodes(quoted.join(' '), 'q' + key)));
       continue;
     }
 
-    const bullet = /^\s*([-*+]|\d+\.)\s+(.*)$/.exec(line);
+    const bullet = LIST_ITEM.exec(line);
     if (bullet) {
       const ordered = /\d/.test(bullet[1]);
       const items = [];
       while (i < lines.length) {
-        const m = /^\s*([-*+]|\d+\.)\s+(.*)$/.exec(lines[i]);
+        const m = LIST_ITEM.exec(lines[i]);
         if (!m) break;
-        items.push(h('li', { key: 'li' + items.length }, ...inline(m[2], 'l' + key + items.length)));
+        items.push(h('li', { key: 'li' + items.length }, ...inlineNodes(m[2], 'l' + key + items.length)));
         i++;
       }
       blocks.push(h(ordered ? 'ol' : 'ul', { key: 'b' + key++, class: 'gm-md-list' }, ...items));
@@ -101,14 +118,11 @@ export function renderMarkdown(src) {
 
     if (!line.trim()) { i++; continue; }
 
-    // Paragraph: consume until a blank line or the start of another block.
-    const para = [];
-    while (i < lines.length && lines[i].trim()
-           && !/^\s*```/.test(lines[i]) && !/^#{1,6}\s/.test(lines[i])
-           && !/^\s*>/.test(lines[i]) && !/^\s*([-*+]|\d+\.)\s+/.test(lines[i])) {
-      para.push(lines[i]); i++;
+    const paragraph = [];
+    while (i < lines.length && lines[i].trim() && !startsAnotherBlock(lines[i])) {
+      paragraph.push(lines[i]); i++;
     }
-    if (para.length) blocks.push(h('p', { key: 'b' + key++, class: 'gm-md-p' }, ...inline(para.join(' '), 'p' + key)));
+    if (paragraph.length) blocks.push(h('p', { key: 'b' + key++, class: 'gm-md-p' }, ...inlineNodes(paragraph.join(' '), 'p' + key)));
   }
 
   if (!blocks.length) return h('p', { class: 'gm-md-p gm-feed-muted' }, '(empty instruction body)');

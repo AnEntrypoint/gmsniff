@@ -1,36 +1,20 @@
-// Cross-panel helpers that were previously computed four different ways in
-// panels.js/app.js, plus the live-manager's derived vocabulary (liveness,
-// attention, phase universe). Everything here is derived from what the server
-// really publishes -- measured against live gm-log data, never assumed.
-
 import { api } from './data.js';
 
-// ---------------------------------------------------------------------------
-// BASENAME -- was computed four separate ways (two regex variants in panels.js,
-// one in app.js's HealthBanner path, one inline in Dashboard). One helper now.
-// ---------------------------------------------------------------------------
 export function basename(cwd) {
   if (!cwd) return '(unknown)';
   return String(cwd).replace(/[\\/]+$/, '').split(/[\\/]/).filter(Boolean).pop() || String(cwd);
 }
 
-// ---------------------------------------------------------------------------
-// SERVER-PUBLISHED VOCABULARY -- /api/capabilities is authoritative for the
-// verb allowlist and the subsystem universe. Both were hardcoded client-side
-// (27 verbs in panels.js, a 4-entry SUB_LIST seed); both drift. The seeds stay
-// only as the pre-fetch fallback so the first paint is never empty.
-// ---------------------------------------------------------------------------
-const SEED_VERBS = ['instruction', 'transition', 'residual-scan', 'phase-status'];
-const SEED_SUBS = ['plugkit', 'hook', 'bootstrap', 'memory'];
+// /api/capabilities is authoritative for both lists; these literals exist only
+// so the first paint before that fetch lands is never an empty list.
+const SEED_VERBS_UNTIL_CAPABILITIES_LAND = ['instruction', 'transition', 'residual-scan', 'phase-status'];
+const SEED_SUBS_UNTIL_CAPABILITIES_LAND = ['plugkit', 'hook', 'bootstrap', 'memory'];
 
 const caps = { verbs: null, subs: null, loaded: false };
 
-export function verbAllowlist() { return caps.verbs || SEED_VERBS; }
-export function subsystemList() { return caps.subs || SEED_SUBS; }
-export function capabilitiesLoaded() { return caps.loaded; }
+export function verbAllowlist() { return caps.verbs || SEED_VERBS_UNTIL_CAPABILITIES_LAND; }
+export function subsystemList() { return caps.subs || SEED_SUBS_UNTIL_CAPABILITIES_LAND; }
 
-// Fetched once at boot, before the first panel renders, so no panel ever paints
-// a hardcoded list when the real one is a fetch away.
 export async function loadCapabilities() {
   const r = await api('/api/capabilities');
   if (r && !r.error) {
@@ -41,21 +25,18 @@ export async function loadCapabilities() {
   return caps;
 }
 
-// Runtime growth: a subsystem tag observed in real data that capabilities did
-// not list still becomes selectable, rather than being silently unfilterable.
+// A subsystem tag seen in real data that capabilities did not list still becomes
+// selectable, rather than being silently unfilterable.
 export function mergeObservedSubsystems(observed) {
   if (!Array.isArray(observed) || !observed.length) return subsystemList();
-  caps.subs = [...new Set([...(caps.subs || SEED_SUBS), ...observed])];
+  caps.subs = [...new Set([...(caps.subs || SEED_SUBS_UNTIL_CAPABILITIES_LAND), ...observed])];
   return caps.subs;
 }
 
-// ---------------------------------------------------------------------------
-// PHASE UNIVERSE -- .gm/instructions/fsm/graph.json can redefine the states
-// wholesale, and one is live on this machine today, so a hardcoded six-phase
-// walk is already wrong for a real project. Take the list from whatever the row
-// carries; the literal is only the last-resort fallback for a row that carries
-// nothing at all.
-// ---------------------------------------------------------------------------
+// A project's .gm/instructions/fsm/graph.json can redefine the states wholesale,
+// and one is live on this machine today -- so a hardcoded six-phase walk is
+// already wrong for a real project and this literal is only the last resort for
+// a row that carries no phase list of its own.
 export const PHASE_FALLBACK = ['PLAN', 'EXECUTE', 'EMIT', 'VERIFY', 'CONSOLIDATE', 'COMPLETE'];
 
 export function phaseUniverse(row) {
@@ -64,59 +45,44 @@ export function phaseUniverse(row) {
   if (Array.isArray(row.fsm_states) && row.fsm_states.length) {
     return row.fsm_states.map(s => (typeof s === 'string' ? s : s.key)).filter(Boolean);
   }
-  // A row whose current phase is outside the fallback proves the fallback wrong
-  // for this project -- append rather than render the phase as nonexistent.
-  if (row.phase && !PHASE_FALLBACK.includes(row.phase)) return [...PHASE_FALLBACK, row.phase];
+  const currentPhaseProvesFallbackIncomplete = row.phase && !PHASE_FALLBACK.includes(row.phase);
+  if (currentPhaseProvesFallbackIncomplete) return [...PHASE_FALLBACK, row.phase];
   return PHASE_FALLBACK;
 }
 
-// ---------------------------------------------------------------------------
-// LIVENESS -- the shared daemon pid reports every project identically, so
-// `alive` alone cannot separate "dispatching right now" from "abandoned two
-// days ago". Age since the last dispatch is what actually separates them.
-// Measured live: gmsniff 0s / spoint 0s (active), casey 8_016s (idle ~2h),
-// gm 173_718s (abandoned ~2d) -- three genuinely different states the old UI
-// rendered identically.
-// ---------------------------------------------------------------------------
-export const ACTIVE_MAX_MS = 10 * 60 * 1000;   // dispatched within 10 min = working
-export const IDLE_MAX_MS = 6 * 60 * 60 * 1000; // within 6h = idle, likely resumable
+// Measured live: gmsniff 0s / spoint 0s (working), casey 8_016s (idle ~2h),
+// gm 173_718s (abandoned ~2d) -- three genuinely different states the daemon's
+// shared `alive` flag rendered identically.
+export const ACTIVE_MAX_MS = 10 * 60 * 1000;
+export const IDLE_MAX_MS = 6 * 60 * 60 * 1000;
 
-// Clock skew guard: a marker written by another machine (or a corrected clock)
-// can be in the future. Never return a negative age, and never let a caller
-// render "-3m ago".
+// A marker written by another machine, or by a since-corrected clock, can carry
+// a future timestamp; clamping at zero keeps a caller from rendering "-3m ago".
 export function ageMs(ts, now = Date.now()) {
   if (ts == null) return null;
   const t = typeof ts === 'number' ? ts : Date.parse(ts);
   if (!Number.isFinite(t)) return null;
-  const d = now - t;
-  return d < 0 ? 0 : d;
+  const ageSinceTs = now - t;
+  return ageSinceTs < 0 ? 0 : ageSinceTs;
 }
 
-// A discovered DIRECTORY is not the same thing as a live agent. Discovery walks
-// the machine and finds 63 of them; 7 carry no phase at all and 4 have no
-// next-step.md (esp-idf-link, test, ai-data-extraction, codex measured live) --
-// gm state absent or unreadable. Those must render as "not a gm agent", never
-// as an agent in an unknown phase, or breadth itself becomes the noise.
+// Discovery walks the machine and finds 63 directories; 7 carry no phase at all
+// and 4 have no next-step.md (esp-idf-link, test, ai-data-extraction, codex,
+// measured live). Rendering those as agents in an unknown phase would make
+// discovery's own breadth the dominant noise source.
 export function isAgent(row) {
   return !!(row && row.present && row.phase);
 }
 
-// Returns 'active' | 'idle' | 'dead' | 'unknown' | 'none'.
+// The server publishes `activity`, classified from last_activity_age_ms over the
+// real watcher-log tail (measured on this machine: dispatching 3, idle 1,
+// abandoned 138, unknown 536). It is authoritative because the same
+// classification is what the route filters on, so client and server cannot
+// disagree about which agents are working.
 //
-// `alive` is deliberately NOT consulted: the shared daemon pid reports all 63
-// projects identically (19 "alive" including 2-day-idle ones), so it cannot
-// separate working from abandoned. Age since last dispatch can -- measured ages
-// span 143s to 173,718s across the same rows `alive` calls identical.
-//
-// last_dispatch_ts is the precise signal but is not in the payload yet (0 of 63
-// rows carry it today), so updated_ts is the fallback until it lands.
-// The server now classifies this itself and publishes `activity`, computed from
-// last_activity_age_ms over the real watcher-log tail -- measured values on this
-// machine: dispatching 3, idle 1, abandoned 138, unknown 536. That classification
-// is authoritative (it is the same one the route filters on, so client and server
-// cannot disagree about which agents are "working"). `alive` is deliberately NOT
-// consulted: it is the shared-daemon signal and reports unrelated projects
-// identically.
+// The shared-daemon `alive` flag is deliberately NOT consulted: it reported all
+// 63 projects identically (19 "alive", including 2-day-idle ones) while the ages
+// behind those same rows spanned 143s to 173,718s.
 const ACTIVITY_TO_LIVENESS = {
   dispatching: 'active', active: 'active', idle: 'idle',
   abandoned: 'dead', dead: 'dead', unknown: 'unknown',
@@ -127,13 +93,12 @@ export function liveness(row, now = Date.now()) {
   if (row && typeof row.activity === 'string' && ACTIVITY_TO_LIVENESS[row.activity]) {
     return ACTIVITY_TO_LIVENESS[row.activity];
   }
-  // Fallback for an older server: age since the last real event.
-  const age = (typeof row.last_event_ms === 'number' && Number.isFinite(row.last_event_ms))
+  const ageForOlderServerWithoutActivity = (typeof row.last_event_ms === 'number' && Number.isFinite(row.last_event_ms))
     ? Math.max(0, row.last_event_ms)
     : ageMs(row && (row.last_dispatch_ts ?? row.updated_ts), now);
-  if (age == null) return 'unknown';
-  if (age <= ACTIVE_MAX_MS) return 'active';
-  if (age <= IDLE_MAX_MS) return 'idle';
+  if (ageForOlderServerWithoutActivity == null) return 'unknown';
+  if (ageForOlderServerWithoutActivity <= ACTIVE_MAX_MS) return 'active';
+  if (ageForOlderServerWithoutActivity <= IDLE_MAX_MS) return 'idle';
   return 'dead';
 }
 
@@ -142,52 +107,42 @@ export const LIVENESS_LABEL = {
   unknown: 'not observed', none: 'not a gm agent',
 };
 
-// Two ages that answer two different questions and must never be collapsed into
-// one "age" -- the CLI's IN-PHASE and LAST-EVT:
-//   inPhase : since turn-state.json's phase last changed -> "stuck in EXECUTE how long"
-//   lastEvt : since the last real .watcher.log event     -> "is it still emitting anything"
-// An agent can be 44m in-phase but 1m since its last event (working steadily), or
-// 8m in-phase and 3h since its last event (wedged). One number hides that.
-// The server now PRE-COMPUTES all three as durations (`in_phase_ms`,
-// `last_event_ms`, `instruction_served_ms`, measured on the real route), because
-// only it can read turn-state.json's mtime and the watcher-log tail. Those are
-// authoritative when present. The timestamp forms remain as the fallback for an
-// older server, and the live feed's own newest ts wins for lastEvt because it is
-// fresher than the snapshot the list was built from.
 function nonNegative(n) {
   return typeof n === 'number' && Number.isFinite(n) ? Math.max(0, n) : null;
 }
 
+// Two ages that answer two different questions and must never collapse into one
+// "age": an agent can be 44m in-phase but 1m since its last event (working
+// steadily), or 8m in-phase and 3h since its last event (wedged).
+//
+// The server pre-computes all three as durations because only it can read
+// turn-state.json's mtime and the watcher-log tail; the timestamp forms below
+// are the fallback for an older server.
 export function agentAges(row, feedTs, now = Date.now()) {
   const feedAge = ageMs(feedTs, now);
-  const servedMs = nonNegative(row && row.in_phase_ms) == null && row && row.turn_state && row.turn_state.updated_at_ms
+  const turnStateAge = nonNegative(row && row.in_phase_ms) == null && row && row.turn_state && row.turn_state.updated_at_ms
     ? ageMs(row.turn_state.updated_at_ms, now)
     : null;
+  const snapshotEventAge = nonNegative(row && row.last_event_ms) ?? ageMs(row && row.last_event_ts, now);
   return {
-    inPhase: nonNegative(row && row.in_phase_ms)
-      ?? servedMs
+    sinceEnteringPhase: nonNegative(row && row.in_phase_ms)
+      ?? turnStateAge
       ?? ageMs(row && (row.phase_changed_ts ?? row.updated_ts), now),
-    // Prefer whichever is FRESHER: a live SSE append can be newer than the
-    // snapshot, and a snapshot can be newer than a feed that never seeded.
-    lastEvt: (() => {
-      const snap = nonNegative(row && row.last_event_ms) ?? ageMs(row && row.last_event_ts, now);
-      if (feedAge == null) return snap;
-      if (snap == null) return feedAge;
-      return Math.min(feedAge, snap);
-    })(),
-    served: nonNegative(row && row.instruction_served_ms)
+    // Whichever is FRESHER wins: a live SSE append can be newer than the
+    // snapshot the list was built from, and a snapshot can be newer than a feed
+    // that never seeded.
+    sinceLastEvent: feedAge == null ? snapshotEventAge
+      : snapshotEventAge == null ? feedAge
+        : Math.min(feedAge, snapshotEventAge),
+    sinceInstructionServed: nonNegative(row && row.instruction_served_ms)
       ?? ageMs(row && (row.instruction_served_ts ?? row.updated_ts), now),
   };
 }
 
-// The served prose on disk can lag the actual FSM state: next-step.md still says
-// PLAN while turn-state.json has already moved to EXECUTE (observed live on
-// spoint). That is a real, reportable condition -- show BOTH sources and flag the
-// divergence rather than silently picking one and presenting it as the truth.
-// The server computes and publishes this directly (`phase_divergence`, with both
-// sides as `phase_served` / `phase_authoritative`), so the divergence flag and
-// the two phases it names always come from one comparison rather than the client
-// re-deriving it from fields that may not both be present.
+// The served prose on disk can lag the actual FSM state: next-step.md still said
+// PLAN while turn-state.json had already moved to EXECUTE (observed live on
+// spoint). The server publishes both sides of one comparison so the flag and the
+// two phases it names can never come from separately-derived fields.
 export function phaseDivergence(row) {
   if (!row) return null;
   const served = row.phase_served ?? row.instruction_phase ?? row.next_step_phase ?? null;
@@ -198,12 +153,11 @@ export function phaseDivergence(row) {
   return { served, actual };
 }
 
-// The phase to LEAD with. turn-state.json is the authoritative FSM state and
-// next-step.md's header is instruction provenance that can legitimately lag it
-// (witnessed live: the gmsniff card read "PLAN" from the served prose while
-// turn-state had already moved to EXECUTE). Showing the served phase as the
-// agent's phase states the stale one as fact; the divergence is surfaced
-// separately rather than silently resolved.
+// The phase to LEAD with. turn-state.json is the authoritative FSM state;
+// next-step.md's header is instruction provenance that legitimately lags it
+// (witnessed live: the gmsniff card read PLAN from the served prose while
+// turn-state had already moved to EXECUTE). The lag is surfaced by
+// phaseDivergence rather than silently resolved here.
 export function authoritativePhase(row) {
   if (!row) return null;
   return row.phase_authoritative
@@ -213,56 +167,47 @@ export function authoritativePhase(row) {
     ?? null;
 }
 
-// ---------------------------------------------------------------------------
-// IN-FLIGHT DISPATCH -- a dispatch.start with no matching dispatch.end.
-//
-// Measured against the real log: 45 dispatch.start vs 2721 dispatch.end, and
-// dispatch.start's `ts` is the EMPTY STRING while its correlation key is `task`
-// (with `body_bytes`, not body_size). So starts are logged for only a fraction
-// of dispatches, and a naive unmatched-start scan reports dozens of agents as
-// perpetually "running" forever. Two guards make that structurally impossible:
-// pair strictly on `task`, and age out any start older than ABANDON_MS as
-// abandoned rather than running.
-// ---------------------------------------------------------------------------
+// Measured against the real log: 45 dispatch.start against 2721 dispatch.end,
+// and dispatch.start's `ts` is the EMPTY STRING while its correlation key is
+// `task`. So starts are logged for only a fraction of dispatches, and a naive
+// unmatched-start scan reports dozens of agents as perpetually running forever.
+// Pairing strictly on `task` and ageing a start out past this bound are the two
+// guards that make that structurally impossible.
 export const ABANDON_MS = 5 * 60 * 1000;
 
 export function resolveInflight(rows, now = Date.now()) {
-  const ends = new Set();
+  const completedTasks = new Set();
   for (const r of rows || []) {
-    if (r.kind === 'dispatch' && !r.inflight && r.task != null) ends.add(String(r.task));
+    if (r.kind === 'dispatch' && !r.inflight && r.task != null) completedTasks.add(String(r.task));
   }
-  const open = [];
+  const stillOpen = [];
   for (const r of rows || []) {
     if (r.kind !== 'dispatch' || !r.inflight) continue;
-    if (r.task != null && ends.has(String(r.task))) continue;
-    // A start whose ts the source left blank cannot be aged, so it is reported
-    // as unknown-duration rather than assumed to be running now.
+    if (r.task != null && completedTasks.has(String(r.task))) continue;
+    // A start whose ts the source left blank cannot be aged, so it reports as
+    // unknown-duration rather than as assumed-running-now.
     const age = ageMs(r.ts, now);
-    open.push({ verb: r.verb, task: r.task, ts: r.ts, ageMs: age, abandoned: age != null && age > ABANDON_MS });
+    stillOpen.push({ verb: r.verb, task: r.task, ts: r.ts, ageMs: age, abandoned: age != null && age > ABANDON_MS });
   }
-  return open;
+  return stillOpen;
 }
 
-// The verb to show as "running now": the newest still-open, non-abandoned start.
 export function currentDispatch(rows, now = Date.now()) {
-  const open = resolveInflight(rows, now).filter(o => !o.abandoned);
-  return open.length ? open[open.length - 1] : null;
+  const newestFirstStillRunning = resolveInflight(rows, now).filter(o => !o.abandoned);
+  return newestFirstStillRunning.length ? newestFirstStillRunning[newestFirstStillRunning.length - 1] : null;
 }
 
-// ---------------------------------------------------------------------------
-// VERB DURATION DISTRIBUTION -- dispatch.end carries real `ms`. A median per
-// verb is what makes "this dispatch is running unusually long" a measurement
-// rather than a guess.
-// ---------------------------------------------------------------------------
+// dispatch.end carries a real `ms`, so a per-verb median is what turns "this
+// dispatch is running unusually long" into a measurement rather than a guess.
 export function verbDurations(rows) {
-  const by = new Map();
+  const msByVerb = new Map();
   for (const r of rows || []) {
     if (r.kind !== 'dispatch' || r.ms == null || !r.verb) continue;
-    if (!by.has(r.verb)) by.set(r.verb, []);
-    by.get(r.verb).push(r.ms);
+    if (!msByVerb.has(r.verb)) msByVerb.set(r.verb, []);
+    msByVerb.get(r.verb).push(r.ms);
   }
   const out = [];
-  for (const [verb, list] of by) {
+  for (const [verb, list] of msByVerb) {
     const sorted = [...list].sort((a, b) => a - b);
     out.push({
       verb, count: sorted.length,
@@ -274,90 +219,81 @@ export function verbDurations(rows) {
   return out.sort((a, b) => b.median - a.median);
 }
 
-// ---------------------------------------------------------------------------
-// PRD BURNDOWN -- instruction.served carries prd_pending_count over time.
-// Converging vs accumulating is the real predictor of whether a run will land.
-// ---------------------------------------------------------------------------
+// instruction.served carries prd_pending_count over time, and converging vs
+// accumulating is the real predictor of whether a run will land.
 export function prdBurndown(rows) {
-  const pts = (rows || [])
+  const points = (rows || [])
     .filter(r => r.kind === 'instruction' && r.prd_pending != null && r.ts)
     .map(r => ({ ts: r.ts, pending: r.prd_pending }));
-  if (pts.length < 2) return { points: pts, trend: 'unknown', delta: 0 };
-  const delta = pts[pts.length - 1].pending - pts[0].pending;
-  return { points: pts, trend: delta < 0 ? 'converging' : (delta > 0 ? 'accumulating' : 'flat'), delta };
+  if (points.length < 2) return { points, trend: 'unknown', delta: 0 };
+  const delta = points[points.length - 1].pending - points[0].pending;
+  return { points, trend: delta < 0 ? 'converging' : (delta > 0 ? 'accumulating' : 'flat'), delta };
 }
 
-// ---------------------------------------------------------------------------
-// DEVIATION RATE TREND -- a rising rate WITHIN a run is actionable; a flat
-// lifetime count is not. Compares the newest half of the window to the oldest.
-// ---------------------------------------------------------------------------
+// A rate rising WITHIN a run is actionable where a flat lifetime count is not,
+// so this compares the newest half of the observed window against the oldest.
 export function deviationTrend(rows, now = Date.now()) {
-  const devs = (rows || []).filter(r => r.kind === 'deviation' && r.ts).map(r => Date.parse(r.ts)).filter(Number.isFinite);
-  if (devs.length < 2) return { count: devs.length, trend: 'flat', recent: devs.length };
-  const oldest = Math.min(...devs);
-  const mid = oldest + (now - oldest) / 2;
-  const older = devs.filter(t => t < mid).length;
-  const newer = devs.filter(t => t >= mid).length;
-  return { count: devs.length, recent: newer, trend: newer > older ? 'rising' : (newer < older ? 'falling' : 'flat') };
+  const devTimes = (rows || []).filter(r => r.kind === 'deviation' && r.ts).map(r => Date.parse(r.ts)).filter(Number.isFinite);
+  if (devTimes.length < 2) return { count: devTimes.length, trend: 'flat', recent: devTimes.length };
+  const oldest = Math.min(...devTimes);
+  const windowMidpoint = oldest + (now - oldest) / 2;
+  const inOlderHalf = devTimes.filter(t => t < windowMidpoint).length;
+  const inNewerHalf = devTimes.filter(t => t >= windowMidpoint).length;
+  return {
+    count: devTimes.length, recent: inNewerHalf,
+    trend: inNewerHalf > inOlderHalf ? 'rising' : (inNewerHalf < inOlderHalf ? 'falling' : 'flat'),
+  };
 }
 
-// ---------------------------------------------------------------------------
-// ATTENTION RANKING -- default ordering answers "where do I look first", not
-// "what is alphabetically first". Higher score = needs a human sooner. Every
-// contribution is a real measured signal, and the reasons ride along so the UI
-// can SAY why a row is at the top instead of just placing it there.
-// ---------------------------------------------------------------------------
+// Default ordering answers "where do I look first", not "what is alphabetically
+// first". Higher score = needs a human sooner, and every contribution rides
+// along as a reason so the UI can SAY why a row is at the top rather than only
+// placing it there.
+const SCORE_GATE_BLOCKED = 50;
+const SCORE_PER_ADDITIONAL_BLOCKER = 5;
+const SCORE_DISPATCH_NEVER_COMPLETED = 45;
+const SCORE_UNPARSEABLE_INSTRUCTION = 40;
+const SCORE_DEVIATION_RATE_RISING = 35;
+const SCORE_DISPATCH_RUNNING_SLOW = 30;
+const SCORE_IDLE_MID_CHAIN = 25;
+const SCORE_PRD_BACKLOG_GROWING = 20;
+const SCORE_DISPATCHING_NOW = 10;
+const SCORE_NOT_A_GM_AGENT = -1;
+
 export function attentionScore(agent, now = Date.now()) {
   const reasons = [];
   let score = 0;
   const live = liveness(agent.row, now);
 
-  // A discovered directory with no gm state is not an agent and can never need
-  // attention -- it sorts below everything rather than competing for the top of
-  // a 63-row list.
-  if (live === 'none') return { score: -1, reasons: [], liveness: live };
+  // A discovered directory with no gm state can never need attention, so it
+  // sorts below everything rather than competing for the top of a 63-row list.
+  if (live === 'none') return { score: SCORE_NOT_A_GM_AGENT, reasons: [], liveness: live };
 
   if (agent.gates && agent.gates.blocked) {
-    const n = agent.gates.blockers.length;
-    score += 50 + n * 5;
+    score += SCORE_GATE_BLOCKED + agent.gates.blockers.length * SCORE_PER_ADDITIONAL_BLOCKER;
     reasons.push(`blocked by ${agent.gates.blockers.map(b => b.gate).join(', ')}`);
   }
   if (agent.inflight && agent.inflight.abandoned) {
-    score += 45;
+    score += SCORE_DISPATCH_NEVER_COMPLETED;
     reasons.push(`dispatch ${agent.inflight.verb} never completed`);
   }
   if (agent.devTrend && agent.devTrend.trend === 'rising') {
-    score += 35;
+    score += SCORE_DEVIATION_RATE_RISING;
     reasons.push(`deviation rate rising (${agent.devTrend.recent} recent)`);
   }
   if (agent.slowDispatch) {
-    score += 30;
+    score += SCORE_DISPATCH_RUNNING_SLOW;
     reasons.push(`${agent.inflight.verb} running ${Math.round(agent.slowDispatch)}x its median`);
   }
   if (agent.burndown && agent.burndown.trend === 'accumulating') {
-    score += 20;
+    score += SCORE_PRD_BACKLOG_GROWING;
     reasons.push(`PRD backlog growing (+${agent.burndown.delta})`);
   }
-  // Idle mid-chain is a real stall; idle at COMPLETE is just a finished run.
-  const terminal = agent.row && (agent.row.phase === 'COMPLETE');
-  if (live === 'idle' && !terminal) { score += 25; reasons.push('idle mid-chain'); }
-  if (live === 'active') { score += 10; reasons.push('dispatching now'); }
-  if (agent.row && agent.row.unparseable) { score += 40; reasons.push('next-step.md unparseable'); }
+  const idleAtTerminalPhase = agent.row && agent.row.phase === 'COMPLETE';
+  if (live === 'idle' && !idleAtTerminalPhase) { score += SCORE_IDLE_MID_CHAIN; reasons.push('idle mid-chain'); }
+  if (live === 'active') { score += SCORE_DISPATCHING_NOW; reasons.push('dispatching now'); }
+  if (agent.row && agent.row.unparseable) { score += SCORE_UNPARSEABLE_INSTRUCTION; reasons.push('next-step.md unparseable'); }
 
   return { score, reasons, liveness: live };
 }
 
-// ---------------------------------------------------------------------------
-// LOAD STATE -- the through-line of this rework. A panel must distinguish
-// not-yet-loaded from genuinely-empty from source-is-broken, because rendering
-// all three as a silent zero is the core failure being corrected. Every panel
-// builds one of these instead of a bare Empty().
-// ---------------------------------------------------------------------------
-export function loadState({ loading, error, total, shown, filtered, scoped }) {
-  if (loading) return { kind: 'loading' };
-  if (error) return { kind: 'error', detail: String(error) };
-  if (scoped === false) return { kind: 'unscoped' };
-  if (total === 0) return { kind: 'empty' };
-  if (shown === 0 && filtered) return { kind: 'filtered', total };
-  return { kind: 'ready' };
-}

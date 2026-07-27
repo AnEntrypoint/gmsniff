@@ -1,13 +1,3 @@
-// LIVE AGENTS -- the single lead live view: a manager surface for every gm
-// agent running on this machine. One card per agent, carrying the instruction
-// it is executing right now, the raw prompt driving it, which gate is blocking
-// it, and an append-only output feed fed by the SSE stream rather than a full
-// refetch on every frame.
-//
-// Every field is read defensively against what the server really publishes
-// today (measured, not assumed); fields the data layer has not landed yet
-// render as an honest absence rather than throwing or faking a value.
-
 import * as webjsx from 'webjsx';
 import { Btn, Chip, Pill } from 'ds/components/shell.js';
 import { Dialog } from 'ds/components/editor-primitives.js';
@@ -24,23 +14,19 @@ import { HonestState } from './honest-state.js';
 
 const h = webjsx.createElement;
 
-// ---------------------------------------------------------------------------
-// AGENT IDENTITY -- an agent is (cwd, run-epoch), never cwd alone.
-//
-// `sess` does not exist in live data (0 of 26,836 real records) and
-// turn-state's session_id is null on every actively-running project, so the
-// only real correlation is cwd plus the daemon-boot epoch the log carries as
-// `_run`. Keying on that means an agent that restarts mid-observation becomes a
-// NEW card rather than merging two runs into one apparent session.
-// ---------------------------------------------------------------------------
+// An agent is (cwd, run-epoch), never cwd alone: `sess` does not exist in live
+// data (0 of 26,836 real records) and turn-state's session_id is null on every
+// actively-running project, so cwd plus the daemon-boot epoch the log carries as
+// `_run` is the only real correlation available. Keying on it means an agent
+// that restarts mid-observation becomes a NEW card rather than merging two runs
+// into one apparent session.
 export function agentKey(row) {
   return String(row.cwd || '') + '|' + String(row.run_epoch || row.recent_sess || '');
 }
 
-// The server returns one row per cwd today. If it grows to one row per agent
-// (an `agents: []` array on the project row), fan out here -- everything below
-// already keys on agentKey, so no other change is needed to show two agents in
-// one project as two cards.
+// The server returns one row per cwd today; if it grows an `agents: []` array
+// per project row, this fans it out and nothing else changes, because every
+// surface below already keys on agentKey.
 export function expandAgents(projects) {
   const out = [];
   for (const p of projects || []) {
@@ -53,61 +39,55 @@ export function expandAgents(projects) {
   return out;
 }
 
-// ---------------------------------------------------------------------------
-// OUTPUT FEED -- append-only per agent. Re-fetching the whole live-state on
-// every SSE frame (the old behavior) threw away scroll position and cost a
-// multi-project disk walk per event. The feed is a client-held ring the stream
-// appends to, seeded once and never re-seeded while the agent is live.
-// ---------------------------------------------------------------------------
-const FEED_CAP = 400;
-const feeds = new Map(); // agentKey -> {rows, seeded, seq, dropped}
+// Each agent's output feed is a client-held ring the SSE stream appends to,
+// seeded once and never re-seeded while the agent is live. Re-fetching the whole
+// live-state on every frame (the earlier behavior) threw away the reader's
+// scroll position and cost a multi-project disk walk per event.
+const FEED_NEWEST_ROWS_RETAINED = 400;
+const feedsByAgentKey = new Map();
 
 function feedFor(key) {
-  let f = feeds.get(key);
-  if (!f) { f = { rows: [], seeded: false, seq: 0, dropped: 0 }; feeds.set(key, f); }
+  let f = feedsByAgentKey.get(key);
+  if (!f) { f = { rows: [], seeded: false, seq: 0, dropped: 0 }; feedsByAgentKey.set(key, f); }
   return f;
 }
 
 function pushFeedRow(f, row) {
   f.rows.push({ ...row, _k: f.seq++ });
-  if (f.rows.length > FEED_CAP) { f.rows.shift(); f.dropped++; }
+  if (f.rows.length > FEED_NEWEST_ROWS_RETAINED) { f.rows.shift(); f.dropped++; }
 }
 
 export function seedFeed(row) {
-  const key = agentKey(row);
-  const f = feedFor(key);
+  const f = feedFor(agentKey(row));
   if (f.seeded) return f;
-  const recent = Array.isArray(row.recent_events) ? [...row.recent_events].reverse() : [];
-  for (const n of recent) pushFeedRow(f, n);
+  const oldestFirst = Array.isArray(row.recent_events) ? [...row.recent_events].reverse() : [];
+  for (const n of oldestFirst) pushFeedRow(f, n);
   f.seeded = true;
   return f;
 }
 
-// Backfill: /api/projects/live-state currently returns recent_events for only 1
-// of 63 projects, so most feeds would seed empty and every card would read "no
-// events observed" even for an agent that dispatched seconds ago. /api/events
-// carries the same real events per cwd, so a feed with nothing in it pulls its
-// own history from there. Runs once per agent; when the live-state route starts
-// populating recent_events this simply finds the feed already seeded and
-// becomes a no-op, no client change required.
-const backfilled = new Set();
+// /api/projects/live-state returns recent_events for only 1 of 63 projects, so
+// most feeds seed empty and every card would read "no events observed" even for
+// an agent that dispatched seconds ago. /api/events carries the same real events
+// per cwd. When the live-state route starts populating recent_events this simply
+// finds the feed already seeded and becomes a no-op, no client change needed.
+const backfilledAgentKeys = new Set();
 
 export async function backfillFeed(row, setBody) {
   const key = agentKey(row);
-  if (backfilled.has(key)) return false;
-  backfilled.add(key);
+  if (backfilledAgentKeys.has(key)) return false;
+  backfilledAgentKeys.add(key);
   const f = feedFor(key);
   if (f.rows.length) return false;
-  // q is matched against the raw event text, so a full Windows cwd (with
-  // backslashes) matches nothing -- measured: q=C:\dev\spoint returns 0 rows
-  // while q=spoint returns 1066. Query by basename, then filter to the exact
-  // cwd client-side so a basename shared by two paths cannot cross-contaminate.
+  // `q` is matched against the raw event text, so a full Windows cwd matches
+  // nothing -- measured: q=C:\dev\spoint returned 0 rows while q=spoint returned
+  // 1066. Querying by basename and filtering client-side to the exact cwd keeps
+  // a basename shared by two paths from cross-contaminating the feed.
   const r = await api('/api/events?limit=120&q=' + encodeURIComponent(basename(row.cwd)));
   if (!r || r.error || !Array.isArray(r.rows)) return false;
-  // /api/events is newest-first; the feed is newest-last.
-  const mine = r.rows.filter(e => e.cwd === row.cwd).reverse();
+  const mineOldestFirst = r.rows.filter(e => e.cwd === row.cwd).reverse();
   let added = 0;
-  for (const e of mine) {
+  for (const e of mineOldestFirst) {
     const node = normalizeStreamEvent(e);
     if (node) { pushFeedRow(f, node); added++; }
   }
@@ -115,23 +95,21 @@ export async function backfillFeed(row, setBody) {
   return added > 0;
 }
 
-// Drops feeds for agents the server no longer reports, so a project whose
-// directory vanished mid-watch (9 of 12 registry paths are already gone) frees
-// its buffer instead of leaking one ring per dead project forever.
+// A project whose directory vanished mid-watch (9 of 12 registry paths are
+// already gone) frees its buffer instead of leaking one ring per dead project.
 export function pruneFeeds(liveKeys) {
   const keep = new Set(liveKeys);
-  for (const k of [...feeds.keys()]) if (!keep.has(k)) feeds.delete(k);
+  for (const k of [...feedsByAgentKey.keys()]) if (!keep.has(k)) feedsByAgentKey.delete(k);
 }
 
-// Appends one live SSE event to the matching agent's feed. Returns the agentKey
-// it landed on, or null when the frame belongs to no tracked agent -- the
-// caller uses that to decide whether a re-render is warranted at all.
+// Returns the agentKey the frame landed on, or null when it belongs to no
+// tracked agent -- the caller uses that to decide whether to re-render at all.
 export function appendLiveEvent(ev, rows) {
   if (!ev || !ev.cwd) return null;
   const match = (rows || []).find(r => r.cwd === ev.cwd);
   if (!match) return null;
   const key = agentKey(match);
-  const f = feeds.get(key);
+  const f = feedsByAgentKey.get(key);
   if (!f || !f.seeded) return null;
   const node = normalizeStreamEvent(ev);
   if (!node) return null;
@@ -139,38 +117,37 @@ export function appendLiveEvent(ev, rows) {
   return key;
 }
 
-// Appends a server-sent `agent.output` batch. Its nodes already carry the
-// process-tree shape seedFeed uses, so they are pushed as-is rather than routed
-// through normalizeStreamEvent -- that maps RAW gm-log events, and re-mapping an
-// already-normalized node would drop every field it does not know.
-//
-// The batch is bounded by the feed's own last ts, so a Last-Event-ID replay that
-// re-delivers frames already appended cannot double-append them.
+// A server-sent `agent.output` batch already carries the normalized node shape
+// seedFeed uses, so its nodes are pushed as-is: normalizeStreamEvent maps RAW
+// gm-log events, and re-mapping an already-normalized node would drop every
+// field it does not know. Bounding the batch by the feed's own newest ts is what
+// stops a Last-Event-ID replay from double-appending frames already held.
 export function appendOutputBatch(batch, rows) {
   if (!batch || !batch.cwd || !Array.isArray(batch.nodes) || !batch.nodes.length) return null;
   const match = (rows || []).find(r => r.cwd === batch.cwd);
   if (!match) return null;
   const key = agentKey(match);
-  const f = feeds.get(key);
+  const f = feedsByAgentKey.get(key);
   if (!f || !f.seeded) return null;
-  const seen = lastEventTs(f);
+  const newestAlreadyHeld = lastEventTs(f);
   let added = 0;
   for (const node of batch.nodes) {
     if (!node) continue;
-    if (seen && node.ts && node.ts <= seen) continue;
+    if (newestAlreadyHeld && node.ts && node.ts <= newestAlreadyHeld) continue;
     pushFeedRow(f, node);
     added++;
   }
   return added ? key : null;
 }
 
+const DEVIATION_EVENT_PREFIX = 'deviation.';
+
 // Maps a raw gm-log event onto the same node shape the server's process-tree
 // emits, so a streamed row and a seeded row render through one formatter.
 //
 // Field names are the MEASURED ones: dispatch.start carries `body_bytes` (not
-// body_size) and `task` (its `ts` is the empty string in real data, so `task`
-// is the only usable correlation key). Events with no live-manager meaning
-// return null rather than filling the feed with subsystem noise.
+// body_size), and its `ts` is the empty string in real data, which is why `task`
+// is the only usable correlation key.
 export function normalizeStreamEvent(e) {
   const base = { ts: e.ts || null, phase: e.phase ?? null, run: e._run ?? null };
   switch (e.event) {
@@ -187,9 +164,15 @@ export function normalizeStreamEvent(e) {
     case 'mutable.added': return { ...base, kind: 'mutable-add', id: e.id ?? null };
     case 'mutable.resolved': return { ...base, kind: 'mutable-resolve', id: e.id ?? null };
     default:
-      if (typeof e.event === 'string' && e.event.startsWith('deviation.')) {
-        return { ...base, kind: 'deviation', deviation: e.event.slice(10), detail: e.detail ?? null, source: e.source ?? null };
+      if (typeof e.event === 'string' && e.event.startsWith(DEVIATION_EVENT_PREFIX)) {
+        return {
+          ...base, kind: 'deviation',
+          deviation: e.event.slice(DEVIATION_EVENT_PREFIX.length),
+          detail: e.detail ?? null, source: e.source ?? null,
+        };
       }
+      // An event with no live-manager meaning is dropped rather than filling the
+      // feed with subsystem noise.
       return null;
   }
 }
@@ -215,10 +198,6 @@ export function phasesSeenFrom(f, row) {
   return seen.size ? [...seen] : null;
 }
 
-// ---------------------------------------------------------------------------
-// PANEL STATE -- one object rather than twenty module globals, so the panel is
-// resettable and, later, instantiable more than once.
-// ---------------------------------------------------------------------------
 export const liveState = {
   filter: '',
   errorsOnly: false,
@@ -236,17 +215,8 @@ export const liveState = {
   loaded: false,
 };
 
-export function resetLiveState() {
-  liveState.expanded.clear();
-  liveState.busy.clear();
-  feeds.clear();
-}
-
-// ---------------------------------------------------------------------------
-// PER-AGENT CONTROLS -- each card dispatches against ITS OWN cwd, never the
-// topbar's globally-selected project, so acting on the row in front of you
-// cannot hit a different agent.
-// ---------------------------------------------------------------------------
+// Dispatches against the card's OWN cwd, never the topbar's globally-selected
+// project, so acting on the row in front of you cannot hit a different agent.
 export async function dispatchFor(cwd, verb, setBody) {
   if (!verbAllowlist().includes(verb)) { toast(`Verb "${verb}" is not in the server allowlist`, true); return; }
   liveState.busy.add(cwd);
@@ -258,24 +228,24 @@ export async function dispatchFor(cwd, verb, setBody) {
   return r;
 }
 
-// ---------------------------------------------------------------------------
-// FEED RENDERING
-// ---------------------------------------------------------------------------
 const KIND_TONE = {
   deviation: 'var(--flame, #f85149)', transition: 'var(--purple, #bc8cff)',
   dispatch: 'var(--sky, #79c0ff)', instruction: 'var(--accent, #58a6ff)',
 };
 
-function stripInternal(n) {
+const INTERNAL_FIELD_PREFIX = '_';
+const AT_BOTTOM_SLACK_PX = 24;
+
+function withoutInternalFields(n) {
   const out = {};
-  for (const [k, v] of Object.entries(n)) if (!k.startsWith('_') && v != null) out[k] = v;
+  for (const [k, v] of Object.entries(n)) if (!k.startsWith(INTERNAL_FIELD_PREFIX) && v != null) out[k] = v;
   return out;
 }
 
 function feedRow(n, expanded, onToggle) {
   const isOpen = expanded.has(n._k);
   const tone = KIND_TONE[n.kind] || null;
-  const bits = [
+  const detailChips = [
     n.verb ? h('span', { key: 'v', class: 'gm-pill gm-ml-6' }, n.verb) : null,
     n.ms != null ? h('span', { key: 'd', class: 'gm-feed-dur gm-ml-6' }, fmtDuration(n.ms)) : null,
     n.inflight ? h('span', { key: 'r', class: 'gm-feed-inflight gm-ml-6' }, 'running') : null,
@@ -292,8 +262,8 @@ function feedRow(n, expanded, onToggle) {
     h('div', { key: 'head', class: 'gm-feed-head' },
       h('span', { key: 'ts', class: 'ts gm-mr-8' }, n.ts ? fmtTs(n.ts) : '--:--:--'),
       h('strong', { key: 'k', class: 'gm-feed-kind', style: tone ? `--kind-tone:${tone}` : null }, n.kind),
-      ...bits),
-    isOpen ? h('pre', { key: 'pay', class: 'gm-feed-payload' }, JSON.stringify(stripInternal(n), null, 2)) : null);
+      ...detailChips),
+    isOpen ? h('pre', { key: 'pay', class: 'gm-feed-payload' }, JSON.stringify(withoutInternalFields(n), null, 2)) : null);
 }
 
 function OutputFeed(f, setBody) {
@@ -310,16 +280,16 @@ function OutputFeed(f, setBody) {
   };
   return h('div', {},
     f.dropped
-      ? h('div', { key: 'more', class: 'gm-feed-more' }, `${f.dropped} older event${f.dropped === 1 ? '' : 's'} scrolled out of the buffer (holds newest ${FEED_CAP})`)
+      ? h('div', { key: 'more', class: 'gm-feed-more' }, `${f.dropped} older event${f.dropped === 1 ? '' : 's'} scrolled out of the buffer (holds newest ${FEED_NEWEST_ROWS_RETAINED})`)
       : null,
     h('div', {
       key: 'scroll', class: 'gm-feed-scroll', id: 'gm-feed-scroll',
-      // Autoscroll auto-suspends when the reader scrolls away from the bottom,
-      // so reading history is never yanked back down by an incoming event.
       onscroll: (e) => {
         const el = e.target;
-        const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
-        liveState.autoscroll = atBottom;
+        const readerIsAtBottom = el.scrollHeight - el.scrollTop - el.clientHeight < AT_BOTTOM_SLACK_PX;
+        // Scrolling away from the bottom suspends follow, so reading history is
+        // never yanked back down by an incoming event.
+        liveState.autoscroll = readerIsAtBottom;
       },
     }, ...f.rows.map(n => feedRow(n, liveState.expanded, onToggle))));
 }
@@ -332,19 +302,20 @@ export function applyAutoscroll() {
   if (el) el.scrollTop = el.scrollHeight;
 }
 
-// Gate state now rides on the live-state row itself. Two published shapes are
-// both real and both handled: the light list form (`gates_blocked` plus
-// `gates_failing: [name]`) and the full form (`gates: {blocked, blockers:[{gate,
-// detail}]}`). The side-channel map is kept last as the older-server fallback.
-//
 // A FAILING gate is not the same thing as a BLOCKING one: on this machine every
-// working agent reports gates_failing:["prd-all-closed"] with gates_blocked:false,
-// because an open PRD is the normal condition of an agent mid-run. Rendering
-// those as blockers would put a red "blocked" chip on every healthy agent.
+// working agent reports gates_failing:["prd-all-closed"] with
+// gates_blocked:false, because an open PRD is the normal condition of an agent
+// mid-run. Rendering those as blockers would put a red "blocked" chip on every
+// healthy agent.
+//
+// Both published row shapes are real and both are handled; liveState.gates is
+// the older-server side-channel fallback.
 export function gatesFor(row) {
   if (!row) return null;
-  if (row.gates && typeof row.gates === 'object' && Array.isArray(row.gates.blockers)) return row.gates;
-  if (Array.isArray(row.gates_failing) || typeof row.gates_blocked === 'boolean') {
+  const fullShape = row.gates && typeof row.gates === 'object' && Array.isArray(row.gates.blockers);
+  if (fullShape) return row.gates;
+  const lightListShape = Array.isArray(row.gates_failing) || typeof row.gates_blocked === 'boolean';
+  if (lightListShape) {
     return {
       blocked: !!row.gates_blocked,
       blockers: (row.gates_failing || []).map(g => ({ gate: g, detail: null })),
@@ -354,9 +325,6 @@ export function gatesFor(row) {
   return liveState.gates.get(row.cwd) || null;
 }
 
-// ---------------------------------------------------------------------------
-// GATE BLOCKERS -- which gate denied, and how many times it repeated.
-// ---------------------------------------------------------------------------
 function GateBlockers(gateInfo) {
   if (!gateInfo) return null;
   const blockers = gateInfo.blockers || [];
@@ -368,28 +336,22 @@ function GateBlockers(gateInfo) {
         ? Chip({ tone: 'positive', children: 'no failing gates' })
         : gateInfo.blocked
           ? Chip({ tone: 'danger', children: `blocked by ${blockers.length} gate${blockers.length === 1 ? '' : 's'}` })
-          // Open gates that are not currently denying a transition -- the normal
-          // condition of an agent mid-run, stated as such rather than as a block.
           : Chip({ tone: 'warn', children: `${blockers.length} gate${blockers.length === 1 ? '' : 's'} not yet satisfied (not blocking)` }),
       gateInfo.last_gate_fired
         ? h('span', { class: 'gm-feed-muted gm-ml-6' }, `last fired: ${gateInfo.last_gate_fired.key}${gateInfo.last_gate_fired.ts ? ' ' + fmtAgo(gateInfo.last_gate_fired.ts) : ''}`)
         : null),
     ...blockers.map(b => h('div', { key: b.gate, class: 'gm-gate-row' },
-      // Red only when the gate is actually DENYING a transition. An unsatisfied
-      // gate on a mid-run agent (every working agent here reports
-      // prd-all-closed) is normal and must not read as a failure.
       h('strong', { key: 'g', class: gateInfo.blocked ? 'gm-text-danger' : '' }, b.gate),
       h('span', { key: 'd', class: 'gm-ml-6' }, b.detail || ''),
       repeats[b.gate] ? h('span', { key: 'r', class: 'gm-pill gm-ml-6 gm-text-danger' }, `repeated x${repeats[b.gate]}`) : null)));
 }
 
-// ---------------------------------------------------------------------------
-// PER-AGENT METRICS -- verb durations, PRD burndown, deviation trend. Real
-// derived signal, but secondary to "what is it doing now", so it sits behind a
-// disclosure rather than above the instruction.
-// ---------------------------------------------------------------------------
+const SLOWEST_VERBS_SHOWN = 8;
+
+// Real derived signal, but secondary to "what is it doing now", so it sits
+// behind a disclosure rather than above the instruction.
 function MetricsDisclosure(f) {
-  const durs = verbDurations(f.rows).slice(0, 8);
+  const durs = verbDurations(f.rows).slice(0, SLOWEST_VERBS_SHOWN);
   const burn = prdBurndown(f.rows);
   const dev = deviationTrend(f.rows);
   if (!durs.length && burn.trend === 'unknown' && !dev.count) return null;
@@ -417,10 +379,8 @@ function MetricsDisclosure(f) {
         : null));
 }
 
-// ---------------------------------------------------------------------------
-// PROVENANCE -- instruction tier + vendored settings. Real, but not what an
-// observer opens this panel to learn, so it is demoted below the instruction.
-// ---------------------------------------------------------------------------
+// Instruction tier plus vendored settings: real, but not what an observer opens
+// this panel to learn, so it is demoted below the instruction itself.
 const TIER_LABEL = {
   vendored: 'vendored override', 'source-synced': 'source-synced',
   default: 'compiled default', 'auto-provisioned': 'auto-provisioned (unedited)',
@@ -451,16 +411,10 @@ function ProvenanceDisclosure(p, vendored) {
       : null);
 }
 
-// ---------------------------------------------------------------------------
-// DRILLDOWN -- re-resolved from the LATEST rows on every render (never a
-// captured snapshot), so the one panel you open to watch an agent is the one
-// that updates most.
-// ---------------------------------------------------------------------------
 // The list payload is treated as a SUMMARY shape: nothing in the list view
-// depends on instruction_excerpt being present. The full instruction body is
-// fetched only when a drilldown opens, so the route can drop the ~412KB of
-// duplicated instruction prose from the list response without breaking this
-// client. If the list row does carry the body (as it does today), that is used
+// depends on instruction_excerpt being present, so the route can drop the ~412KB
+// of duplicated instruction prose from the list response without breaking this
+// client. When the list row does carry the body (as it does today), it is used
 // directly and no extra request is made.
 const drilldownAux = { vendored: null, vendoredFor: null, full: null, fullFor: null, fullLoading: false };
 
@@ -481,18 +435,16 @@ export function openDrilldown(row, setBody) {
   if (drilldownAux.fullFor !== row.cwd) {
     drilldownAux.full = null;
     drilldownAux.fullFor = row.cwd;
-    // The dedicated per-cwd drilldown route, NOT a second live-state refetch:
-    // live-state walks every one of the 678 discovered projects (measured 10.9s
-    // in the real browser) to answer a question about exactly one of them.
-    // /api/projects/instruction reads that project's next-step.md and returns the
-    // FULL body, which the list deliberately omits.
+    // The dedicated per-cwd route, NOT a second live-state refetch: live-state
+    // walks every one of the 678 discovered projects (measured 10.9s in the real
+    // browser) to answer a question about exactly one of them.
     if (!row.instruction_excerpt && row.present) {
       drilldownAux.fullLoading = true;
       api('/api/projects/instruction?cwd=' + encodeURIComponent(row.cwd)).then((r) => {
         if (drilldownAux.fullFor !== row.cwd) return;
         drilldownAux.full = r && !r.error && r.instruction_excerpt ? r.instruction_excerpt : null;
-        // The route also carries the untruncated driving prompt (8KB vs the
-        // list's 400-char slice), so the drilldown shows the whole thing.
+        // This route carries the untruncated driving prompt (8KB) where the list
+        // row carries only a 400-char slice.
         if (r && !r.error && typeof r.last_prompt === 'string' && r.last_prompt) {
           liveState.prompts.set(row.cwd, r.last_prompt);
         }
@@ -514,10 +466,13 @@ export function closeDrilldown(setBody) {
   if (setBody) setBody();
 }
 
+const DISPATCH_SLOW_MULTIPLE_OF_MEDIAN = 3;
+
 function AgentDrilldown(setBody) {
   if (!liveState.open) return null;
-  // THE fix for the stale-drilldown defect: resolve by key from the freshest
-  // rows of THIS render, never from an object captured at open time.
+  // Resolved by key from the freshest rows of THIS render, never from an object
+  // captured at open time -- the one panel you open to watch an agent must be
+  // the one that updates most, and a captured snapshot froze it instead.
   const p = liveState.rows.find(r => agentKey(r) === liveState.open);
   if (!p) {
     return Dialog({
@@ -536,19 +491,19 @@ function AgentDrilldown(setBody) {
   const running = currentDispatch(f.rows);
   const abandoned = resolveInflight(f.rows).filter(o => o.abandoned);
   const gateInfo = gatesFor(p);
-  // The drilldown fetch stores the FULL prompt (8KB) in the map; the list row
-  // carries only a 400-char slice, so the map wins when it has been populated.
+  // The drilldown fetch stores the FULL 8KB prompt in the map, so it wins over
+  // the list row's 400-char slice once it has been populated.
   const prompt = liveState.prompts.get(p.cwd) ?? p.last_prompt ?? null;
   const phases = phaseUniverse(p);
-  const seenList = phasesSeenFrom(f, p);
-  const seen = new Set(seenList || []);
+  const phasesVisited = new Set(phasesSeenFrom(f, p) || []);
   const phase = authoritativePhase(p);
-  const idx = phases.indexOf(phase);
+  const currentPhaseIndex = phases.indexOf(phase);
   const live = liveness(p);
   const ages = agentAges(p, lastEventTs(f));
   const divergence = phaseDivergence(p);
   const durs = verbDurations(f.rows);
-  const median = running ? (durs.find(d => d.verb === running.verb) || {}).median : null;
+  const medianMsForRunningVerb = running ? (durs.find(d => d.verb === running.verb) || {}).median : null;
+  const runningSlow = medianMsForRunningVerb && running.ageMs > medianMsForRunningVerb * DISPATCH_SLOW_MULTIPLE_OF_MEDIAN;
 
   const header = h('div', { class: 'gm-agent-head' },
     Pill({ key: 'ph', children: phase || 'no phase' }),
@@ -559,19 +514,15 @@ function AgentDrilldown(setBody) {
       children: LIVENESS_LABEL[live],
     }),
     running
-      ? Chip({ key: 'run', tone: 'warn', children: `running ${running.verb}${running.ageMs != null ? ' for ' + fmtDuration(running.ageMs) : ''}${median && running.ageMs > median * 3 ? ' (slow)' : ''}` })
+      ? Chip({ key: 'run', tone: 'warn', children: `running ${running.verb}${running.ageMs != null ? ' for ' + fmtDuration(running.ageMs) : ''}${runningSlow ? ' (slow)' : ''}` })
       : null,
     abandoned.length
       ? Chip({ key: 'ab', tone: 'danger', children: `${abandoned.length} dispatch${abandoned.length === 1 ? '' : 'es'} never completed` })
       : null,
-    // Two ages, never collapsed: how long stuck in this phase, and how long
-    // since it emitted anything at all.
     h('span', { key: 'age', class: 'gm-feed-muted gm-ml-6' },
-      [ages.inPhase != null ? `in ${phase || '?'} ${fmtDuration(ages.inPhase)}` : null,
-       ages.lastEvt != null ? `last event ${fmtDuration(ages.lastEvt)} ago` : 'no events observed'].filter(Boolean).join(' · ')));
+      [ages.sinceEnteringPhase != null ? `in ${phase || '?'} ${fmtDuration(ages.sinceEnteringPhase)}` : null,
+       ages.sinceLastEvent != null ? `last event ${fmtDuration(ages.sinceLastEvent)} ago` : 'no events observed'].filter(Boolean).join(' · ')));
 
-  // next-step.md (the served prose) can lag turn-state.json (the real FSM
-  // state). Show both and flag it rather than silently picking one.
   const divergenceNote = divergence
     ? HonestState({
         kind: 'stale',
@@ -597,9 +548,8 @@ function AgentDrilldown(setBody) {
     h('div', { key: 'ih', class: 'gm-pane-head' },
       h('h2', { class: 'gm-m-0' }, p.instruction_heading || p.instruction_key || 'Served instruction'),
       p.instruction_key && p.instruction_heading ? h('span', { class: 'gm-pill gm-ml-6' }, p.instruction_key) : null,
-      // Provenance and staleness together, the CLI's "PLAN (served 2h6m ago)".
-      ages.served != null ? h('span', { class: 'gm-feed-muted gm-ml-6' }, `served ${fmtDuration(ages.served)} ago`) : null),
-    h('div', { key: 'pw' }, PhaseStrip(phases, seen, idx)),
+      ages.sinceInstructionServed != null ? h('span', { class: 'gm-feed-muted gm-ml-6' }, `served ${fmtDuration(ages.sinceInstructionServed)} ago`) : null),
+    h('div', { key: 'pw' }, PhaseStrip(phases, phasesVisited, currentPhaseIndex)),
     divergenceNote,
     prompt
       ? h('details', { key: 'pr', class: 'gm-prompt', open: true },
@@ -630,8 +580,7 @@ function AgentDrilldown(setBody) {
 }
 
 // Four genuinely different reasons there might be no instruction on screen, each
-// stated as itself: the file is malformed, this directory is not a gm project at
-// all, the body is still being fetched, or the fetch came back with nothing.
+// stated as itself rather than as one shared blank.
 function instructionBody(p) {
   if (p.unparseable) {
     return HonestState({
@@ -647,14 +596,13 @@ function instructionBody(p) {
       hint: 'Discovery found it, but it has no .gm/next-step.md, so no instruction is being served.',
     });
   }
-  // The list route is a SUMMARY: it sends `instruction_preview` (240 chars) plus
-  // `instruction_length`/`instruction_truncated`, and the full body only via the
-  // drilldown fetch. Rendering the preview as if it were the instruction would
-  // silently truncate a 5.6KB prose body at 240 chars with nothing saying so, so
-  // a preview is LABELLED as one and the full body replaces it when it lands.
-  const full = drilldownAux.full || p.instruction_excerpt || null;
+  // The list route sends `instruction_preview` (240 chars) and the full body
+  // only via the drilldown fetch. Rendering the preview as if it were the
+  // instruction would silently truncate a 5.6KB prose body with nothing saying
+  // so, hence the explicit "Preview" label until the full body lands.
+  const fullBody = drilldownAux.full || p.instruction_excerpt || null;
   const preview = p.instruction_preview || null;
-  const body = full || preview;
+  const body = fullBody || preview;
   if (!body) {
     return drilldownAux.fullLoading
       ? HonestState({ key: 'md', kind: 'loading', text: 'Loading served instruction...' })
@@ -664,58 +612,61 @@ function instructionBody(p) {
           hint: 'next-step.md exists but carries no instruction text below its header.',
         });
   }
-  const partial = !full && p.instruction_truncated;
+  const showingPreviewOnly = !fullBody && p.instruction_truncated;
   return h('div', { key: 'md', class: 'gm-instruction-body' },
-    partial
+    showingPreviewOnly
       ? h('div', { key: 'pv', class: 'gm-feed-muted gm-mb-4' },
           `Preview -- first ${preview.length} of ${p.instruction_length} characters${drilldownAux.fullLoading ? ', loading the full body...' : ''}`)
       : null,
     renderMarkdown(body));
 }
 
-// A phase strip that renders a revisit as a revisit. Uses the visited SET when
-// transition history supplies one, and falls back to index math only for an
-// agent with no recorded transitions at all.
-function PhaseStrip(phases, seen, idx) {
+// gm's re-plan edges (EXECUTE|EMIT|VERIFY -> PLAN) are legal and gate-free, so a
+// session sitting in PLAN for the second time HAS genuinely reached EXECUTE.
+// Index math would erase that and render a legal revisit as a regression, which
+// is why the visited SET wins whenever transition history supplies one; index
+// math survives only as the fallback for an agent with no recorded transitions.
+function PhaseStrip(phases, phasesVisited, currentPhaseIndex) {
   return h('div', { class: 'gm-phase-strip' },
     ...phases.map((ph, i) => {
-      const reached = seen.size ? seen.has(ph) : (idx >= 0 && i <= idx);
-      const current = i === idx;
+      const reached = phasesVisited.size
+        ? phasesVisited.has(ph)
+        : (currentPhaseIndex >= 0 && i <= currentPhaseIndex);
+      const isCurrent = i === currentPhaseIndex;
       return h('span', {
         key: ph,
-        class: 'gm-phase-step' + (reached ? ' is-reached' : '') + (current ? ' is-current' : ''),
+        class: 'gm-phase-step' + (reached ? ' is-reached' : '') + (isCurrent ? ' is-current' : ''),
         title: reached ? `${ph} -- visited` : `${ph} -- not yet reached`,
       }, ph);
     }));
 }
 
-// ---------------------------------------------------------------------------
-// CARD MAPPING -- projects a live-state row onto the ds SessionCard shape and
-// attaches the derived attention signal used for default ordering.
-// ---------------------------------------------------------------------------
+// Projects a live-state row onto the ds SessionCard shape and attaches the
+// derived attention signal used for default ordering.
 function toAgent(p) {
   const f = seedFeed(p);
   const running = currentDispatch(f.rows);
-  const inflightAll = resolveInflight(f.rows);
-  const abandoned = inflightAll.find(o => o.abandoned) || null;
-  const gates = gatesFor(p);
-  const burndown = prdBurndown(f.rows);
-  const devTrend = deviationTrend(f.rows);
+  const abandoned = resolveInflight(f.rows).find(o => o.abandoned) || null;
   const durs = verbDurations(f.rows);
-  const median = running ? (durs.find(d => d.verb === running.verb) || {}).median : null;
-  const slowDispatch = running && median && running.ageMs ? running.ageMs / median : null;
+  const medianMsForRunningVerb = running ? (durs.find(d => d.verb === running.verb) || {}).median : null;
+  const multipleOfMedian = running && medianMsForRunningVerb && running.ageMs
+    ? running.ageMs / medianMsForRunningVerb
+    : null;
   const agent = {
-    row: p, feed: f, gates, burndown, devTrend,
+    row: p,
+    feed: f,
+    gates: gatesFor(p),
+    burndown: prdBurndown(f.rows),
+    devTrend: deviationTrend(f.rows),
     inflight: running || abandoned,
-    slowDispatch: slowDispatch && slowDispatch > 3 ? slowDispatch : null,
+    slowDispatch: multipleOfMedian && multipleOfMedian > DISPATCH_SLOW_MULTIPLE_OF_MEDIAN ? multipleOfMedian : null,
   };
-  const attention = attentionScore(agent, Date.now());
-  agent.attention = attention;
+  agent.attention = attentionScore(agent, Date.now());
   return agent;
 }
 
-// PRD/mutable pressure. live-state does not carry these, but /api/projects
-// (already fetched at boot into state.projects) does for every project.
+// live-state does not carry PRD/mutable pressure, but /api/projects (already
+// fetched at boot into state.projects) does for every project.
 function pendingLabel(p) {
   const proj = (state.projects || []).find(r => r.cwd === p.cwd);
   if (!proj || proj.prd_pending == null) return null;
@@ -728,44 +679,41 @@ function toCard(a) {
   const live = a.attention.liveness;
   const ages = agentAges(p, lastEventTs(f));
   const blocked = a.gates && a.gates.blocked;
-  // 'error' is reserved for something genuinely wrong (blocked gate, abandoned
-  // dispatch, unparseable instruction) -- never for a merely-idle agent.
-  const status = (blocked || p.unparseable || (a.inflight && a.inflight.abandoned)) ? 'error'
-    : (live === 'active' ? 'running' : 'stale');
+  const somethingIsGenuinelyWrong = blocked || p.unparseable || (a.inflight && a.inflight.abandoned);
   return {
     sid: agentKey(p),
     title: basename(p.cwd),
     agent: p.skill || 'gm',
     model: p.instruction_heading || p.instruction_key || null,
     cwd: p.cwd,
-    // turn-state.json is authoritative; next-step.md's header can legitimately
-    // lag it, and showing the lagging one states a stale phase as fact.
     phase: authoritativePhase(p),
     phases: phaseUniverse(p),
     phasesSeen: phasesSeenFrom(f, p),
-    // elapsedMs is IN-PHASE; lastActivity is LAST-EVT. Two different questions,
-    // both on the card, never merged into a single "age".
-    elapsedMs: ages.inPhase,
-    // Pending pressure, the CLI's "prd:441 mut:0" column. state.projects carries
-    // it for every discovered project even when live-state does not.
+    elapsedMs: ages.sinceEnteringPhase,
     counter: pendingLabel(p) || (f.rows.length ? f.rows.length + ' events' : null),
-    // SessionCard renders this as "last <value>" itself (ds sessions.js:261), so
-    // the value must NOT repeat the word -- witnessed in the real DOM as
-    // "last last event 30s ago".
-    lastActivity: ages.lastEvt != null
-      ? `event ${fmtDuration(ages.lastEvt)} ago`
+    // ds SessionCard prefixes this with "last " itself (ds sessions.js:261), so
+    // the value must NOT repeat the word -- witnessed in the real DOM rendering
+    // as "last last event 30s ago" when it did.
+    lastActivity: ages.sinceLastEvent != null
+      ? `event ${fmtDuration(ages.sinceLastEvent)} ago`
       : (live === 'none' ? 'gm state: none' : 'event: none observed'),
     currentTool: a.inflight
       ? (a.inflight.abandoned ? `${a.inflight.verb} never completed` : `${a.inflight.verb}${a.inflight.ageMs != null ? ' ' + fmtDuration(a.inflight.ageMs) : ''}`)
       : (blocked ? 'blocked: ' + a.gates.blockers[0].gate : null),
-    status,
+    // 'error' is reserved for something genuinely wrong, never for a merely-idle
+    // agent -- 'stale' is what an idle or finished agent gets.
+    status: somethingIsGenuinelyWrong ? 'error' : (live === 'active' ? 'running' : 'stale'),
     _agent: a,
   };
 }
 
-// ---------------------------------------------------------------------------
-// PANEL
-// ---------------------------------------------------------------------------
+const WORKING_LIVENESS = ['active', 'idle'];
+const NEEDS_ATTENTION_MIN_SCORE = 30;
+const AGENTS_BACKFILLED_PER_RENDER = 12;
+const ATTENTION_REASONS_SHOWN = 3;
+
+const isWorking = (a) => WORKING_LIVENESS.includes(a.attention.liveness);
+
 export async function LiveAgents({ connState = 'connecting', onNav } = {}, setBody) {
   const r = await api('/api/projects/live-state');
   liveState.loaded = true;
@@ -784,48 +732,42 @@ export async function LiveAgents({ connState = 'connecting', onNav } = {}, setBo
   const agents = rows.map(toAgent);
   pruneFeeds(rows.map(agentKey));
 
-  // Discovery finds 63 directories on this machine; only a handful are actually
-  // working. The idle/abandoned/not-an-agent majority is folded away by default
-  // -- foregrounding the working minority IS what "no noise" means at this
-  // scale, and a cap alone would not do it (a cap hides an arbitrary majority,
-  // this hides a CLASSIFIED one and says exactly how many and why).
+  // Discovery finds 63 directories on this machine and only a handful are
+  // actually working, so the idle/abandoned/not-an-agent majority folds away by
+  // default. A plain cap would not do this job: a cap hides an ARBITRARY
+  // majority, this hides a classified one and says how many and why.
   const q = liveState.filter.trim().toLowerCase();
-  const working = agents.filter(a => ['active', 'idle'].includes(a.attention.liveness));
-  const backlog = agents.filter(a => !['active', 'idle'].includes(a.attention.liveness));
+  const working = agents.filter(isWorking);
+  const foldedAway = agents.filter(a => !isWorking(a));
 
-  let visible;
-  if (q) {
-    // A filter always searches EVERY discovered project, folded or not, so a
-    // search can reach a project the default view hides.
-    visible = agents.filter(a => [a.row.cwd, a.row.phase, a.row.skill, a.row.instruction_key, a.row.instruction_heading]
-      .some(v => String(v || '').toLowerCase().includes(q)));
-  } else {
-    visible = liveState.aliveOnly ? working : agents;
-  }
-  if (liveState.errorsOnly) visible = visible.filter(a => a.attention.score >= 30);
+  // A filter always searches EVERY discovered project, folded or not, so a
+  // search can reach a project the default view hides.
+  let visible = q
+    ? agents.filter(a => [a.row.cwd, a.row.phase, a.row.skill, a.row.instruction_key, a.row.instruction_heading]
+        .some(v => String(v || '').toLowerCase().includes(q)))
+    : (liveState.aliveOnly ? working : agents);
+  if (liveState.errorsOnly) visible = visible.filter(a => a.attention.score >= NEEDS_ATTENTION_MIN_SCORE);
 
-  // Default ordering answers "where do I look first" -- attention score, not
-  // alphabetical and not plain liveness. At 63 rows this ordering, not the cap,
-  // decides what an observer ever actually sees.
+  // At 63 rows this ordering, not any cap, decides what an observer ever
+  // actually sees, so it answers "where do I look first" rather than sorting
+  // alphabetically or by plain liveness.
   visible = [...visible].sort((a, b) => b.attention.score - a.attention.score);
 
   const cards = visible.map(toCard);
-  const notAgents = backlog.filter(a => a.attention.liveness === 'none').length;
-  const finished = backlog.length - notAgents;
+  const notAgents = foldedAway.filter(a => a.attention.liveness === 'none').length;
+  const finished = foldedAway.length - notAgents;
 
   // Only the agents actually on screen pull their own history, so a 63-project
   // machine never issues 63 backfill requests for rows nobody is looking at.
-  for (const a of visible.slice(0, 12)) backfillFeed(a.row, () => setBody());
+  for (const a of visible.slice(0, AGENTS_BACKFILLED_PER_RENDER)) backfillFeed(a.row, () => setBody());
 
-  // Honest states: an empty result distinguishes "nothing discovered" from
-  // "everything filtered out" from "everything is finished".
   const emptyText = agents.length === 0
     ? 'No gm projects discovered on this machine yet.'
     : q ? `No project matches "${liveState.filter}" (searched all ${agents.length}).`
       : liveState.errorsOnly ? 'No agent currently needs attention.'
         : 'No agent is working right now. Turn off "working only" to see finished and idle projects.';
 
-  const topReasons = visible.slice(0, 3).filter(a => a.attention.reasons.length);
+  const topReasons = visible.slice(0, ATTENTION_REASONS_SHOWN).filter(a => a.attention.reasons.length);
 
   return h('div', {},
     h('div', { key: 'tb', class: 'gm-toolbar' },
@@ -833,10 +775,9 @@ export async function LiveAgents({ connState = 'connecting', onNav } = {}, setBo
         checked: liveState.aliveOnly, label: 'working only',
         onChange: (v) => { liveState.aliveOnly = v; setBody(); },
       }),
-      // Every count is labelled with WHAT it counts. Three surfaces on this
-      // machine report three different totals for "projects" (CLI 66,
-      // data layer 174, this route 63), so a bare number is ambiguous -- this
-      // one is explicitly "reported by /api/projects/live-state".
+      // Three surfaces on this machine report three different totals for
+      // "projects" (CLI 66, data layer 174, this route 63), so a bare number is
+      // ambiguous and every count names WHICH source produced it.
       h('span', { class: 'gm-feed-muted' },
         q
           ? `${visible.length} of ${agents.length} match (searched every project live-state reports)`
@@ -878,20 +819,9 @@ export async function LiveAgents({ connState = 'connecting', onNav } = {}, setBo
     AgentDrilldown(setBody));
 }
 
-// ---------------------------------------------------------------------------
-// AGENT CONTEXT -- gates and driving prompts.
-//
-// These once needed a side-channel `/api/agent-context` route that was never
-// implemented; the probe fired a guaranteed 404 on every boot (witnessed in the
-// real browser as `HTTP 404 /api/agent-context?cwd=...` on every page load).
-//
-// The live-state route now carries BOTH inline on every row -- `gates_blocked` /
-// `gates_failing` (read via gatesFor) and `last_prompt` -- and the drilldown
-// pulls the untruncated prompt from /api/projects/instruction. So there is
-// nothing left to side-load, and the dead request is gone rather than retained
-// as a permanently-failing probe.
-//
-// Kept as an explicit no-op because app.js's boot sequence calls it; removing
-// the call site too would be a behavioural change in a file a concurrent agent
-// is also editing.
-export async function loadAgentContext() { /* data now arrives inline on live-state rows */ }
+// Gates and driving prompts once needed a side-channel `/api/agent-context`
+// route that was never implemented, so the probe fired a guaranteed 404 on every
+// boot (witnessed in the real browser as `HTTP 404 /api/agent-context?cwd=...`
+// on every page load). live-state now carries both inline on every row, so this
+// remains only because app.js's boot sequence still calls it.
+export async function loadAgentContext() {}

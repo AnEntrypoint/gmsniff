@@ -6,25 +6,14 @@ import { GmLogWatcher, MultiProjectWatcher, replayAll, DEFAULT_LOG_DIR, correlat
 import { readWatcherStatus, readProjectLiveness, readInstalledVersions, readTurnState, readTurnSummary, VERB_ALLOWLIST, isUsableVerb, isRetiredVerb, isKnownVerb } from './registry.js';
 import { parseLine, readTail, DEFAULT_REPLAY_BYTES } from './watcher-log.js';
 
-// Machine-global gm state, written by the agentplug shared daemon (one process serving every
-// project cwd). daemon-registry.txt is the authoritative newline list of every served cwd --
-// including worktree-hosted projects nested arbitrarily deep (C:\dev\<repo>\.claude\worktrees\
-// wf_*), which a one-level readdir of the dev roots structurally cannot see.
 const GM_TOOLS_DIR = path.join(os.homedir(), '.gm-tools');
 
 const PHASES = ['PLAN', 'EXECUTE', 'EMIT', 'VERIFY', 'CONSOLIDATE', 'COMPLETE'];
 
-// EXIT CODE CONTRACT (single source of truth -- printed by --schema/--describe and --help so
-// an agentic caller never has to infer this from source): 0 = success (including zero-match,
-// empty-result queries -- absence of data is not a failure), 2 = usage error (bad/missing
-// argument, unresolvable session, malformed flag value). No code path exits 0 on a thrown
-// error or genuine failure; uncaught exceptions propagate to Node's default non-zero exit.
 const EXIT_CODES = { 0: 'success (includes zero-match queries)', 2: 'usage error (bad/missing argument, malformed value)' };
 
-// Declarative flag registry -- single source of truth for parseArgs, printHelp, and
-// --schema/--describe. Every flag an agentic caller can pass is described here with its
-// type, default, and one-line meaning; nothing in parseArgs recognizes a flag this registry
-// does not also describe, so help text and machine-schema output cannot drift from behavior.
+// Single source of truth for parseArgs, printHelp and --schema alike: parseArgs recognizes
+// nothing this table does not describe, so help text cannot drift from behavior.
 const FLAG_DEFS = [
   { name: 'help', alias: 'h', type: 'bool', desc: 'print human-readable help and exit 0' },
   { name: 'schema', type: 'bool', desc: 'print machine-readable JSON description of every flag + output shape, then exit 0' },
@@ -85,9 +74,6 @@ const FLAG_DEFS = [
   { name: 'idle', type: 'bool', desc: 'with --agents: include idle/COMPLETE agents too (default: working agents first, idle summarized)' },
 ];
 
-// Alias -> canonical flag name, derived from the same FLAG_DEFS rows (each alias lives on its
-// canonical row, never as a duplicate row of its own). parseArgs rewrites an alias to its
-// canonical name before storing, so every downstream read is single-keyed.
 const FLAG_ALIASES = new Map(FLAG_DEFS.filter(f => f.alias && f.alias.length > 1).map(f => [f.alias, f.name]));
 
 const FLAGS = {
@@ -123,8 +109,6 @@ function schemaObject() {
 
 function printSchema() {
   const text = JSON.stringify(schemaObject(), null, 2) + '\n';
-  // Colorize only on an interactive terminal: piped/machine consumers get
-  // byte-identical output to the pre-sugar contract.
   process.stdout.write(process.stdout.isTTY && !process.env.NO_COLOR ? colorJson(text) : text);
 }
 
@@ -363,15 +347,10 @@ function color(s, code) {
   return `\x1b[${code}m${s}\x1b[0m`;
 }
 
-// ANSI JSON sugar for human-mode output: keys cyan, strings green, numbers
-// yellow, booleans magenta, null dim. Single-pass scan (no regex, no
-// backtracking) gated by the exact same NO_COLOR/TTY rules as color(); every
-// escape it emits is self-terminated, so a payload truncated mid-string can
-// never leak an unclosed color state into the terminal. Raw control bytes in
-// event data are escaped in both color and no-color paths so hostile log
-// content cannot inject terminal sequences. --json/--ndjson output never
-// routes through here.
-const JSON_TOKEN_COLORS = { k: 36, s: 32, n: 33, b: 35, z: 90 };
+// Every escape emitted here is self-terminated, so a payload truncated mid-string cannot leak an
+// unclosed color state into the terminal. Control bytes in event data are escaped on BOTH the
+// color and no-color paths, or hostile log content injects terminal sequences.
+const JSON_TOKEN_COLORS = { key: 36, string: 32, number: 33, bool: 35, nullish: 90 };
 const JSON_NUM_CHARS = '0123456789eE+.-';
 function escapeControlChars(text) {
   let out = '';
@@ -399,7 +378,7 @@ function colorJson(text) {
       let j = i;
       while (j < text.length && (text[j] === ' ' || text[j] === '\t' || text[j] === '\n')) j++;
       flush();
-      paint(text[j] === ':' ? 'k' : 's', text.slice(start, i));
+      paint(text[j] === ':' ? 'key' : 'string', text.slice(start, i));
       continue;
     }
     if (c === '-' || (c >= '0' && c <= '9')) {
@@ -407,12 +386,12 @@ function colorJson(text) {
       i++;
       while (i < text.length && JSON_NUM_CHARS.includes(text[i])) i++;
       flush();
-      paint('n', text.slice(start, i));
+      paint('number', text.slice(start, i));
       continue;
     }
-    if (text.startsWith('true', i)) { flush(); paint('b', 'true'); i += 4; continue; }
-    if (text.startsWith('false', i)) { flush(); paint('b', 'false'); i += 5; continue; }
-    if (text.startsWith('null', i)) { flush(); paint('z', 'null'); i += 4; continue; }
+    if (text.startsWith('true', i)) { flush(); paint('bool', 'true'); i += 4; continue; }
+    if (text.startsWith('false', i)) { flush(); paint('bool', 'false'); i += 5; continue; }
+    if (text.startsWith('null', i)) { flush(); paint('nullish', 'null'); i += 4; continue; }
     plain += c; i++;
   }
   flush();
@@ -424,9 +403,8 @@ function formatRow(e, opts) {
   if (opts.json) {
     return JSON.stringify(e) + '\n';
   }
-  // Envelope fields are interpolated raw into the terminal line -- escape
-  // control bytes here too, or a crafted event ("[..." in ts/sub/event/
-  // sess) injects terminal sequences around the color() calls.
+  // Envelope fields are interpolated raw into the terminal line, so a crafted ESC sequence in
+  // ts/sub/event/sess would inject terminal control around the color() calls.
   const t = escapeControlChars(e.ts ? e.ts.slice(0, 19).replace('T', ' ') : '?'.padEnd(19));
   const sub = escapeControlChars((e._sub || '?').padEnd(16).slice(0, 16));
   const ev = escapeControlChars((e.event || '?').padEnd(28).slice(0, 28));
@@ -435,9 +413,6 @@ function formatRow(e, opts) {
   const cwdTag = !realSess && e.cwd ? '~' + e.cwd.replace(/[\\/]+$/, '').split(/[\\/]/).pop().slice(0, 7) : '';
   const sessShort = escapeControlChars((realSess ? realSess.slice(0, 8) : (cwdTag || '--------')).padEnd(8).slice(0, 8));
   const payload = { ...e };
-  // Underscore-prefixed keys are internal attribution metadata (_sub, _day,
-  // _fp, _src from the watcher.log fallback tailer, ...) -- all stripped from
-  // the human body uniformly; --json mode above keeps every field.
   for (const k of Object.keys(payload)) if (k.startsWith('_')) delete payload[k];
   delete payload.ts; delete payload.event; delete payload.sub; delete payload.pid; delete payload.sess; delete payload.cwd;
   let body = JSON.stringify(payload);
@@ -524,8 +499,6 @@ function collectAllCwds(all) {
   return [...cwds];
 }
 
-// Atomic write: temp file in same dir + rename, so a crash mid-write never leaves a half-written
-// prd.yml/mutables.yml (both are read by the live watcher and other CLI/GUI clients).
 function atomicWriteFileSync(filePath, content) {
   const dir = path.dirname(filePath);
   const tmp = path.join(dir, `.${path.basename(filePath)}.${process.pid}.${Date.now()}.tmp`);
@@ -533,9 +506,8 @@ function atomicWriteFileSync(filePath, content) {
   fs.renameSync(tmp, filePath);
 }
 
-// Splits a `- id: <x>\n  field: val\n...` YAML-ish list (same convention readPrdMutablesState
-// relies on) into { header (before first row), rows: [{id, raw}] } so a single row can be
-// rewritten in place without a full YAML parser dependency.
+// -> { header (everything before the first row), rows: [{id, raw}] }, so one row can be rewritten
+// in place without a YAML parser dependency.
 function splitYamlRows(text) {
   const idx = text.search(/^- id:/m);
   if (idx === -1) return { header: text, rows: [] };
@@ -556,13 +528,12 @@ function yamlScalar(v) {
   return s;
 }
 
-// Rewrites (or appends, if absent) a `  field: value` line within one row's raw text block.
 function setYamlField(raw, field, value) {
-  const re = new RegExp(`^(  ${field}:).*$`, 'm');
+  const existingFieldLine = new RegExp(`^(  ${field}:).*$`, 'm');
   const line = `  ${field}: ${yamlScalar(value)}`;
-  if (re.test(raw)) return raw.replace(re, line);
-  // insert after the `- id:` line
-  return raw.replace(/^(- id:.*\r?\n)/, `$1${line}\n`);
+  if (existingFieldLine.test(raw)) return raw.replace(existingFieldLine, line);
+  const rowIdLine = /^(- id:.*\r?\n)/;
+  return raw.replace(rowIdLine, `$1${line}\n`);
 }
 
 function editYamlRow(filePath, id, fields) {
@@ -585,19 +556,18 @@ function prdEdit(cwd, id, opts) {
   const filePath = path.join(cwd, '.gm', 'prd.yml');
   const fields = { status: opts.status };
   if (opts.text !== undefined) {
-    // rows use whichever of text/note/subject/body already exists as the free-text field;
-    // reuse it rather than bolting on a duplicate `text:` line. text is the dominant/current
-    // convention; body is a superseded historical field kept last so legacy body-only rows
-    // still get edited in place instead of gaining a spurious second field.
     const text = fs.readFileSync(filePath, 'utf-8');
     const { rows } = splitYamlRows(text);
     const row = rows.find(r => r.id === id);
-    const existingField = row && /^  text:/m.test(row.raw) ? 'text'
+    // Reusing whichever free-text field the row already has keeps a legacy body-only row edited
+    // in place instead of gaining a spurious second field. `text` is the current convention and
+    // `body` the superseded one, hence the ordering.
+    const existingFreeTextField = row && /^  text:/m.test(row.raw) ? 'text'
       : row && /^  note:/m.test(row.raw) ? 'note'
       : row && /^  subject:/m.test(row.raw) ? 'subject'
       : row && /^  body:/m.test(row.raw) ? 'body'
       : 'subject';
-    fields[existingField] = opts.text;
+    fields[existingFreeTextField] = opts.text;
   }
   const raw = editYamlRow(filePath, id, fields);
   process.stdout.write(`# updated ${filePath} id=${id}\n${raw}`);
@@ -609,15 +579,12 @@ function mutableEdit(cwd, id, opts) {
   process.stdout.write(`# updated ${filePath} id=${id}\n${raw}`);
 }
 
-// Validates against registry.js's VERB_ALLOWLIST -- the same list the HTTP /api/lifecycle route
-// gates on, and itself kept in sync with ../gm's real is_orchestrator_verb + verbs.rs match arms.
-// A shape-only check let a typo'd verb write a spool file the daemon would only ever answer with
-// "unknown verb", so the CLI and HTTP surfaces now refuse identically.
+// A shape-only check was tried and rejected: it let a typo'd verb write a spool file the daemon
+// could only ever answer with "unknown verb". The CLI and the HTTP /api/lifecycle route now
+// refuse identically, both against registry.js's VERB_ALLOWLIST.
 function dispatchVerb(cwd, verb, jsonPayload) {
   if (!isUsableVerb(verb)) {
     const shapeOk = /^[a-zA-Z0-9_-]+$/.test(verb);
-    // A retired verb is recognized by the daemon but its match arm always errors -- name that
-    // distinctly rather than reporting it as unknown, so the caller knows the verb was real.
     process.stderr.write(!shapeOk
       ? `--dispatch: verb must be alphanumeric, dash, or underscore only, got: ${verb}\n`
       : isRetiredVerb(verb)
@@ -627,7 +594,7 @@ function dispatchVerb(cwd, verb, jsonPayload) {
   }
   let payload = '{}';
   if (jsonPayload) {
-    JSON.parse(jsonPayload); // validate
+    JSON.parse(jsonPayload);
     payload = jsonPayload;
   }
   const dir = path.join(cwd, '.gm', 'exec-spool', 'in', verb);
@@ -641,10 +608,9 @@ const LIST_SESSIONS_MIN_EVENTS = 5;
 
 function listSessions(all, opts = {}) {
   const m = new Map();
-  // correlationKey ranks real identities sess -> cwd#run -> cwd, so genuine
-  // session data (3,134 real events in the corpus) is preserved where it exists and degrades
-  // to the daemon-run boundary where it does not, instead of collapsing everything into one
-  // '(no-session)' bucket. The coverage footer below states which fidelity was actually used.
+  // correlationKey preserves the 3,134 real sess-carrying events in the corpus where they exist
+  // and degrades to the daemon-run boundary where they do not, rather than collapsing everything
+  // into one '(no-session)' bucket.
   for (const e of all) {
     const k = correlationKey(e);
     let s = m.get(k);
@@ -666,9 +632,8 @@ function listSessions(all, opts = {}) {
     if (typeof e.event === 'string' && e.event.startsWith('deviation.')) s.deviations++;
   }
   const allRows = [...m.values()].sort((a, b) => (b.last || '').localeCompare(a.last || ''));
-  // The daemon respawns constantly, so the cwd#run correlation key fragments into thousands of
-  // 1-event groups (14,475 singletons of 18,467 groups, measured) that bury the real chains.
-  // Hide the trivial ones by default; --all restores the raw grouping.
+  // The daemon respawns constantly, so cwd#run fragments into 14,475 singleton groups of 18,467
+  // total (measured), burying the real chains.
   const rows = opts.all ? allRows : allRows.filter(s => s.events >= LIST_SESSIONS_MIN_EVENTS);
   const hiddenTrivial = allRows.length - rows.length;
   for (const s of rows) {
@@ -696,11 +661,9 @@ function listSessions(all, opts = {}) {
     : `# correlation: NO real agent-session ids in this data -- rows are grouped by daemon run (${cov.counts.run}) / cwd (${cov.counts.cwd}), not by agent session\n`);
 }
 
-// Per-deviation-kind metadata: severity governs attention, recover names the verb the chain
-// expects next (every gate denial names its recovery verb — surface it so a reader does not have
-// to remember the mapping). `legacy: true` marks a kind no current ../gm source path still
-// emits: it survives here only because replayed history still contains it, and a reader seeing
-// one must not chase a live regression that no longer exists.
+// `legacy: true` marks a kind no current ../gm source path still emits -- it survives only in
+// replayed history, and a reader seeing one must not chase a live regression that no longer
+// exists.
 //
 // Derived from the real emitters in ../gm (verify by path -- codesearch does not index it):
 //   rs-plugkit/crates/plugkit-core/src/gates.rs         log_deviation(): await-result-violation,
@@ -744,13 +707,10 @@ const DEVIATION_META = {
 };
 const SEV_COLOR = { critical: 31, warn: 33, info: 36 };
 
-// OWN vs FOREIGN, re-grounded on real data. Most live evt lines carry no `sess` field, so the
-// old session-prefix-only test classified every deviation as foreign and --own-only always
-// printed nothing. But `sess` is NOT universally absent: 3,134 events in the real corpus do
-// carry it (measured via correlationCoverage over a full replay), so it must be honoured, not
-// discarded. Precedence: an explicit GMSNIFF_OWN_SESSION match on a real session identity
-// (sess/session_id, via correlationOf) wins; otherwise "own" means the deviation happened in the
-// project gmsniff is running from (GMSNIFF_OWN_CWD overrides).
+// A session-prefix-only test was tried and rejected: most live evt lines carry no `sess` field,
+// so it classified every deviation as foreign and --own-only always printed nothing. `sess` is
+// not universally absent either -- 3,134 events in the real corpus carry it (measured via
+// correlationCoverage over a full replay) -- so it is honoured first, then cwd.
 const OWN_CWD = canonPath(process.env.GMSNIFF_OWN_CWD || process.cwd());
 function canonPath(p) {
   if (!p) return null;
@@ -765,8 +725,6 @@ function devOrigin(e) {
   if (OWN_CWD && e.cwd && canonPath(e.cwd) === OWN_CWD) return 'own';
   return 'foreign';
 }
-// An unmapped kind is itself signal (gmsniff's table has drifted behind ../gm) -- flag it as
-// such rather than rendering an indistinguishable `recover:?` next to genuinely-mapped rows.
 function devMeta(ev) { return DEVIATION_META[ev] || { sev: 'warn', recover: '(unmapped -- re-derive DEVIATION_META from ../gm source)', unknown: true }; }
 
 function listDeviations(all, opts = {}) {
@@ -850,8 +808,6 @@ function watchers(all, opts = {}) {
   for (const cwd of cwds) {
     const status = readWatcherStatus(cwd);
     if (!status) continue;
-    // Filter on PER-PROJECT activity, not readWatcherStatus().alive: the latter tests the shared
-    // daemon pid, which is the same process for every project, so it never excluded anything.
     const live = readProjectLiveness(cwd);
     if (!includeDead && !live.active) continue;
     rows.push({ cwd, update: readUpdateAvailable(cwd), live, ...status });
@@ -863,17 +819,12 @@ function watchers(all, opts = {}) {
   const aliveCount = rows.filter(r => r.live.active).length;
   const deadShown = rows.length - aliveCount;
   const gt = readGmToolsVersions();
-  // Drift is a machine-global property under the shared daemon (one runtime serves every cwd),
-  // not a per-project one: compare the real running plugkit version against the daemon's own
-  // last registry probe. A per-project .update-available.json marker is still surfaced per row,
-  // but only when its `latest` is genuinely newer than the running version.
   const runningVersion = gt.plugkit;
-  // ~/.gm-tools/daemon-status.json is NOT a reliable liveness source: measured live it named a
-  // 71h-old pid 4304 while the actual serving daemon was pid 3364 (per every project's
-  // .status.json, confirmed against the real process table). Trusting it reports "daemon down"
-  // for a fleet that is demonstrably running. The pid the per-project .status.json files name is
-  // the real one -- probe it directly rather than inferring from per-project activity (a fleet
-  // can legitimately be all-idle while the daemon is up, which is not "daemon down").
+  // ~/.gm-tools/daemon-status.json was tried and rejected as the liveness source: measured live
+  // it named a 71h-old pid 4304 while the actual serving daemon was pid 3364 (per every
+  // project's .status.json, confirmed against the real process table), reporting "daemon down"
+  // for a fleet demonstrably running. Inferring from per-project activity is equally wrong -- a
+  // fleet can legitimately be all-idle while the daemon is up.
   const daemonUp = (() => {
     for (const r of rows) {
       if (!r.pid) continue;
@@ -887,8 +838,6 @@ function watchers(all, opts = {}) {
   process.stdout.write(`# runtime: plugkit v${runningVersion || '?'}  gm-plugkit v${gt.gm_plugkit || '?'}  registry-latest v${gt.latest || '?'}${gt.checked_at_ms ? ` (checked ${fmtAge(Date.now() - gt.checked_at_ms)} ago)` : ''}${globalDrift ? color('  DRIFTED', 33) : ''}\n`);
   process.stdout.write(`STATE   SERVED     PID    LAST-ACT  QUEUE  PROJECT               NOTE\n`);
   for (const r of rows) {
-    // ACTIVE is per-project (readProjectLiveness), not "the shared daemon answers" -- the latter
-    // is true for every discovered project whenever the daemon runs at all.
     const live = r.live;
     const state = live.active ? color('ACTIVE', 32) : color('idle  ', 90);
     const age = live.last_activity_age_ms !== null ? fmtAge(live.last_activity_age_ms) : '?';
@@ -907,12 +856,10 @@ function watchers(all, opts = {}) {
   process.stderr.write(`# ${aliveCount} active${includeDead ? ` - ${deadShown} idle shown` : ''}${globalDrift ? ` - runtime drifted (v${runningVersion} -> v${gt.latest}): bun x gm-plugkit@latest` : ''}${driftedRows.length ? ` - ${driftedRows.length} project marker(s) newer than runtime` : ''}\n`);
 }
 
-// Machine-global version signal. The agentplug shared daemon dropped per-project version /
-// wrapper_sha / idle_limit_ms from .gm/exec-spool/.status.json entirely, so readWatcherStatus's
-// `version` is null for every current-generation project -- comparing an .update-available.json
-// `latest` against that null reported EVERY marked project as drifted. The real running-version
-// signal now lives machine-wide in ~/.gm-tools/{plugkit,gm-plugkit}.version, alongside
-// .update-check-cache.json (the daemon's own last npm-registry probe).
+// The agentplug shared daemon dropped version/wrapper_sha/idle_limit_ms from .status.json
+// entirely, so readWatcherStatus's `version` is null on every current-generation project and
+// comparing an .update-available.json `latest` against that null reported EVERY marked project
+// as drifted. The real running-version signal is machine-wide, here.
 function readGmToolsVersions() {
   const installed = readInstalledVersions();
   let cache = null;
@@ -925,16 +872,12 @@ function readGmToolsVersions() {
   };
 }
 
-// The per-project served version, read from the watcher.log's own "plugkit vX.Y.Z (wasm)" banner
-// (3,917 real occurrences). This is the field .status.json's now-absent `version` used to carry;
-// the banner is the only place the real per-project served version still appears.
-//
-// The banner is only written at daemon-boot, so on a busy project it can sit far back in the
-// file -- a small tail window silently reports "no version". Scan backwards in bounded chunks
-// and stop at the first (newest) banner found, so the common case reads only the tail while a
-// quiet project still resolves. Capped at SERVED_VERSION_MAX_BYTES: --watchers calls this once
-// per discovered project (54 real projects, some multi-MB) and an unbounded full read there was
-// slow enough to look like a hang.
+// The watcher.log banner (3,917 real occurrences) is the only place the per-project served
+// version still appears, now that .status.json has dropped `version`. It is written only at
+// daemon-boot, so on a busy project it sits far back in the file and a small tail window
+// silently reports "no version" -- hence the backwards chunked scan. The byte cap exists because
+// --watchers calls this once per discovered project (54 real, some multi-MB) and an unbounded
+// full read there was slow enough to look like a hang.
 const SERVED_VERSION_MAX_BYTES = 4 * 1024 * 1024;
 const SERVED_VERSION_RE = /plugkit\s+v(\d+\.\d+\.\d+)\s*\(wasm\)/g;
 const _servedVersionCache = new Map();
@@ -967,9 +910,8 @@ function readServedVersion(cwd) {
   return version;
 }
 
-// Semver-ish compare; returns true only when `latest` is strictly newer than `running`. An
-// unparseable or absent side is never "drifted" -- an unknown running version is the state the
-// old code silently read as "behind".
+// An absent side is never "drifted": an unknown running version is exactly the state the old
+// code silently read as "behind".
 function versionIsNewer(latest, running) {
   if (!latest || !running) return false;
   const a = String(latest).split('.').map(n => parseInt(n, 10));
@@ -998,17 +940,9 @@ function fmtAge(ms) {
   return `${Math.floor(s / 3600)}h${Math.floor((s % 3600) / 60)}m`;
 }
 
-function parseRel(s) {
-  const m = String(s).match(/^(\d+)([smhdw])$/);
-  if (!m) return null;
-  const n = parseInt(m[1], 10);
-  const unit = m[2];
-  return n * { s: 1000, m: 60000, h: 3600000, d: 86400000, w: 604800000 }[unit];
-}
-
-// Resolves the newest correlation group for this cwd. Keyed on correlationKey rather than raw
-// `sess` so it still resolves on projects whose events carry no session id (the majority) --
-// there it returns the cwd#run daemon-run key, which --tree/--efficiency filter on identically.
+// Keyed on correlationKey rather than raw `sess` so it still resolves on the majority of
+// projects, whose events carry no session id -- there it returns the cwd#run daemon-run key,
+// which --tree/--efficiency filter on identically.
 function resolveCurrentSession(all) {
   const target = canonPath(process.cwd());
   let best = null;
@@ -1028,9 +962,9 @@ function tree(all, sess, opts = {}) {
   }
   if (!sess) { process.stderr.write('--tree requires a session id (or "current" to auto-resolve from cwd)\n'); process.exit(2); }
   const wantEmpty = sess === '(no-session)' || sess === '' || sess === '-';
-  // Matches on the correlation key, so a raw agent `sess` id, a cwd#run daemon-run key, and a
-  // bare cwd all resolve -- otherwise --tree only ever worked for the 1.5% of events that
-  // carry a real sess field.
+  // Matching on the raw `sess` field was tried and rejected: --tree then only ever worked for
+  // the 1.5% of events carrying one. The correlation key resolves a raw agent sess id, a cwd#run
+  // daemon-run key and a bare cwd alike.
   const evs = all.filter(e => { if (wantEmpty) return !e.sess; const k = correlationKey(e); return k === sess || k.startsWith(sess); }).sort((a, b) => (a.ts || '').localeCompare(b.ts || ''));
   let currentPhase = '?';
   let firstInstructionSeen = false;
@@ -1111,11 +1045,8 @@ function efficiency(all, sess) {
   }
 }
 
-// ~/.gm-tools/daemon-registry.txt is the shared daemon's own authoritative list of every cwd it
-// serves -- the only source that includes worktree-hosted projects (C:\dev\<repo>\.claude\
-// worktrees\wf_*, four levels deep). A one-level readdir of the dev roots structurally cannot
-// reach those, so every discovery path here seeds from the registry first and only then falls
-// back to the root scan for projects the daemon has not (yet) registered.
+// The only source that includes worktree-hosted projects (C:\dev\<repo>\.claude\worktrees\wf_*,
+// four levels deep), which a one-level readdir of the dev roots structurally cannot reach.
 function readDaemonRegistry() {
   try {
     return fs.readFileSync(path.join(GM_TOOLS_DIR, 'daemon-registry.txt'), 'utf-8')
@@ -1123,8 +1054,6 @@ function readDaemonRegistry() {
   } catch (_) { return []; }
 }
 
-// Every gm project cwd on this machine: daemon registry (authoritative, any depth) unioned with
-// a one-level scan of the dev roots, deduped on a canonical path key.
 function discoverProjectCwds() {
   const out = [];
   const seen = new Set();
@@ -1163,8 +1092,8 @@ function findUpdateMarkers() {
 function updates(all, opts) {
   const gt = readGmToolsVersions();
   const allMarkers = findUpdateMarkers();
-  // A marker whose `latest` is not newer than the actually-running runtime is a stale leftover,
-  // not drift: the shared daemon updates machine-wide and never rewrites each project's marker.
+  // The shared daemon updates machine-wide and never rewrites each project's marker, so a marker
+  // no newer than the running runtime is a stale leftover, not drift.
   const markers = allMarkers.filter(m => versionIsNewer(m.latest, gt.plugkit));
   if (opts.json) {
     process.stdout.write(JSON.stringify({ runtime: gt, live: markers, stale_markers: allMarkers.length - markers.length, history: all.filter(e => typeof e.event === 'string' && e.event.startsWith('update.')) }, null, 2) + '\n');
@@ -1196,18 +1125,12 @@ function updates(all, opts) {
   }
 }
 
-// The former hand-rolled `embed::embed_text step '<x>' failed` free-text scraper lived here. It
-// is gone: src/watcher-log.js is the single unified parser for this file, and that pattern has
-// zero occurrences across every registered project's real watcher.log (verified by direct scan)
-// -- the current runtime emits structured embed_fail/embed_query_failed/memorize_embed_failed
-// events instead, which the structured path below already reads.
-
+// Filtering on _sub==='rs_learn' was tried and rejected: that crate is retired, and current
+// embed_fail/embed_query_failed/memorize_embed_failed events either carry no sub tag (defaulting
+// to 'plugkit') or are tagged 'memory' by recall.rs, so it matched nothing on a real log. A
+// free-text `embed::embed_text step '<x>' failed` scraper was also removed -- that pattern has
+// zero occurrences across every registered project's watcher.log (verified by direct scan).
 function embedFailures(all, opts) {
-  // Matches on event name alone -- rs-learn (the crate that used to tag these _sub:'rs_learn')
-  // is retired (rs-plugkit wasm_dispatch/verbs.rs); current embed_fail/embed_query_failed/
-  // memorize_embed_failed events carry no explicit sub tag (default through to 'plugkit') or
-  // are tagged sub:'memory' by recall.rs -- filtering _sub==='rs_learn' would silently match
-  // nothing against a current-generation project's real log.
   const evs = all.filter(e => e.event === 'embed_fail' || e.event === 'embed_query_failed' || e.event === 'memorize_embed_failed');
   if (opts.stats) {
     const byStep = new Map(), byDay = new Map(), byProj = new Map();
@@ -1309,17 +1232,14 @@ function memoryLeverage(all, opts) {
   const cutoff = Date.now() - days * 86400000;
   const filt = (e) => { const t = e.ts ? Date.parse(e.ts) : 0; return t >= cutoff && (!opts.sess || (e.sess && e.sess.startsWith(opts.sess))); };
   const evs = all.filter(filt);
-  // Re-grounded on what the real emitters actually produce (verified in ../gm):
+  // Verified against the real emitters in ../gm:
   //   * There is NO memorize-success event. `memorized` in code_index.rs is a RESPONSE field,
-  //     not an event name; the old `memorize_fired`/`memorize.fired` filter matched 0 of every
-  //     sampled project's real log. The observable memorize surface is its failure/no-op side:
-  //     memorize_reject, memorize_deduped, memorize_embed_failed.
+  //     not an event name, and the old memorize_fired/memorize.fired filter matched 0 events in
+  //     every sampled project's real log. The observable surface is the failure/no-op side.
   //   * recall's real payload (orchestrator/recall.rs emit_recall) is
-  //     {sub, query, hit, mode, n_hits, namespace, top_score} -- it carries NO hits[] array and
-  //     NO key, so the old memorized-key <-> recalled-key join was structurally impossible and
-  //     could only ever print 0. Hit-rate is the leverage signal the data can actually support.
-  // Live evt lines also carry no `sess` field at all, so grouping falls back to cwd -- the only
-  // attribution a live event carries -- and the metric is reported per project chain.
+  //     {sub, query, hit, mode, n_hits, namespace, top_score} -- no hits[] array and no key, so
+  //     a memorized-key <-> recalled-key join was structurally impossible and only ever printed
+  //     0. Hit-rate is the leverage signal this data can actually support.
   const byKey = new Map();
   const keyOf = (e) => correlationKey(e);
   const bump = (e, field) => {
@@ -1397,19 +1317,8 @@ function disciplineSigilIgnored(all) {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Live manager view (--agents): CLI parity with the GUI's Skill Layout panel.
-//
-// Reads live per-project state from the real files the daemon writes, never from replayed
-// gm-log history (which is a different, laggier surface):
-//   .gm/turn-state.json               {phase, session_id, last_skill, updated_at_ms}
-//   .gm/next-step.md                  the served instruction prose (heading + body)
-//   .gm/exec-spool/.turn-summary.json {phase, prd_pending_count, mutables_pending_count,
-//                                      last_instruction_ts, long_gap_threshold_ms}
-//   .gm/last-prompt.txt               the user prompt that opened the current chain
-//   .gm/exec-spool/.last-gate-fired.json {key, ts}
-//   .gm/exec-spool/.watcher.log       tailed for recent evt: output
-// ---------------------------------------------------------------------------
+// Live manager view (--agents): CLI parity with the GUI's Skill Layout panel. Reads the real
+// files the daemon writes, never replayed gm-log history, which is a different laggier surface.
 
 const WORKING_PHASES = new Set(['PLAN', 'EXECUTE', 'EMIT', 'VERIFY', 'CONSOLIDATE']);
 
@@ -1417,14 +1326,12 @@ function readJsonFile(p) {
   try { return JSON.parse(fs.readFileSync(p, 'utf-8')); } catch (_) { return null; }
 }
 
-// Tails the last N events via the shared watcher-log parser (src/watcher-log.js), so the manager
-// view sees the SAME event universe as replay -- including the lines that carry no upstream
-// `evt:` record at all and are synthesized by the parser: dispatch.start (57,537 paired plus
-// 6,638 malformed-verb starts, derived from "[dispatch] -> verb=..." lines in BOTH the ASCII and
-// the Unicode-arrow generation -- 7 projects emit the Unicode form exclusively, so matching only
-// "->" made their entire dispatch stream invisible), watcher/daemon spawn, plugkit.version banners,
-// lock.stale-takeover and instruction.handle-start. An evt-only scan (the previous shape here)
-// missed all of them, which is exactly the in-flight-verb signal this view most needs.
+// Routed through the shared src/watcher-log.js parser so this view sees the SAME event universe
+// as replay. An evt-only scan was tried and rejected: it missed every line carrying no upstream
+// `evt:` record, which is exactly the in-flight-verb signal this view most needs -- 57,537 paired
+// dispatch.starts plus 6,638 malformed-verb ones, synthesized from "[dispatch] -> verb=..." in
+// BOTH the ASCII and Unicode-arrow generations (7 projects emit the Unicode form exclusively, so
+// matching only "->" made their entire dispatch stream invisible).
 function tailWatcherEvents(cwd, n, { bytes = 256 * 1024 } = {}) {
   const fp = path.join(cwd, '.gm', 'exec-spool', '.watcher.log');
   try {
@@ -1439,14 +1346,9 @@ function tailWatcherEvents(cwd, n, { bytes = 256 * 1024 } = {}) {
   } catch (_) { return []; }
 }
 
-// In-flight verbs: a dispatch.start with no later matching dispatch.end for the same verb is
-// running RIGHT NOW. This is the strongest liveness signal available -- it distinguishes "agent
-// is mid-verb" from "agent stopped between verbs", which no .gm state file can express.
-//
-// Bounded by IN_FLIGHT_MAX_MS because the pairing is only as complete as the tail window: a
-// dispatch.start whose matching end fell outside the bytes we read looks permanently open.
-// Unbounded, that reported rs-plugkit as "RUNNING codesearch for 217h" -- a parse artifact, not
-// a live verb. Anything older than the bound is treated as unpaired history, not in-flight.
+// Bounded because pairing is only as complete as the tail window: a dispatch.start whose
+// matching end fell outside the bytes read looks permanently open. Unbounded, that reported
+// rs-plugkit as "RUNNING codesearch for 217h" -- a parse artifact, not a live verb.
 const IN_FLIGHT_MAX_MS = 15 * 60 * 1000;
 
 function inFlightVerbs(events, { now = Date.now(), maxAgeMs = IN_FLIGHT_MAX_MS } = {}) {
@@ -1466,9 +1368,6 @@ function inFlightVerbs(events, { now = Date.now(), maxAgeMs = IN_FLIGHT_MAX_MS }
 }
 
 function readAgentState(cwd) {
-  // Shared readers (registry.js) rather than local re-parsers, so this view and the GUI agree
-  // on shape -- including readTurnState's legacy-shape handling (a real .gm/turn-state.json in
-  // C:/dev/test carries no `phase` at all and must not read as "phase: null but current").
   const turnState = readTurnState(cwd) || {};
   const summary = readTurnSummary(cwd) || {};
   const gate = readJsonFile(path.join(cwd, '.gm', 'exec-spool', '.last-gate-fired.json'));
@@ -1480,9 +1379,8 @@ function readAgentState(cwd) {
     const text = fs.readFileSync(path.join(cwd, '.gm', 'next-step.md'), 'utf-8');
     const um = text.match(/^Updated:\s*(\d+)$/m);
     updatedTs = um ? Number(um[1]) : null;
-    // The file's own "# Next step" preamble precedes the `---` separator. Without a separator
-    // (observed on rs-codeinsight's real file) the preamble heading would be reported as the
-    // instruction heading -- take the first heading AFTER the preamble, never the preamble.
+    // Some real files carry no `---` separator at all (observed on rs-codeinsight), where a
+    // naive first-heading scan reports the file's own "# Next step" preamble as the instruction.
     const bodyIdx = text.indexOf('\n---\n');
     instruction = bodyIdx >= 0 ? text.slice(bodyIdx + 5).trimStart() : text.replace(/^#\s*Next step\s*$/mi, '').trimStart();
     const hm = instruction.match(/^#\s*(.+?)\s*$/m);
@@ -1492,24 +1390,18 @@ function readAgentState(cwd) {
   let prompt = '';
   try { prompt = fs.readFileSync(path.join(cwd, '.gm', 'last-prompt.txt'), 'utf-8').trim(); } catch (_) {}
 
-  // The three state files each lag differently and routinely DISAGREE -- measured live on this
-  // machine: gmsniff turn-state=EXECUTE@11:30 while next-step.md=PLAN@10:07 and summary=PLAN;
-  // spoint turn-state=PLAN@11:28 while next-step.md/summary=EXECUTE. turn-state.json is written
-  // on every phase transition and is the freshest, so it wins for `phase`; next-step.md's
-  // heading is the instruction actually on disk and is reported separately (with its own age)
-  // rather than being silently conflated with the current phase.
+  // The three state files each lag differently and routinely DISAGREE -- measured live: gmsniff
+  // turn-state=EXECUTE@11:30 while next-step.md=PLAN@10:07 and summary=PLAN; spoint
+  // turn-state=PLAN@11:28 while next-step.md/summary=EXECUTE. turn-state.json is written on every
+  // transition and is freshest, so it wins here; the heading is reported separately with its own
+  // age rather than conflated into the phase.
   const phase = turnState.phase || summary.phase || null;
   const phaseSince = Number.isFinite(turnState.updated_at_ms) ? turnState.updated_at_ms : updatedTs;
   const threshold = Number.isFinite(summary.long_gap_threshold_ms) ? summary.long_gap_threshold_ms : 300000;
 
-  // Real liveness comes from readProjectLiveness: min age across watcher.log mtime, turn-summary
-  // ts and turn-state ts. Critically it EXCLUDES .status.json's `ts`, which the shared daemon
-  // rewrites for every registered project every ~200ms whether or not that project is doing
-  // anything -- trusting it marks the entire 174-project fleet permanently active.
   const idleMs = liveness.last_activity_age_ms;
   const instructionAgeMs = updatedTs ? Date.now() - updatedTs : null;
 
-  // Recent parsed events power both the output feed and in-flight verb detection; read once.
   const recent = tailWatcherEvents(cwd, 400);
   const inFlight = inFlightVerbs(recent);
 
@@ -1535,15 +1427,12 @@ function readAgentState(cwd) {
     in_flight: inFlight,
     queue_depth: liveness.queue_depth,
     daemon_alive: liveness.daemon_alive,
-    // Per-project activity, NOT "the shared daemon responds" -- readWatcherStatus().alive is
-    // machine-wide and true for all 174 discovered projects, which is no signal at all.
     alive: liveness.active,
     pid: status ? status.pid : null,
-    // "Working" needs BOTH a non-terminal phase and genuinely recent activity. Phase alone is
-    // not enough: 22 projects sit in a working phase but most last emitted an event days ago --
-    // their chain was abandoned mid-phase, not left running. An in-flight verb also counts as
-    // working regardless of phase age: a long-running verb is exactly the case where every
-    // state file goes quiet while the agent is in fact busy.
+    // Phase alone is not enough: 22 projects sit in a working phase but most last emitted an
+    // event days ago -- abandoned mid-phase, not running. An in-flight verb counts regardless of
+    // phase age, since a long-running verb is exactly when every state file goes quiet while the
+    // agent is in fact busy.
     working: (WORKING_PHASES.has(phase) && idleMs !== null && idleMs <= threshold) || inFlight.length > 0,
   };
 }
@@ -1556,9 +1445,6 @@ function collectAgents() {
       rows.push(readAgentState(cwd));
     } catch (_) {}
   }
-  // Working agents first, then genuinely-most-recently-active (watcher.log mtime, not the
-  // laggy state files). An observer wants "who is running right now" at the top of the screen,
-  // never alphabetical order.
   rows.sort((a, b) => (b.working ? 1 : 0) - (a.working ? 1 : 0)
     || (a.idle_ms === null ? 1 : b.idle_ms === null ? -1 : a.idle_ms - b.idle_ms));
   return rows;
@@ -1613,11 +1499,8 @@ function renderAgents(rows, opts) {
     const state = a.alive ? color('*', 32) : color('x', 31);
     const stall = a.stalled ? color(' IDLE', 31) : '';
     const counts = `prd:${String(a.prd_pending ?? '?').padStart(3)} mut:${String(a.mut_pending ?? '?').padStart(2)}`;
-    // instruction_phase is only set when next-step.md's heading disagrees with turn-state's
-    // phase -- surfacing the served-vs-current split instead of hiding one behind the other.
     const instr = a.heading ? (a.instruction_phase ? `${a.heading} (served ${a.instruction_age_ms !== null ? fmtAge(a.instruction_age_ms) : '?'} ago)` : a.heading) : '(no instruction)';
     process.stdout.write(`${state} ${color(a.name.padEnd(16).slice(0, 16), 1)} ${color(phase, PHASE_COLOR[a.phase] || 0)} ${elapsed}  ${lastEvt}  ${counts}  ${color(instr, 36)}${stall}\n`);
-    // A dispatch.start with no matching dispatch.end is a verb executing right now.
     for (const f of a.in_flight) {
       const since = f.ts ? fmtAge(Date.now() - Date.parse(f.ts)) : '?';
       process.stdout.write(`      ${color('>> RUNNING', 32)} ${color(f.verb || '?', 1)} for ${since}${f.task ? ` task=${f.task}` : ''}\n`);
@@ -1653,9 +1536,8 @@ async function liveAgents(opts) {
   if (!opts.tail) { render(); return; }
 
   const interval = Math.max(250, opts.interval || 2000);
-  // Clear-and-repaint refresh: the manager view is a fixed-height snapshot, not a scrolling
-  // stream, so appending would push the top of the board off screen every tick.
-  const paint = () => { process.stdout.write('\x1b[2J\x1b[H'); render(); process.stdout.write(color(`\n(refreshing every ${interval}ms -- Ctrl-C to exit)\n`, 90)); };
+  const CLEAR_SCREEN_AND_HOME = '\x1b[2J\x1b[H';
+  const paint = () => { process.stdout.write(CLEAR_SCREEN_AND_HOME); render(); process.stdout.write(color(`\n(refreshing every ${interval}ms -- Ctrl-C to exit)\n`, 90)); };
   paint();
   const timer = setInterval(paint, interval);
   process.on('SIGINT', () => { clearInterval(timer); process.stdout.write('\n'); process.exit(0); });
@@ -1669,13 +1551,9 @@ async function rollup(out, all, filter) {
   process.stderr.write(`# rolled up ${filtered.length} events -> ${out}\n`);
 }
 
-// Live tail fans out across every discovered gm-plugkit project concurrently (one
-// ProjectLogTailer per project's .gm/exec-spool/.watcher.log via MultiProjectWatcher),
-// same coverage as the GUI server's Store.startLive -- plus the central ~/.gm/gm-log tree
-// watcher for the case where that log aggregates events directly. New projects appearing
-// on disk after the CLI started are picked up by the fanout's periodic rediscovery with no
-// restart; --spool <path> narrows to one explicit project dir (or .watcher.log path), same
-// semantics as the replay path's --spool, bypassing rediscovery for a pinned single target.
+// Both sources run concurrently -- the central gm-log tree watcher plus a per-project fanout --
+// so a project is observed the moment either carries its events. Same coverage as the GUI
+// server's Store.startLive.
 async function liveTail(filter, opts) {
   const watcher = new GmLogWatcher(DEFAULT_LOG_DIR);
   watcher.on('event', e => { if (filter(e)) process.stdout.write(formatRow(e, opts)); });
@@ -1692,10 +1570,10 @@ async function liveTail(filter, opts) {
   const projectCount = fanout.projects().length;
   process.stdout.write(`# tailing... ${projectCount} project(s) + central log (Ctrl-C to exit)\n`);
   process.stdin.resume();
-  // await both stop()s (each drains libuv's async fs.watch-handle close, see index.js) before
-  // exiting -- an immediate process.exit() right after a synchronous close on Windows can
-  // race libuv's own handle-close bookkeeping and crash with a UV_HANDLE_CLOSING assertion,
-  // reproduced against this exact watcher+fanout shape during VERIFY.
+  // Both stop()s must be awaited (each drains libuv's async fs.watch-handle close, see
+  // index.js). An immediate process.exit() after a synchronous close races libuv's own
+  // handle-close bookkeeping on Windows and crashes with a UV_HANDLE_CLOSING assertion,
+  // reproduced against this exact watcher+fanout shape.
   process.on('SIGINT', () => {
     Promise.all([watcher.stop(), fanout.stop()]).finally(() => process.exit(0));
   });
@@ -1734,7 +1612,7 @@ if (argv[0] === 'gui') {
     process.stderr.write(`${verb} requires <cwd> <${verb === '--dispatch' ? 'verb' : 'id'}>\n`);
     process.exit(2);
   }
-  // Manual mini-parse (not the shared parseArgs/FLAGS.bool table): --json's value here is
+  // Deliberately NOT the shared parseArgs/FLAGS.bool table: --json's value in this subcommand is
   // always a raw JSON string payload, never the global boolean ndjson-alias flag.
   const rest = {};
   const tail = argv.slice(3);
@@ -1753,8 +1631,8 @@ if (argv[0] === 'gui') {
 
   const filter = buildFilter(opts);
 
-  // --agents reads live .gm state directly; it never needs the (multi-second, multi-100k-event)
-  // gm-log replay, so it short-circuits ahead of both the tail and replay paths.
+  // Short-circuits ahead of both the tail and replay paths: --agents reads live .gm state
+  // directly and never needs the multi-second, multi-100k-event gm-log replay.
   if (opts.agents) {
     await liveAgents(opts);
     if (!opts.tail) process.exit(0);
@@ -1762,9 +1640,8 @@ if (argv[0] === 'gui') {
     await liveTail(filter, opts);
   } else {
     const all = replayAll(DEFAULT_LOG_DIR, { spool: opts.spool });
-    // Loudly warn when the newest event in the whole replayed source is old: a silently stale
-    // source makes every count, rate and "0 matches" below look like a healthy finding when it
-    // actually means the CLI is reading a dead log.
+    // A silently stale source makes every count, rate and "0 matches" below look like a healthy
+    // finding when it actually means the CLI is reading a dead log.
     const staleness = sourceStaleness(all);
     if (staleness.stale) {
       process.stderr.write(color(`# WARNING: source is STALE (${staleness.reason}) -- results below describe historical data, not live state. Run 'gmsniff --agents' for live per-project state.\n`, 33));
@@ -1791,10 +1668,9 @@ if (argv[0] === 'gui') {
     if (opts.efficiency) { efficiency(all, opts.efficiency); process.exit(0); }
     if (opts.rollup) { await rollup(opts.rollup, all, filter); process.exit(0); }
 
-    // --ctx must widen around each match within the UNFILTERED stream -- indexing into the
-    // already-filtered array (the previous shape) could only ever re-select rows that already
-    // passed, making the flag a silent no-op. Match indices are collected against `all` so the
-    // surrounding N events are real neighbours in the source stream, filter or not.
+    // Indexing --ctx into the already-filtered array was tried and rejected: it could only ever
+    // re-select rows that had already passed, making the flag a silent no-op. Indices are
+    // collected against `all` so the neighbours are real ones from the source stream.
     const ctxN = opts.ctx || 0;
     const matchedIdxs = [];
     for (let i = 0; i < all.length; i++) if (filter(all[i])) matchedIdxs.push(i);
