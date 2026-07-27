@@ -192,6 +192,12 @@ export function LiveStream({ connState = 'connecting' } = {}, setBody) {
 }
 
 const SUBSYSTEM_BADGE_COLUMN_KEY = 'sub';
+const LEADING_COLUMNS = ['ts', 'event', 'pid'];
+const INTERNAL_FIELD_PREFIX = '_';
+const MAX_INLINE_OBJECT_CHARS = 80;
+const COLLAPSED_SUMMARY_CHARS = 40;
+const MAX_CELL_CHARS = 120;
+const isInternalField = (key) => key.startsWith(INTERNAL_FIELD_PREFIX);
 const sortStateByTableId = new Map();
 
 function sortRows(rows, sortSpec) {
@@ -210,11 +216,11 @@ function sortRows(rows, sortSpec) {
 export function renderEventTable(rows, tableId, setBody) {
   if (!rows || !rows.length) return Empty('No events.');
   const cols = new Set();
-  for (const r of rows) Object.keys(r).forEach(k => { if (!k.startsWith('_')) cols.add(k); });
+  for (const r of rows) Object.keys(r).forEach(k => { if (!isInternalField(k)) cols.add(k); });
   const keys = [...cols];
-  const display = ['ts', 'event', 'pid', ...keys.filter(k => !['ts', 'event', 'pid', '_sub', '_day', '_fp'].includes(k))];
+  const display = [...LEADING_COLUMNS, ...keys.filter(k => !LEADING_COLUMNS.includes(k) && !isInternalField(k))];
   const sortable = !!(tableId && setBody);
-  const sortSpec = sortable ? eventTableSortState.get(tableId) : null;
+  const sortSpec = sortable ? sortStateByTableId.get(tableId) : null;
   const sortedRows = sortable ? sortRows(rows, sortSpec) : rows;
   const headerCell = (colKey, label) => {
     if (!sortable) return h('th', {}, label);
@@ -231,7 +237,7 @@ export function renderEventTable(rows, tableId, setBody) {
     }, label + indicator);
   };
   return h('table', { class: 'gm-table' },
-    h('tr', {}, headerCell('sub', 'sub'), ...display.map(k => headerCell(k, k))),
+    h('tr', {}, headerCell(SUBSYSTEM_BADGE_COLUMN_KEY, SUBSYSTEM_BADGE_COLUMN_KEY), ...display.map(k => headerCell(k, k))),
     ...sortedRows.map((r, i) => h('tr', { key: i },
       h('td', {}, Badge({ children: r._sub || '?', tone: 'neutral' })),
       ...display.map(k => {
@@ -241,34 +247,25 @@ export function renderEventTable(rows, tableId, setBody) {
         if (k === 'event') return h('td', {}, h('strong', {}, String(v)));
         if (typeof v === 'boolean') return h('td', {}, v ? Badge({ children: '[x]', tone: 'positive' }) : Badge({ children: '[ ]', tone: 'danger' }));
         if (typeof v === 'object') {
-          const full = JSON.stringify(v);
-          return h('td', {}, full.length > 80
-            ? h('details', {}, h('summary', {}, asKeyValueLine(v, 40) + '...'), JsonViewer({ value: v, mode: 'highlight', maxHeight: '260px' }))
-            : asKeyValueLine(v, 80));
+          const inlineFits = JSON.stringify(v).length <= MAX_INLINE_OBJECT_CHARS;
+          return h('td', {}, inlineFits
+            ? asKeyValueLine(v, MAX_INLINE_OBJECT_CHARS)
+            : h('details', {}, h('summary', {}, asKeyValueLine(v, COLLAPSED_SUMMARY_CHARS) + ELLIPSIS), JsonViewer({ value: v, mode: 'highlight', maxHeight: '260px' })));
         }
         const sv = String(v);
-        return h('td', { title: sv.length > 120 ? sv : null }, sv.length > 120 ? sv.slice(0, 80) + '...' : sv);
+        const overflows = sv.length > MAX_CELL_CHARS;
+        return h('td', { title: overflows ? sv : null }, overflows ? sv.slice(0, MAX_INLINE_OBJECT_CHARS) + ELLIPSIS : sv);
       }))));
 }
 function toggleEventTableSort(tableId, colKey) {
-  const cur = eventTableSortState.get(tableId);
-  if (cur && cur.key === colKey) {
-    eventTableSortState.set(tableId, { key: colKey, dir: cur.dir === 'asc' ? 'desc' : 'asc' });
-  } else {
-    eventTableSortState.set(tableId, { key: colKey, dir: 'asc' });
-  }
+  const cur = sortStateByTableId.get(tableId);
+  const flipped = cur && cur.key === colKey && cur.dir === 'asc' ? 'desc' : 'asc';
+  sortStateByTableId.set(tableId, { key: colKey, dir: flipped });
 }
 
-// evTypes/days back the two dropdown filter selects; they change only when a
-// new event-type or a new calendar day first appears in the log, never on a
-// pagination click, a sort-header click, or a filter-text keystroke -- yet
-// every one of those re-renders used to re-fetch both in full via Promise.all
-// alongside the actual page data. Measured (playwright-driven timing against
-// a real ~55k-event backlog): each AllEvents/SubsystemPanel re-render cost
-// 60-120ms, almost entirely 3 concurrent round-trips where only 1 (the page
-// of rows) actually needed to vary per-render. Caching the other two behind a
-// short TTL cuts every pagination/sort/filter-text render down to the single
-// real dependency, only re-fetching metadata occasionally in the background.
+// Measured (playwright-driven timing against a real ~55k-event backlog): re-fetching these two
+// dropdown sources alongside every page of rows cost each pagination/sort/filter-text re-render
+// 60-120ms, almost entirely 3 concurrent round-trips where only the page of rows varied.
 const META_CACHE_MS = 15000;
 const evTypesDaysCache = { evTypes: null, days: null, fetchedAt: 0, sub: undefined };
 async function fetchEvTypesAndDays(sub) {
@@ -283,32 +280,17 @@ async function fetchEvTypesAndDays(sub) {
   return { evTypes, days };
 }
 
-// ---------------------------------------------------------------------------
-// PAGED EVENT TABLE -- one parameterized panel.
-//
-// AllEvents and SubsystemPanel were the same panel twice: same filter toolbar,
-// same renderEventTable call, and byte-identical prev/next pager blocks, differing
-// only in endpoint (/api/events vs /api/subsystem), state key and a fixed `sub`.
-// Search was a THIRD copy of the same table over /api/search, whose `q` does the
-// same substring job /api/events already does via its own `q` filter -- so it is
-// folded in as this panel's text filter rather than a separate destination.
-//
-// Everything below is one function parameterized by {endpoint, subsystemFixedByRoute, tableId}.
-// Panel-visible behavior is deliberately unchanged; only the duplication is gone.
-// ---------------------------------------------------------------------------
-const pagedEventStateByPanel = new Map(); // stateKey -> {offset, limit, filters, current}
+const PAGE_SIZE = 100;
+const pagedEventStateByPanel = new Map();
 
 function pageStateForPanel(stateKey, subsystemFixedByRoute) {
   let st = pagedEventStateByPanel.get(stateKey);
-  if (!st) { st = { offset: 0, limit: 100, filters: {}, current: subsystemFixedByRoute ?? null }; pagedEventStateByPanel.set(stateKey, st); }
-  // A subsystem panel reused for a DIFFERENT subsystem resets paging/filters --
-  // carrying page 7 of `plugkit` into `hook` would silently show the wrong slice.
-  if (subsystemFixedByRoute != null && st.current !== subsystemFixedByRoute) { st.current = subsystemFixedByRoute; st.offset = 0; st.filters = {}; }
+  if (!st) { st = { offset: 0, limit: PAGE_SIZE, filters: {}, current: subsystemFixedByRoute ?? null }; pagedEventStateByPanel.set(stateKey, st); }
+  const reusedForADifferentSubsystem = subsystemFixedByRoute != null && st.current !== subsystemFixedByRoute;
+  if (reusedForADifferentSubsystem) { st.current = subsystemFixedByRoute; st.offset = 0; st.filters = {}; }
   return st;
 }
 
-// The prev/next/count strip, previously copy-pasted per panel. Always states the
-// real window and the real total -- never hides how many rows exist behind it.
 function PagerStrip(st, total, setBody) {
   const atStart = st.offset === 0;
   const atEnd = st.offset + st.limit >= total;
@@ -353,8 +335,6 @@ async function PagedEventTable({ endpoint, stateKey, tableId, subsystemFixedByRo
         placeholder: 'filter...', value: st.filters.q || '',
         oninput: (e) => setFilter('q', e.target.value),
       }),
-      // A subsystem-scoped table has its subsystem fixed by the route, so the
-      // selector would be a control that cannot change anything.
       subsystemFixedByRoute == null ? filterSelect('sub', 'all subsystems', subsystemList()) : null,
       filterSelect('event', 'all events', (evTypes || []).map(e => e.event)),
       filterSelect('day', 'all days', (days || []).map(d => d.day))),
@@ -380,16 +360,11 @@ export async function SubsystemPanel(sub, setBody) {
   }, setBody);
 }
 
-// ---------------------------------------------------------------------------
-// DEVIATIONS
-// ---------------------------------------------------------------------------
 const deviationsFilterState = { sessQuery: '' };
 export async function Deviations(setBody) {
   const r = await api('/api/deviations?limit=200');
   if (r.error) return Empty('Failed to load deviations: ' + r.error);
   const q = (deviationsFilterState.sessQuery || '').trim().toLowerCase();
-  // Client-side only: no new API call, filters the already-fetched arrays by
-  // session-id substring match before rendering.
   const recentAll = r.recent || [];
   const recent = q ? recentAll.filter(e => String(e.sess || '').toLowerCase().includes(q)) : recentAll;
   const bySessionEntries = Object.entries(r.bySession || {});
@@ -417,23 +392,6 @@ export async function Deviations(setBody) {
       })) : [Empty(q ? 'No deviations match filter.' : 'No deviations recorded -- agents are following the process.')])));
 }
 
-// ---------------------------------------------------------------------------
-// SESSIONS / PROCESS TREE
-// ---------------------------------------------------------------------------
-// Phase vocabulary comes from shared.js phaseUniverse()/PHASE_FALLBACK, which
-// prefers real server/graph.json data over any literal in this file.
-
-// Session detail Dialog: focus-trapped modal (ds Dialog primitive) opened by
-// clicking a SessionRow. Fetches the phase walk + full event list scoped to
-// that session (GET /api/process-tree?sess=) and the deviations scoped to the
-// same session (GET /api/deviations?sess=) -- both server-side filtered, not
-// client-side slicing of the whole-project payload.
-//
-// Param name: the route reads `store.processTree(q.sess, q.sessionId)` and
-// `deviations({sess, sessionId})`, both of which resolve `sess || sessionId`, so
-// BOTH spellings work and this was never a live bug. It is unified on `sess`
-// anyway -- ProcessTree already used `sess`, and two spellings for one parameter
-// is the kind of drift that becomes a real bug the moment one side is changed.
 const sessionDetailState = { open: false, sess: null, loading: false, tree: null, deviations: null, error: null };
 
 async function openSessionDetail(sess, setBody) {
@@ -505,16 +463,18 @@ export function SessionDetailDialog(setBody) {
   });
 }
 
-// Skill Layout and its drilldown moved to gui/live-agents.js, which rebuilt them
-// as the Live Agents manager surface (append-only feed, gate blockers, driving
-// prompt, per-agent controls). No live-agent state is rendered from this file.
+function phasesSkippedInReachedOrder(phasesReached) {
+  const skipped = [];
+  for (let i = 0; i < PHASE_FALLBACK.length - 1; i++) {
+    if (phasesReached[i + 1] && !phasesReached[i]) skipped.push(PHASE_FALLBACK[i]);
+  }
+  return skipped;
+}
 
-
-export async function Sessions(onOpen, setBody) {
-  // Refresh action re-invokes this exact same fetch (api('/api/sessions...'))
-  // via the caller's setBody, then re-renders through the panel's existing
-  // render path -- no new fetch abstraction, same convention every other
-  // panel's toolbar Refresh already uses.
+// `unusedOnOpen`: app.js passes a navigate-to-tree callback here, but a session row opens the
+// detail Dialog instead and never calls it. Dropping the parameter would silently re-bind
+// app.js's argument to setBody, so it stays named until app.js is changed to match.
+export async function Sessions(unusedOnOpen, setBody) {
   const refreshToolbar = setBody ? Toolbar(Btn({ children: 'Refresh', variant: 'ghost', onClick: () => setBody(true) })) : null;
   const r = await api('/api/sessions?limit=200');
   if (r.error) return h('div', {}, refreshToolbar, Empty('Failed to load sessions: ' + r.error));
@@ -522,9 +482,7 @@ export async function Sessions(onOpen, setBody) {
   return h('div', {}, h('div', { class: 'ds-panel' }, h('h2', {}, `Sessions (${r.total})`),
     refreshToolbar,
     ...r.rows.map(s => {
-      const gaps = [];
-      const ph = PHASE_FALLBACK;
-      for (let i = 0; i < ph.length - 1; i++) if (s.phases_reached[i + 1] && !s.phases_reached[i]) gaps.push(ph[i]);
+      const gaps = phasesSkippedInReachedOrder(s.phases_reached);
       return SessionRow({
         sessId: s.sess, events: s.events, verbs: s.dispatches, prd: `${s.prd_adds}/${s.prd_resolves}`,
         muts: `${s.mutable_adds}/${s.mutable_resolves}`, resid: `${s.residual_fires}f/${s.residual_skips}s`,
@@ -536,20 +494,21 @@ export async function Sessions(onOpen, setBody) {
     SessionDetailDialog(() => setBody && setBody(true)));
 }
 
-// Hierarchical grouping: sess (root) -> phase (group) -> individual node rows.
-// Every node carries `phase` (its parent-linking field on process-tree events);
-// group id shape is stable across renders so the expanded-Set survives re-fetch.
+const NO_PHASE_GROUP_LABEL = '(no phase)';
+const UNRANKED_PHASE_SORTS_LAST = 99;
+
 function buildProcessTreeHierarchy(sess, nodes) {
-  const groups = new Map(); // phase -> nodes[]
+  const nodesByPhase = new Map();
   for (const n of nodes) {
-    const phase = n.phase || '(no phase)';
-    if (!groups.has(phase)) groups.set(phase, []);
-    groups.get(phase).push(n);
+    const phase = n.phase || NO_PHASE_GROUP_LABEL;
+    if (!nodesByPhase.has(phase)) nodesByPhase.set(phase, []);
+    nodesByPhase.get(phase).push(n);
   }
-  const PHASE_ORDER = [...PHASE_FALLBACK, '(no phase)'];
-  const phaseKeys = [...groups.keys()].sort((a, b) => {
+
+  const PHASE_ORDER = [...PHASE_FALLBACK, NO_PHASE_GROUP_LABEL];
+  const phaseKeys = [...nodesByPhase.keys()].sort((a, b) => {
     const ia = PHASE_ORDER.indexOf(a), ib = PHASE_ORDER.indexOf(b);
-    return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
+    return (ia === -1 ? UNRANKED_PHASE_SORTS_LAST : ia) - (ib === -1 ? UNRANKED_PHASE_SORTS_LAST : ib);
   });
   return {
     id: 'root:' + sess,
@@ -557,8 +516,8 @@ function buildProcessTreeHierarchy(sess, nodes) {
     children: phaseKeys.map(phase => ({
       id: 'phase:' + sess + ':' + phase,
       label: phase,
-      tag: `${groups.get(phase).length} events`,
-      children: groups.get(phase).map((n, i) => ({
+      tag: `${nodesByPhase.get(phase).length} events`,
+      children: nodesByPhase.get(phase).map((n, i) => ({
         id: 'node:' + sess + ':' + phase + ':' + i,
         label: n.kind + (n.id ? ' ' + n.id : '') + (n.deviation ? ' ' + n.deviation : ''),
         tag: fmtTs(n.ts),
@@ -576,9 +535,6 @@ export async function ProcessTree(sess, sessList, onSelect, onOpenSession, onRef
     onchange: (e) => onSelect(e.target.value),
   }, h('option', { value: '' }, 'select session...'),
     ...(sessList || []).map(s => h('option', { value: s.sess, selected: s.sess === sess ? true : null }, `${s.sess.slice(0, 40)} -- ${fmtTs(s.last_ts)} -- ${s.events}ev${s.deviations ? ' !' + s.deviations : ''}`)));
-  // Refresh re-invokes the same api('/api/process-tree...') fetch below (via
-  // the caller's onRefresh, which forces app.js's existing fetch-and-rerender
-  // path) -- no new fetch abstraction.
   const refreshBtn = onRefresh ? Btn({ children: 'Refresh', variant: 'ghost', onClick: () => onRefresh(sess) }) : null;
   if (!sess) return h('div', { class: 'ds-panel' }, Toolbar( selector, refreshBtn), Empty('Select a session.'));
   const r = await api('/api/process-tree?sess=' + encodeURIComponent(sess));
@@ -588,12 +544,8 @@ export async function ProcessTree(sess, sessList, onSelect, onOpenSession, onRef
     : null;
 
   const root = buildProcessTreeHierarchy(sess, r.nodes || []);
-  // Collapsed by default below depth 1: root (depth 0) starts expanded so its
-  // phase groups (depth 1) show; phase groups themselves start collapsed.
-  if (!treeUiState.expanded.has(root.id) && !r._seeded) treeUiState.expanded.add(root.id);
-  // A local re-render hook: the caller (app.js) re-computes the whole body on
-  // most actions, but expand/collapse must not require a network refetch --
-  // stash a rerender callback the row handlers can call synchronously.
+  const rootStartsExpandedSoItsPhaseGroupsShow = !treeUiState.expanded.has(root.id);
+  if (rootStartsExpandedSoItsPhaseGroupsShow) treeUiState.expanded.add(root.id);
   let doRerender = () => {};
 
   function openSession(targetSess) {
@@ -615,8 +567,7 @@ export async function ProcessTree(sess, sessList, onSelect, onOpenSession, onRef
       onToggle: () => { if (expanded) treeUiState.expanded.delete(item.id); else treeUiState.expanded.add(item.id); treeUiState.focusId = item.id; doRerender(); },
       onSelect: () => {
         treeUiState.focusId = item.id;
-        if (item.node && item.node.id) openSession(sess);
-        else if (!hasKids && item.node) openSession(sess);
+        if (item.node) openSession(sess);
         else if (hasKids) { if (!expanded) treeUiState.expanded.add(item.id); else treeUiState.expanded.delete(item.id); }
         doRerender();
       },
@@ -636,9 +587,6 @@ export async function ProcessTree(sess, sessList, onSelect, onOpenSession, onRef
         : Empty('No process events for this session.'));
   }
 
-  // Re-render only this panel's container in place (no network refetch) so
-  // expand/collapse and roving focus feel instant; falls back to full
-  // computeBody() flow on next navigation since ui.bodyNode is recomputed there.
   function renderTreePanelInPlace() {
     const container = document.getElementById('panel-body');
     if (!container) return;
@@ -651,24 +599,19 @@ export async function ProcessTree(sess, sessList, onSelect, onOpenSession, onRef
   return build();
 }
 
-// ---------------------------------------------------------------------------
-// PRD EDITOR / MUTABLES EDITOR
-// ---------------------------------------------------------------------------
 const PRD_STATUSES = ['pending', 'in_progress', 'resolved', 'blocked'];
 const MUTABLE_STATUSES = ['unknown', 'resolved'];
-const fieldErrState = {}; // rowId:field -> error message, cleared per-field on successful commit
+const errorByRowIdAndField = {};
 
 async function editRow(kind, id, since, fields, setBody, errKey) {
   const path = kind === 'prd' ? '/api/prd/edit' : '/api/mutables/edit';
   const r = await apiPost(path, { id, since, ...fields }, { scoped: true });
   if (r.status === 409) { toast(`Conflict: ${id} was modified since read (mtime ${r.mtimeMs}). Reloading.`, true); setBody(true); return; }
   if (r.status !== 200) { toast(`Edit failed: ${r.error || r.status}`, true); return; }
-  if (errKey) delete fieldErrState[errKey];
+  if (errKey) delete errorByRowIdAndField[errKey];
   toast(`Saved ${id}`); setBody(true);
 }
 
-// Validates a field value before firing the network commit; returns an error
-// string (shown via PropertyField's hint slot) or null when the value is valid.
 export function validatePrdField(field, value) {
   if (field === 'text' && !String(value || '').trim()) return 'text is required';
   if (field === 'status' && !PRD_STATUSES.includes(value)) return `status must be one of: ${PRD_STATUSES.join(', ')}`;
@@ -680,21 +623,17 @@ export function validateMutableField(field, value) {
   return null;
 }
 
-// Exported so the Ctrl+K command palette can commit a PRD/mutable field edit
-// through the identical validate-then-POST /api/{prd,mutables}/edit path the
-// PRD/Mutables Editor panels' inline inputs use.
 export function commitField(kind, row, field, value, since, setBody, validate) {
   const errKey = `${kind}:${row.id}:${field}`;
   const err = validate(field, value);
-  if (err) { fieldErrState[errKey] = err; setBody(); return; }
-  delete fieldErrState[errKey];
+  if (err) { errorByRowIdAndField[errKey] = err; setBody(); return; }
+  delete errorByRowIdAndField[errKey];
   editRow(kind, row.id, since, { [field]: value }, setBody, errKey);
 }
 
-// severity is a real but minority field in gm's own live prd.yml (~0.5% of rows) --
-// no fixed vocabulary is enforced upstream (free-text scalar), so tone mapping only
-// special-cases the values actually witnessed (critical/high/medium/low) and falls
-// back to neutral for anything else rather than guessing at unseen spellings.
+// Measured against gm's own live prd.yml: severity is real but appears on only ~0.5% of rows,
+// and upstream enforces no vocabulary (free-text scalar). Only the values actually witnessed
+// are mapped; anything else falls back to neutral rather than guessing at unseen spellings.
 const SEVERITY_TONE = { critical: 'danger', high: 'danger', medium: 'neutral', low: 'positive' };
 
 export async function PrdEditor(setBody) {
@@ -706,8 +645,8 @@ export async function PrdEditor(setBody) {
   const since = r.mtimeMs;
   return h('div', { class: 'ds-panel' }, h('h2', {}, `PRD (${r.rows.length} rows)`),
     ...r.rows.map(row => {
-      const statusErr = fieldErrState[`prd:${row.id}:status`];
-      const textErr = fieldErrState[`prd:${row.id}:text`];
+      const statusErr = errorByRowIdAndField[`prd:${row.id}:status`];
+      const textErr = errorByRowIdAndField[`prd:${row.id}:text`];
       return h('div', { key: row.id, class: 'gm-propgrid-row' },
         PropertyGrid({ children: [
           PropertyField({ label: 'id', inline: true, children: h('span', { class: 'gm-inline-input gm-opacity-70' }, row.id) }),
@@ -735,8 +674,8 @@ export async function MutablesEditor(setBody) {
   const since = r.mtimeMs;
   return h('div', { class: 'ds-panel' }, h('h2', {}, `Mutables (${r.rows.length} rows)`),
     ...r.rows.map(row => {
-      const statusErr = fieldErrState[`mutables:${row.id}:status`];
-      const witnessErr = fieldErrState[`mutables:${row.id}:witness`];
+      const statusErr = errorByRowIdAndField[`mutables:${row.id}:status`];
+      const witnessErr = errorByRowIdAndField[`mutables:${row.id}:witness`];
       return h('div', {
         key: row.id, class: 'gm-propgrid-row' + (row.status === 'unknown' ? ' gm-row-danger-tint' : ''),
       },
@@ -751,12 +690,6 @@ export async function MutablesEditor(setBody) {
     }));
 }
 
-// ---------------------------------------------------------------------------
-// LIFECYCLE CONTROL
-// ---------------------------------------------------------------------------
-// Exported so the Ctrl+K command palette (app.js) can invoke the exact same
-// dispatch the Lifecycle Control panel's buttons call -- one handler, two
-// entry points, no click-simulation.
 export async function lifecycleAct(verb, payload) {
   const r = await apiPost('/api/lifecycle', { verb, payload }, { scoped: true });
   toast(r.status === 200 ? `Dispatched ${verb}` : `Dispatch failed: ${r.error || r.status}`, r.status !== 200);
@@ -768,23 +701,18 @@ export async function LifecycleControl(setBody) {
   if (unscoped) return unscoped;
   const [prd, mutables] = await Promise.all([api('/api/prd', { scoped: true }), api('/api/mutables', { scoped: true })]);
   if (prd.error || mutables.error) return Empty('Failed to load lifecycle state: ' + (prd.error || mutables.error));
-  const pending = (prd.rows || []).filter(r => r.status !== 'resolved').length;
-  const unknown = (mutables.rows || []).filter(r => r.status === 'unknown').length;
+  const pendingInReturnedPage = (prd.rows || []).filter(r => r.status !== 'resolved').length;
+  const unknownInReturnedPage = (mutables.rows || []).filter(r => r.status === 'unknown').length;
   return h('div', { class: 'ds-panel' }, h('h2', {}, 'Lifecycle Control'),
-    StatsGrid({ items: [{ val: pending, lbl: 'PRD pending' }, { val: unknown, lbl: 'mutables unknown', cls: unknown ? 'err-rate' : '' }] }),
+    StatsGrid({ items: [{ val: pendingInReturnedPage, lbl: 'PRD pending' }, { val: unknownInReturnedPage, lbl: 'mutables unknown', cls: unknownInReturnedPage ? 'err-rate' : '' }] }),
     h('div', { class: 'gm-mt-12' }, Toolbar(
       Btn({ children: 'Transition', onClick: () => lifecycleAct('transition', {}) }),
       Btn({ children: 'Instruction', onClick: () => lifecycleAct('instruction', {}) }),
       Btn({ children: 'Residual Scan', onClick: () => lifecycleAct('residual-scan', {}) }))));
 }
 
-// ---------------------------------------------------------------------------
-// CODESEARCH
-// ---------------------------------------------------------------------------
 const codesearchState = { q: '', hits: null, loading: false, error: null };
 export function Codesearch(setBody) {
-  // Codesearch dispatches into a specific project's spool, so an unscoped search
-  // has no target -- say that instead of rendering a search box that cannot work.
   const unscoped = ScopedPanelState({ panel: 'Codesearch', cwd: state.cwd });
   if (unscoped) return unscoped;
   return h('div', { class: 'ds-panel' }, h('h2', {}, 'Codesearch'),
@@ -799,8 +727,6 @@ export function Codesearch(setBody) {
           hit.snippet ? h('pre', { class: 'gm-json' }, hit.snippet) : JsonViewer({ value: hit, mode: 'highlight', maxHeight: '260px' })))))
   );
 }
-// Exported so the Ctrl+K command palette can trigger the exact same search
-// path as the Search panel's "Search" button, reusing codesearchState/setBody.
 export async function runCodesearch(setBody) {
   if (!codesearchState.q) return;
   codesearchState.loading = true; codesearchState.error = null; setBody();
@@ -818,21 +744,15 @@ export async function runCodesearch(setBody) {
   setBody();
 }
 
-// ---------------------------------------------------------------------------
-// LOCALIZED GM CALL CONSOLE
-// ---------------------------------------------------------------------------
-// The verb list is SERVER-PUBLISHED, not hardcoded. This file previously carried
-// a 27-verb literal while /api/capabilities publishes the authoritative allowlist
-// (92 verbs on the live route, measured) -- so two thirds of the verbs the server
-// would actually accept were unreachable from this console, and any verb gm added
-// later would stay invisible forever. shared.js verbAllowlist() returns the
-// fetched list, falling back to a 4-verb seed only until /api/capabilities lands.
+// Measured: /api/capabilities publishes 92 verbs. A 27-verb literal previously lived here, so
+// two thirds of what the server would accept was unreachable from this console.
+const DISPATCH_RESPONSE_TIMEOUT_MS = 10000;
+const DISPATCH_RESPONSE_POLL_MS = 500;
 const consoleState = { verb: null, payload: '{}', dispatched: null, polling: false, result: null };
 export function GmCallConsole(setBody) {
   const verbs = verbAllowlist();
-  // Default to the first published verb rather than pinning a literal, and keep a
-  // previously-chosen verb selected across re-renders even as the list grows.
-  if (!consoleState.verb || !verbs.includes(consoleState.verb)) consoleState.verb = verbs[0];
+  const selectionNoLongerPublished = !consoleState.verb || !verbs.includes(consoleState.verb);
+  if (selectionNoLongerPublished) consoleState.verb = verbs[0];
   return h('div', { class: 'ds-panel' }, h('h2', {}, 'Localized GM Call Console'),
     Toolbar(
       h('select', { value: consoleState.verb, onchange: (e) => { consoleState.verb = e.target.value; } },
@@ -843,8 +763,6 @@ export function GmCallConsole(setBody) {
     consoleState.dispatched ? h('p', { class: 'gm-muted-11' }, `Dispatched: ${consoleState.dispatched.verb} -> ${consoleState.dispatched.file || ''} ${consoleState.polling ? '(polling for response...)' : ''}`) : null,
     consoleState.result ? JsonViewer({ value: consoleState.result, mode: 'tree', copyable: true, maxHeight: '420px' }) : Empty('No dispatch yet.'));
 }
-// Exported so the Ctrl+K command palette can fire the exact same dispatch
-// as the GM Call Console's "Dispatch" button (same consoleState, same poll).
 export async function dispatchConsole(setBody) {
   let payload;
   try { payload = JSON.parse(consoleState.payload || '{}'); }
@@ -856,19 +774,16 @@ export async function dispatchConsole(setBody) {
   consoleState.result = null;
   setBody();
   const file = (r.file || '').split(/[\\/]/).pop();
-  const deadline = Date.now() + 10000;
+  const deadline = Date.now() + DISPATCH_RESPONSE_TIMEOUT_MS;
   const poll = async () => {
     const resp = await api(`/api/lifecycle/response?verb=${encodeURIComponent(consoleState.verb)}&file=${encodeURIComponent(file)}`, { scoped: true });
     if (resp.ok) { consoleState.polling = false; consoleState.result = resp.response; setBody(); return; }
     if (Date.now() >= deadline) { consoleState.polling = false; consoleState.result = { error: 'timed out waiting for response', tried: file }; setBody(); return; }
-    setTimeout(poll, 500);
+    setTimeout(poll, DISPATCH_RESPONSE_POLL_MS);
   };
   poll();
 }
 
-// ---------------------------------------------------------------------------
-// BROWSER SESSIONS
-// ---------------------------------------------------------------------------
 export async function BrowserSessions() {
   const unscoped = ScopedPanelState({ panel: "Browser Sessions", cwd: state.cwd });
   if (unscoped) return unscoped;
@@ -890,28 +805,9 @@ export async function BrowserSessions() {
         : Empty('No registered browser ports.')));
 }
 
-// CONVERSATION HISTORY -- removed (merged into ProcessTree).
-//
-// It fetched the SAME endpoint as ProcessTree (/api/process-tree?sess=) and then
-// filtered the result to a hardcoded 6-of-27 dispatch kinds. Every other kind the
-// server models -- dispatch, deviation, memorize, and anything gm adds later --
-// was silently dropped with nothing on screen saying rows had been withheld. That
-// is precisely the silent-omission failure the reporting invariant forbids, so the
-// panel is deleted rather than patched: ProcessTree already shows all kinds,
-// grouped by phase, over the identical data. app.js aliases `conversations` ->
-// `tree` so existing deep links still land on the superset view.
-
-// ---------------------------------------------------------------------------
-// CODEINSIGHT VISUAL -- squarified treemap of per-file size/complexity
-// ---------------------------------------------------------------------------
-
-// Squarified treemap layout: recursively slices the remaining rect, always
-// placing the next run of items along whichever axis keeps aspect ratios
-// closest to square. Pure function, no DOM/state -- items: [{name,size,
-// complexity,...}], returns [{name,complexity,x,y,w,h}].
-function treemap(items, x, y, w, h) {
+function squarifiedTreemap(items, x, y, w, h) {
   const out = [];
-  const worstRatio = (row, len) => {
+  const worstAspectRatio = (row, len) => {
     if (!row.length) return Infinity;
     let sum = 0, max = -Infinity, min = Infinity;
     for (const it of row) { sum += it._sz; if (it._sz > max) max = it._sz; if (it._sz < min) min = it._sz; }
@@ -948,7 +844,7 @@ function treemap(items, x, y, w, h) {
     let i = 0;
     while (i < queue.length) {
       const candidate = [...row, queue[i]];
-      if (row.length === 0 || worstRatio(candidate, short) <= worstRatio(row, short)) {
+      if (row.length === 0 || worstAspectRatio(candidate, short) <= worstAspectRatio(row, short)) {
         row = candidate; i++;
       } else break;
     }
@@ -963,16 +859,20 @@ function treemap(items, x, y, w, h) {
   return out;
 }
 
-// Green (low complexity) -> red (high complexity), linear-interpolated over
-// the observed [min,max] range of this project's items (falls back to a
-// fixed mid-scale point when every item has identical complexity).
+const LOW_COMPLEXITY_GREEN = { r: 60, g: 180, b: 60 };
+const HIGH_COMPLEXITY_RED = { r: 210, g: 50, b: 60 };
+const UNIFORM_COMPLEXITY_SCALE_POINT = 0.3;
+
 function complexityColor(val, min, max) {
   const span = max - min;
-  const t = span > 0 ? Math.max(0, Math.min(1, (val - min) / span)) : 0.3;
-  const r = Math.round(60 + t * (210 - 60));
-  const g = Math.round(180 - t * (180 - 50));
-  const b = 60;
-  return `rgb(${r},${g},${b})`;
+  const everyItemHasIdenticalComplexity = span <= 0;
+  const t = everyItemHasIdenticalComplexity
+    ? UNIFORM_COMPLEXITY_SCALE_POINT
+    : Math.max(0, Math.min(1, (val - min) / span));
+  const lerp = (from, to) => Math.round(from + t * (to - from));
+  return `rgb(${lerp(LOW_COMPLEXITY_GREEN.r, HIGH_COMPLEXITY_RED.r)},`
+    + `${lerp(LOW_COMPLEXITY_GREEN.g, HIGH_COMPLEXITY_RED.g)},`
+    + `${lerp(LOW_COMPLEXITY_GREEN.b, HIGH_COMPLEXITY_RED.b)})`;
 }
 
 const codeInsightUi = { selected: null };
@@ -988,7 +888,7 @@ export async function CodeInsightPanel(setBody) {
   const minC = complexities.length ? Math.min(...complexities) : 0;
   const maxC = complexities.length ? Math.max(...complexities) : 1;
   const W = 900, H = 420;
-  const rects = items.length ? treemap(items, 0, 0, W, H) : [];
+  const rects = items.length ? squarifiedTreemap(items, 0, 0, W, H) : [];
   const byName = new Map(items.map(it => [it.name, it]));
   const selected = codeInsightUi.selected ? byName.get(codeInsightUi.selected) : null;
 
@@ -1026,10 +926,6 @@ export async function CodeInsightPanel(setBody) {
         : [Empty('No sectioned codeinsight data.')])));
 }
 
-// ---------------------------------------------------------------------------
-// MEMORY GRAPH VISUAL -- force-directed SVG (no new deps; runForceLayout in
-// forcegraph.js drives node.x/node.y each rAF tick, this module only paints).
-// ---------------------------------------------------------------------------
 const NODE_R_MIN = 6, NODE_R_MAX = 10;
 const graphUiState = { handle: null, selectedId: null };
 
@@ -1037,16 +933,17 @@ export function stopMemoryGraphLayout() {
   if (graphUiState.handle) { graphUiState.handle.stop(); graphUiState.handle = null; }
 }
 
-// API payload is {nodes:[{key,text,namespace,mtime}], edges:[{id,src,dst,relation,weight,created_at}]}
-// (never changed here) -- normalize to the id/source/target shape runForceLayout expects.
-function toGraphModel(r) {
-  const nodes = (r.nodes || []).slice(0, 150).map(n => ({
-    id: n.key, label: `${n.namespace}/${n.key}`.slice(0, 28), namespace: n.namespace, text: n.text,
+const GRAPH_MAX_NODES = 150;
+const GRAPH_LABEL_MAX_CHARS = 28;
+
+function toShapeRunForceLayoutExpects(r) {
+  const nodes = (r.nodes || []).slice(0, GRAPH_MAX_NODES).map(n => ({
+    id: n.key, label: `${n.namespace}/${n.key}`.slice(0, GRAPH_LABEL_MAX_CHARS), namespace: n.namespace, text: n.text,
   }));
   const nodeIds = new Set(nodes.map(n => n.id));
-  const edges = (r.edges || []).filter(e => nodeIds.has(e.src) && nodeIds.has(e.dst))
+  const edgesBetweenRenderedNodes = (r.edges || []).filter(e => nodeIds.has(e.src) && nodeIds.has(e.dst))
     .map(e => ({ source: e.src, target: e.dst, relation: e.relation }));
-  return { nodes, edges };
+  return { nodes, edges: edgesBetweenRenderedNodes };
 }
 
 function neighborSet(edges, id) {
@@ -1066,7 +963,7 @@ export async function MemoryGraphPanel() {
   if (r.error) return Empty('Failed to load memory graph: ' + r.error);
   if (!r.nodes || !r.nodes.length) return Empty(r.note || 'No memory nodes found for this project.');
 
-  const { nodes, edges } = toGraphModel(r);
+  const { nodes, edges } = toShapeRunForceLayoutExpects(r);
   const width = 900, height = 520;
   graphUiState.selectedId = null;
 
@@ -1078,19 +975,18 @@ export async function MemoryGraphPanel() {
       id: 'memory-graph-svg',
     }));
 
-  // Defer the live simulation + SVG paint to right after mount: app.js's
-  // renderShell() does one synchronous applyDiff, so schedule on next tick
-  // once the <svg id="memory-graph-svg"> node actually exists in the DOM.
-  setTimeout(() => mountForceGraph(nodes, edges, width, height), 0);
+  const afterCallerAppliesThisVnodeToTheDom = 0;
+  setTimeout(() => mountForceGraph(nodes, edges, width, height), afterCallerAppliesThisVnodeToTheDom);
 
   return container;
 }
 
 function mountForceGraph(nodes, edges, width, height) {
   const svg = document.getElementById('memory-graph-svg');
-  if (!svg) return; // panel navigated away before mount fired
+  const panelNavigatedAwayBeforeMountFired = !svg;
+  if (panelNavigatedAwayBeforeMountFired) return;
 
-  let dragging = null; // {node, offsetX, offsetY}
+  let dragging = null;
 
   function paint() {
     if (!document.getElementById('memory-graph-svg')) { stopMemoryGraphLayout(); return; }
@@ -1122,7 +1018,7 @@ function mountForceGraph(nodes, edges, width, height) {
       if (dragging && dragging.node === n) cls += ' dragging';
       g.setAttribute('class', cls);
 
-      const r = NODE_R_MIN + Math.min(4, (n.label.length % 5));
+      const r = NODE_R_MIN + Math.min(NODE_R_MAX - NODE_R_MIN, (n.label.length % 5));
       const circle = document.createElementNS(svgNS, 'circle');
       circle.setAttribute('cx', n.x); circle.setAttribute('cy', n.y); circle.setAttribute('r', r);
       circle.setAttribute('fill', colorFor(n.namespace || 'default'));
