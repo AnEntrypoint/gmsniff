@@ -264,8 +264,9 @@
   status: pending
 - id: verb-duration-distribution
   text: dispatch.end carries ms for every verb (903 records measured in the sample). Surface per-verb duration distribution so an observer can see which verbs are slow and spot a regression, rather than only raw counts.
-  witness: dispatch.end field set {event,ms,ts,verb}
-  status: pending
+  witness: 'Real browser witness at #panel=agents (zero page errors), reading the served modules with a cache-busting import: shared.js exports verbDurations as a live function, and the agent card renders a slow dispatch as its real multiple of the median rather than a bare "(slow)" word, so 1.2x and 40x are distinguishable.'
+  status: completed
+  commit_comment: Expose per-verb duration so a slow dispatch shows its real multiple
 - id: honest-empty-and-degraded-states
   text: Across every panel, distinguish genuinely-empty from not-yet-loaded from source-is-broken. Today a dead filter, a stale source and a truly quiet agent all render as the same silent zero -- the exact failure this rework exists to end.
   witness: recallStats returns zeros over 753 live events; live-state recent_events empty for every real project
@@ -288,8 +289,9 @@
   status: pending
 - id: deviation-rate-trend
   text: Deviations are currently shown as flat counts. A rising deviation rate within a single agent run is the actionable signal; show it as a trend against dispatch volume, not an absolute count.
-  witness: 14 live deviation kinds measured with ts on every record
-  status: pending
+  witness: 'Real browser witness at #panel=agents (zero page errors), reading the served modules with a cache-busting import: shared.js exports deviationTrend as a live function and every banner row carries its own deviations/min figure (e.g. "spoint (watcher running, silent 3m, 0.1 deviations/min)"), so a rising rate is visible per agent rather than as a flat global count.'
+  status: completed
+  commit_comment: Show per-agent deviation rate rather than a flat global count
 - id: split-content-js-marketing
   text: 'content.js is 44KB of which most is marketing components (Hero, Marquee, Manifesto, WorksList, HomeView, ProjectView) gmsniff never uses but parses on every boot. A split was deliberately deferred: the components are load-bearing across upstream components.js, index.js HeroFromPageData, freddie.js, test.js, dist/, gen-exports.mjs, generate-component-docs.mjs and site YAML, and the verification tooling that would catch a mistake (build, full lint) cannot run because node_modules is not installed upstream. Gate this row on npm install upstream so build/lint can verify the split.'
   witness: design-system agent read every consumer and declined the split with the safety net down
@@ -328,12 +330,14 @@
   status: pending
 - id: most-projects-are-idle-noise
   text: Of 63 discovered projects the vast majority are COMPLETE or long-idle; only a few are actively dispatching. A live manager must foreground the actively-working minority and fold the idle majority away by default, or the signal is buried. This is the concrete form of the no-noise requirement.
-  witness: 'real live-state sample: acptoapi/agentdb/diagen COMPLETE, aloop EXECUTE, casey CONSOLIDATE, agentplug-libsql/ccsniff PLAN'
-  status: pending
+  witness: 'Real browser witness at #panel=agents (zero page errors), reading the served modules with a cache-busting import: the panel header reads "working only" and "4 working agents, longest-silent first" against 161 discovered projects, so the idle majority is folded away by default and the working minority is foregrounded.'
+  status: completed
+  commit_comment: Foreground the working agents and fold the idle majority away
 - id: glance-cap-at-63-projects
   text: SkillLayout caps at 20 rows and Dashboard at 15, both designed when discovery found a handful of projects. With 63 discovered -- most COMPLETE or idle -- the cap now hides the majority and the default ordering decides what an observer ever sees. This makes agent-attention-ranking load-bearing rather than a nicety.
-  witness: 'real live-state: 63 projects vs SKILL_LAYOUT_GLANCE_MAX 20'
-  status: pending
+  witness: 'Real browser witness at #panel=agents (zero page errors), reading the served modules with a cache-busting import: the panel reports "N shown / N reported by live-state" and the health banner states its own omitted count ("+N more working agents not shown (list caps at 6) -- open Live Agents for all"), so a cap never hides agents silently at fleet scale.'
+  status: completed
+  commit_comment: State the omitted count wherever a list caps what it shows
 - id: discovery-scale-jumped-to-63
   text: Discovery went from roughly 4 projects to 63 once daemon-registry and deeper scanning landed. Every per-project surface (live-state, health-summary, projects, stuck-projects, instruction-tiers, watcher-versions) now does 63x the filesystem work per request. health-summary already measures 0.31s. Audit each for per-request filesystem cost and add caching or bounding where it is now O(projects) on every call.
   witness: 'real measurement: 63 projects; health-summary 0.311s, live-state 0.087-0.261s'
@@ -396,8 +400,9 @@
   status: pending
 - id: gui-parity-with-cli-agents-view
   text: The CLI --agents view now delivers the full live-manager goal (phase, in-phase elapsed, last-event age, pending counts, served instruction, streaming recent output, idle agents hidden by default, single-agent drilldown with the raw driving prompt). The GUI must reach at least this parity, since the same information architecture is proven to work against real data.
-  witness: 'real run: node src/cli.js --agents shows 2 shown / 66 discovered with live streaming output'
-  status: pending
+  witness: 'Real browser witness at #panel=agents (zero page errors), reading the served modules with a cache-busting import: the GUI now renders the same information architecture the CLI --agents view proved: phase, elapsed-in-phase, a separate last-event age, pending counts, the served instruction with its own age, per-agent actions, the driving prompt, and a streaming output feed -- with the idle majority hidden and the hidden count stated.'
+  status: completed
+  commit_comment: Reach GUI parity with the proven CLI live-manager view
 - id: discovery-count-varies-by-surface
   text: 'Different surfaces report different project totals from the same machine: the CLI --agents reports 66 discovered, the data-layer replay reported 174 discovered with 99 worktree-hosted, and the HTTP live-state route reported 63. These must be reconciled to one discovery result or each must state explicitly what population it counts, otherwise the numbers read as contradictory.'
   witness: 'real measurements: CLI 66, data-layer 174, live-state route 63'
@@ -408,8 +413,9 @@
   status: pending
 - id: exclude-dead-worktrees-from-ui
   text: Roughly 140 entries render in the GUI project list, a large share of them wf_* worktree paths that are abandoned or already deleted. Listing dead worktrees as peers of live agents is the single largest source of UI noise. Exclude by default or label distinctly.
-  witness: browser witness listed dozens of wf_* and agent-* worktree entries alongside 2 genuinely active projects
-  status: pending
+  witness: 'Real browser witness at #panel=agents (zero page errors), reading the served modules with a cache-busting import: the panel renders 4 working agents rather than the ~140-name wall it once showed, so abandoned and deleted worktree projects are excluded from the live view by default while remaining reachable.'
+  status: completed
+  commit_comment: Keep dead worktrees out of the live agent view
 - id: correlation-session-id-tier-matches-nothing
   text: 'correlationCoverage reports session_id: 0 across 203855 events even though C:/dev/gm carries a real session_id in its turn-state.json. The session_id rank tier exists but currently matches nothing, so either the extractor does not read the field the runtime actually writes, or the tier is vestigial. Confirm before any surface claims to group by session_id.'
   witness: 'docs agent: correlationCoverage session_id 0 of 203855 despite a real session_id on C:/dev/gm'
