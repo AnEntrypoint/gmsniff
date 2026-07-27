@@ -52,6 +52,8 @@ So: report the measurement **and how old it is**, for **every** project, and let
 
 **A nullable measurement can invert its own meaning in a comparator.** The health banner sorted `staleSeconds == null` — "no events ever" — as *zero seconds silent*, so the most suspicious project sorted last. Any sort, min/max or average over a field that can be null needs an explicit decision: absent means zero, means `Infinity`, or must be excluded and reported separately. Never let the default numeric coercion decide.
 
+**A paged route cannot be counted client-side.** `/api/prd` and `/api/mutables` return at most `YAML_ROWS_LIMIT` rows alongside a true `total` and a `truncated` flag. Counting `r.rows` therefore reports a number silently capped at the page size: `LifecycleControl` displayed "0 PRD pending" for a project with 314 pending, because its 250-row page happened to contain none. Count from `total`, from a whole-file count another route already computes, or server-side — never from the rows a paged route handed you. And when a list caps what it displays, print the omitted count; three lists here truncated silently.
+
 ## Liveness has three distinct meanings
 
 Keep them separate; substituting one for another is the recurring bug.
