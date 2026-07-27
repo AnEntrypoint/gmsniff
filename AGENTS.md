@@ -18,6 +18,14 @@ Roughly 15% of watcher-log lines are `evt: {json}`; the remaining structured-tex
 
 Parse coverage is reported, not assumed: every replay carries `parse_stats` with `modeled_ratio` / `unmodeled_ratio`. A change that drops modeled coverage is a regression even if nothing throws. Do not "simplify" the parser to the JSON path only.
 
+## Comments are a liability when names and structure encode the same thing
+
+Write code that explains itself, and delete the comment that was compensating. A comment restating what the line does is a defect: rename the variable, extract the predicate, or name the constant until the code carries the meaning, then remove the prose. `spoofMarker` plus a comment explaining the spoof becomes `markerOnLineClaimingAnotherProjectsCwd` with no comment; a `[src, dest]` tuple list needing a comment to explain the tuple becomes a flat path list; a 26-line usage banner becomes a real `--help`.
+
+A comment is admissible only when it states something the code structurally **cannot**: a measurement taken against real data, a defect in another repo that this code works around, or an alternative that was tried and rejected. Those cost real investigation to obtain and the next reader reintroduces the bug without them. Everything else belongs in a name, and a rule binding future work belongs in this file rather than in a source comment.
+
+Any comment pass must be provably behavior-preserving: run `node test.js` and re-witness the affected surface before and after. A rename that misses one call site is a silent break.
+
 ## Report measurements, never bake in a verdict
 
 gmsniff observes; the reader judges. Do not add a route, field, or panel that decides something is an error and then acts on that decision — no invented severity scores, no threshold that omits a project from a result set, no `ok`/`degraded`/`critical` label standing in for the numbers behind it.
@@ -74,7 +82,9 @@ No test framework, no `test/` directory. `test.js` at repo root is the single, m
 
 ## gui/ds vendoring
 
-`gui/ds/` is vendored from the sibling repo `../anentrypoint-design` via `scripts/sync-ds.mjs` (byte-for-byte copy, listed file pairs in `FILES`). Never hand-edit a file under `gui/ds/` directly — the next `npm run sync:ds` silently overwrites it. Fix the file in `../anentrypoint-design` first, then `npm run sync:ds` to pull it down, then `npm run sync:ds:check` to confirm zero drift before committing.
+`gui/ds/` is vendored from the sibling repo `../anentrypoint-design` via `scripts/sync-ds.mjs` (byte-for-byte copy of the paths listed in `VENDORED_PATHS_RELATIVE_TO_BOTH_ROOTS`). Never hand-edit a file under `gui/ds/` directly — the next `npm run sync:ds` silently overwrites it. Fix the file in `../anentrypoint-design` first, then `npm run sync:ds` to pull it down, then `npm run sync:ds:check` to confirm zero drift before committing.
+
+Vendoring exists because the published package must run standalone: `gui/ds` ships as static files served verbatim, there is no bundler and no runtime dependency resolution, so a live filesystem import from a sibling checkout cannot work for an installed user. For the same reason the sync is deliberately **not** wired into `npm install`/`prepare` — that would make installing gmsniff require a sibling checkout. Vendor the raw unprefixed component sources, never the upstream `dist/` bundle (its classes are scoped under a prefix gmsniff does not use) and never via the package `exports` map (it does not expose these subpaths).
 
 **Vendoring a CSS import manifest means vendoring its targets.** `gui/ds/app-shell.css` is a manifest of `@import url('./src/css/app-shell/*.css')` — it contains no rules of its own. If those parts are absent, every rule it references is silently inert: no error, no console warning, only 404s and unstyled components that look like a design bug. When vendoring any file, follow its imports and vendor the whole closure, then confirm in the browser that the rules actually apply.
 

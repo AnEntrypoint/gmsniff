@@ -714,3 +714,59 @@
   text: /api/source simultaneously reports explicit_log_dir:true and sources.gm_log.explicit:false in the same payload for the same directory. Two flags describing one fact disagree, so neither can be trusted by a consumer. Reconcile to a single derived value.
   witness: real /api/source payload from a default GUI launch
   status: pending
+- id: comment-elimination-doctrine
+  text: 'Establish and apply the rule from the served entry prose: comments are a liability WHEN names and structure encode the same thing. The transform is not blanket deletion -- it is: if a comment restates what the code says, delete it and let the code say it (renaming or extracting until it does); if a comment records knowledge NOT recoverable from the code (a measured fact about real gm data, an upstream defect, a why-not-the-obvious-way), the code cannot encode it and the comment stays. Every file in src/, gui/, test.js and scripts/ gets this pass.'
+  witness: 'served entry.md Token Discipline: comments = liability when names+structure encode the same'
+  status: pending
+- id: strip-inline-restating-comments
+  text: 49 end-of-line comments across src/ and gui/ mostly restate the line they sit on -- JSON.parse(jsonPayload); // validate, // truncated/rotated, // pick up any lines already present. Each is either deletable outright or a signal the expression needs a name. Replace with a named intermediate or extracted predicate.
+  witness: 'measured: 49 inline comments, samples restate their own line'
+  status: pending
+- id: name-magic-values-from-comments
+  text: Constants documented by an adjacent comment should carry the meaning in the identifier instead. Audit every constant whose comment explains its unit, threshold meaning or provenance and fold that into the name or a typed wrapper.
+  witness: e.g. HEALTH_WINDOW_MS carries a trailing comment explaining it is the rolling deviation-rate window
+  status: pending
+- id: convert-rationale-comments-to-agents-md
+  text: Some surviving rationale is not local to one function but is a project-wide invariant, and AGENTS.md is the place present-tense invariants live. Move any comment that states a rule binding future work (rather than explaining this specific line) into AGENTS.md and delete it from the source.
+  witness: AGENTS.md already carries the invariants this rework established; several source comments restate them locally
+  status: pending
+- id: comment-pass-src-server
+  text: 'Comment pass over src/server.js: 488 comment lines of 2712, the largest absolute block. Includes long narrative headers explaining route rationale that belong in the route contract or AGENTS.md.'
+  witness: measured 488/2712
+  status: pending
+- id: comment-pass-src-index-watcher-correlation
+  text: Comment pass over src/index.js (169/688), src/watcher-log.js (141/530) and src/correlation.js (42/78 -- more than half the file). watcher-log.js carries measured-fact comments that must survive; correlation.js is mostly explanation of a ranking that the code should name.
+  witness: measured 169/688, 141/530, 42/78
+  status: pending
+- id: comment-pass-test-and-scripts
+  text: Comment pass over test.js (111/781) and scripts/sync-ds.mjs (39/165). Test comments describing what an assertion checks are exactly the recoverable kind -- the assertion message already carries it.
+  witness: measured 111/781 and 39/165
+  status: pending
+- id: no-new-comments-invariant
+  text: 'Record the rule in AGENTS.md so it binds future work rather than living in one commit: a comment is admissible only when it states something the code structurally cannot -- a measurement, an upstream defect, or a rejected alternative. Anything a name or extracted function could carry must be carried there instead.'
+  witness: AGENTS.md already holds the report-measurements-never-a-verdict invariant; this is the same class of standing rule
+  status: pending
+- id: preserve-non-recoverable-rationale
+  text: 'Explicitly protect the comments that must NOT be deleted: measured facts about real gm data (parse ratios, row counts, which tag a subsystem really emits), upstream gm defects gmsniff works around, and why-not-the-obvious-way notes. Code cannot encode a measurement or another repos bug. Deleting these loses knowledge that cost real investigation to obtain, and the next reader reintroduces the bug.'
+  witness: 'registry.js parseYamlRows comment records that gm live prd.yml has a legacy - title: row cluster -- unrecoverable from the code'
+  status: pending
+- id: comment-pass-src-cli
+  text: 'Comment pass over src/cli.js: 241 comment lines of 1813.'
+  witness: measured 241/1813
+  status: pending
+- id: verify-behavior-unchanged-after-comment-pass
+  text: 'A comment pass must be provably behavior-preserving: run the full root test.js before and after, boot the real server and re-issue the same requests, and re-witness the GUI in a real browser. A rename that misses one call site is a silent break, and comment removal touching the same lines makes review harder, so execution is the only acceptable proof.'
+  witness: node test.js currently passes end-to-end; the GUI live-agents panel is browser-witnessed
+  status: pending
+- id: comment-pass-src-registry
+  text: 'Comment pass over src/registry.js: 330 comment lines of 1066 -- the densest ratio in the tree. Much of it documents parse semantics that the parser itself should express through naming.'
+  witness: measured 330/1066
+  status: pending
+- id: extract-named-predicates-from-comments
+  text: The commonest recoverable shape is a comment explaining a bare boolean or arithmetic expression. Extract each to a named const or small function whose name carries the comment (e.g. a truncation check, a staleness comparison, a boundary test), so the condition reads as its own explanation.
+  witness: 'inline samples: // truncated/rotated guarding a size comparison, // validate guarding a JSON.parse'
+  status: pending
+- id: comment-pass-gui
+  text: 'Comment pass over gui/: app.js 187/764, live-agents.js 199/897, panels.js 163/1194, shared.js 131/363, honest-state.js 30/87, markdown.js 21/116, data.js 11/63, forcegraph.js 11/88.'
+  witness: measured per-file comment ratios across gui/
+  status: pending

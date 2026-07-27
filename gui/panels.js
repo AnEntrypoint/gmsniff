@@ -7,20 +7,21 @@
 import * as webjsx from 'webjsx';
 import { Chip, Badge, Pill, Btn } from 'ds/components/shell.js';
 import { PhaseWalk, BarRow, StatsGrid, SessionRow, DevRow, LiveLog } from 'ds/components/data-density.js';
-import { TreeView, TreeItem, PropertyGrid, PropertyField, Dialog, JsonViewer } from 'ds/components/editor-primitives.js';
+import { TreeView, TreeItem, PropertyGrid, PropertyField, Dialog, JsonViewer, ToolbarRow } from 'ds/components/editor-primitives.js';
 import { api, apiPost, fmtTs, state, toast } from './data.js';
 import { runForceLayout } from './forcegraph.js';
-import { basename, subsystemList, mergeObservedSubsystems, phaseUniverse, PHASE_FALLBACK } from './shared.js';
+import { basename, subsystemList, mergeObservedSubsystems, verbAllowlist, PHASE_FALLBACK } from './shared.js';
 import { HonestState, ScopedPanelState } from './honest-state.js';
 
 const h = webjsx.createElement;
 
-// `.gm-toolbar` row shared by every panel's filter/action strip. (ds ships
-// Toolbar/ToolbarRow, but they are chat-surface chrome with their own spacing
-// scale; this stays the gmsniff table-panel row.)
-function Toolbar(...actions) {
-  return h('div', { class: 'gm-toolbar' }, ...actions);
-}
+// The panel filter/action strip. This was a local `.gm-toolbar` div carrying a
+// comment claiming ds "doesn't ship" this shape -- factually wrong: ds
+// editor-primitives.js exports ToolbarRow with the identical rest-arg signature
+// (`ToolbarRow(...actions)`), explicitly documented there as covering the exact
+// case gmsniff hand-rolled. Now delegated, so the row gets ds's real toolbar
+// semantics (role="toolbar", wrapping layout) instead of a bare div.
+const Toolbar = ToolbarRow;
 
 export const SUB_COLORS = {
   hook: 'var(--purple, #bc8cff)', plugkit: 'var(--flame, #ff7b72)',
@@ -333,78 +334,101 @@ async function fetchEvTypesAndDays(sub) {
   return { evTypes, days };
 }
 
-const evPageState = { offset: 0, limit: 100, filters: {} };
-export async function AllEvents(setBody) {
-  const params = new URLSearchParams({ limit: evPageState.limit, offset: evPageState.offset });
-  for (const [k, v] of Object.entries(evPageState.filters)) if (v) params.set(k, v);
-  const [data, { evTypes, days }] = await Promise.all([
-    api('/api/events?' + params, { scoped: false }),
-    fetchEvTypesAndDays(),
-  ]);
-  const filterSelect = (id, label, opts, val) => h('select', {
-    onchange: (e) => { evPageState.filters[id] = e.target.value; evPageState.offset = 0; setBody(); },
-  }, h('option', { value: '' }, label), ...opts.map(o => h('option', { value: o, selected: o === val ? true : null }, o)));
-  const total = data.total || 0;
-  return h('div', { class: 'ds-panel' },
-    h('div', { class: 'gm-toolbar' },
-      h('input', { placeholder: 'filter...', value: evPageState.filters.q || '', oninput: (e) => { evPageState.filters.q = e.target.value; evPageState.offset = 0; setBody(); } }),
-      filterSelect('sub', 'all subsystems', subsystemList(), evPageState.filters.sub),
-      filterSelect('event', 'all events', (evTypes || []).map(e => e.event), evPageState.filters.event),
-      filterSelect('day', 'all days', (days || []).map(d => d.day), evPageState.filters.day)),
-    renderEventTable(data.rows, 'all-events', setBody),
-    h('div', { class: 'gm-pager' },
-      h('button', { disabled: evPageState.offset === 0 ? true : null, onclick: () => { evPageState.offset = Math.max(0, evPageState.offset - evPageState.limit); setBody(); } }, '<- prev'),
-      h('span', {}, total ? `${evPageState.offset + 1}-${Math.min(evPageState.offset + evPageState.limit, total)} of ${total}` : '0 of 0'),
-      h('button', { disabled: evPageState.offset + evPageState.limit >= total ? true : null, onclick: () => { evPageState.offset += evPageState.limit; setBody(); } }, 'next ->')));
+// ---------------------------------------------------------------------------
+// PAGED EVENT TABLE -- one parameterized panel.
+//
+// AllEvents and SubsystemPanel were the same panel twice: same filter toolbar,
+// same renderEventTable call, and byte-identical prev/next pager blocks, differing
+// only in endpoint (/api/events vs /api/subsystem), state key and a fixed `sub`.
+// Search was a THIRD copy of the same table over /api/search, whose `q` does the
+// same substring job /api/events already does via its own `q` filter -- so it is
+// folded in as this panel's text filter rather than a separate destination.
+//
+// Everything below is one function parameterized by {endpoint, fixedSub, tableId}.
+// Panel-visible behavior is deliberately unchanged; only the duplication is gone.
+// ---------------------------------------------------------------------------
+const pagedEventState = new Map(); // stateKey -> {offset, limit, filters, current}
+
+function pageStateFor(stateKey, fixedSub) {
+  let st = pagedEventState.get(stateKey);
+  if (!st) { st = { offset: 0, limit: 100, filters: {}, current: fixedSub ?? null }; pagedEventState.set(stateKey, st); }
+  // A subsystem panel reused for a DIFFERENT subsystem resets paging/filters --
+  // carrying page 7 of `plugkit` into `hook` would silently show the wrong slice.
+  if (fixedSub != null && st.current !== fixedSub) { st.current = fixedSub; st.offset = 0; st.filters = {}; }
+  return st;
 }
 
-const searchState = { q: '', sub: '', results: [] };
-export function Search(setBody) {
+// The prev/next/count strip, previously copy-pasted per panel. Always states the
+// real window and the real total -- never hides how many rows exist behind it.
+function Pager(st, total, setBody) {
+  const atStart = st.offset === 0;
+  const atEnd = st.offset + st.limit >= total;
+  return h('div', { class: 'gm-pager' },
+    h('button', {
+      disabled: atStart ? true : null,
+      onclick: () => { st.offset = Math.max(0, st.offset - st.limit); setBody(); },
+    }, '<- prev'),
+    h('span', {}, total ? `${st.offset + 1}-${Math.min(st.offset + st.limit, total)} of ${total}` : '0 of 0'),
+    h('button', {
+      disabled: atEnd ? true : null,
+      onclick: () => { st.offset += st.limit; setBody(); },
+    }, 'next ->'));
+}
+
+async function PagedEventTable({ endpoint, stateKey, tableId, fixedSub = null, heading = null }, setBody) {
+  const st = pageStateFor(stateKey, fixedSub);
+  const params = new URLSearchParams({ limit: st.limit, offset: st.offset });
+  if (fixedSub != null) params.set('sub', fixedSub);
+  for (const [k, v] of Object.entries(st.filters)) if (v) params.set(k, v);
+
+  const [data, { evTypes, days }] = await Promise.all([
+    api(endpoint + '?' + params, { scoped: false }),
+    fetchEvTypesAndDays(fixedSub ?? undefined),
+  ]);
+  if (data.error) return Failed(heading || 'events', data.error);
+
+  const setFilter = (key, value) => { st.filters[key] = value; st.offset = 0; setBody(); };
+  const filterSelect = (key, label, opts) => h('select', {
+    onchange: (e) => setFilter(key, e.target.value),
+  }, h('option', { value: '' }, label),
+    ...opts.map(o => h('option', { value: o, selected: o === st.filters[key] ? true : null }, o)));
+
+  const total = data.total || 0;
+  const rows = data.rows || [];
+  const filtering = Object.values(st.filters).some(Boolean);
+
   return h('div', { class: 'ds-panel' },
-    h('div', { class: 'gm-toolbar' },
+    heading ? h('h2', {}, heading) : null,
+    Toolbar(
       h('input', {
-        placeholder: 'search all events...', value: searchState.q,
-        onkeydown: (e) => { if (e.key === 'Enter') runSearch(setBody); },
-        oninput: (e) => { searchState.q = e.target.value; },
+        placeholder: 'filter...', value: st.filters.q || '',
+        oninput: (e) => setFilter('q', e.target.value),
       }),
-      h('select', { onchange: (e) => { searchState.sub = e.target.value; } },
-        h('option', { value: '' }, 'all subsystems'), ...subsystemList().map(s => h('option', { value: s }, s))),
-      Btn({ children: 'Search', onClick: () => runSearch(setBody) })),
-    searchState.results.length ? renderEventTable(searchState.results, 'search-results', setBody) : Empty('No search performed yet.'));
-}
-async function runSearch(setBody) {
-  const params = new URLSearchParams({ q: searchState.q });
-  if (searchState.sub) params.set('sub', searchState.sub);
-  const data = await api('/api/search?' + params);
-  if (data.error) { toast(`Search failed: ${data.error}`, true); searchState.results = []; setBody(); return; }
-  searchState.results = data.results || [];
-  if (!searchState.results.length) toast(`No results for "${searchState.q}"`);
-  else toast(`${searchState.results.length} result${searchState.results.length === 1 ? '' : 's'}`);
-  setBody();
+      // A subsystem-scoped table has its subsystem fixed by the route, so the
+      // selector would be a control that cannot change anything.
+      fixedSub == null ? filterSelect('sub', 'all subsystems', subsystemList()) : null,
+      filterSelect('event', 'all events', (evTypes || []).map(e => e.event)),
+      filterSelect('day', 'all days', (days || []).map(d => d.day))),
+    rows.length
+      ? renderEventTable(rows, tableId, setBody)
+      : Empty(
+          filtering ? 'No events match this filter.' : 'No events recorded.',
+          filtering ? 'filtered' : 'empty',
+          filtering ? `${total} row(s) matched the current filter across the whole source.` : undefined),
+    Pager(st, total, setBody));
 }
 
-const subPageState = { current: null, offset: 0, limit: 100, filters: {} };
+export async function AllEvents(setBody) {
+  return PagedEventTable({
+    endpoint: '/api/events', stateKey: 'all-events', tableId: 'all-events',
+  }, setBody);
+}
+
 export async function SubsystemPanel(sub, setBody) {
-  if (subPageState.current !== sub) { subPageState.current = sub; subPageState.offset = 0; subPageState.filters = {}; }
-  const params = new URLSearchParams({ sub, limit: subPageState.limit, offset: subPageState.offset });
-  for (const [k, v] of Object.entries(subPageState.filters)) if (v) params.set(k, v);
-  const [data, { evTypes, days }] = await Promise.all([
-    api('/api/subsystem?' + params),
-    fetchEvTypesAndDays(sub),
-  ]);
-  const total = data.total || 0;
-  return h('div', { class: 'ds-panel' }, h('h2', {}, sub),
-    h('div', { class: 'gm-toolbar' },
-      h('input', { placeholder: 'filter...', value: subPageState.filters.q || '', oninput: (e) => { subPageState.filters.q = e.target.value; subPageState.offset = 0; setBody(); } }),
-      h('select', { onchange: (e) => { subPageState.filters.event = e.target.value; subPageState.offset = 0; setBody(); } },
-        h('option', { value: '' }, 'all events'), ...(evTypes || []).map(e => h('option', { value: e.event }, e.event))),
-      h('select', { onchange: (e) => { subPageState.filters.day = e.target.value; subPageState.offset = 0; setBody(); } },
-        h('option', { value: '' }, 'all days'), ...(days || []).map(d => h('option', { value: d.day }, d.day)))),
-    renderEventTable(data.rows, 'subsystem-' + sub, setBody),
-    h('div', { class: 'gm-pager' },
-      h('button', { disabled: subPageState.offset === 0 ? true : null, onclick: () => { subPageState.offset = Math.max(0, subPageState.offset - subPageState.limit); setBody(); } }, '<- prev'),
-      h('span', {}, total ? `${subPageState.offset + 1}-${Math.min(subPageState.offset + subPageState.limit, total)} of ${total}` : '0 of 0'),
-      h('button', { disabled: subPageState.offset + subPageState.limit >= total ? true : null, onclick: () => { subPageState.offset += subPageState.limit; setBody(); } }, 'next ->')));
+  return PagedEventTable({
+    endpoint: '/api/subsystem', stateKey: 'subsystem', tableId: 'subsystem-' + sub,
+    fixedSub: sub, heading: sub,
+  }, setBody);
 }
 
 // ---------------------------------------------------------------------------
@@ -452,9 +476,15 @@ export async function Deviations(setBody) {
 
 // Session detail Dialog: focus-trapped modal (ds Dialog primitive) opened by
 // clicking a SessionRow. Fetches the phase walk + full event list scoped to
-// that session (GET /api/process-tree?sessionId=) and the deviations scoped
-// to the same session (GET /api/deviations?sessionId=) -- both server-side
-// filtered, not client-side slicing of the whole-project payload.
+// that session (GET /api/process-tree?sess=) and the deviations scoped to the
+// same session (GET /api/deviations?sess=) -- both server-side filtered, not
+// client-side slicing of the whole-project payload.
+//
+// Param name: the route reads `store.processTree(q.sess, q.sessionId)` and
+// `deviations({sess, sessionId})`, both of which resolve `sess || sessionId`, so
+// BOTH spellings work and this was never a live bug. It is unified on `sess`
+// anyway -- ProcessTree already used `sess`, and two spellings for one parameter
+// is the kind of drift that becomes a real bug the moment one side is changed.
 const sessionDetailState = { open: false, sess: null, loading: false, tree: null, deviations: null, error: null };
 
 async function openSessionDetail(sess, setBody) {
@@ -467,8 +497,8 @@ async function openSessionDetail(sess, setBody) {
   setBody();
   try {
     const [tree, deviations] = await Promise.all([
-      api('/api/process-tree?sessionId=' + encodeURIComponent(sess)),
-      api('/api/deviations?sessionId=' + encodeURIComponent(sess) + '&limit=200'),
+      api('/api/process-tree?sess=' + encodeURIComponent(sess)),
+      api('/api/deviations?sess=' + encodeURIComponent(sess) + '&limit=200'),
     ]);
     if (tree.error || deviations.error) {
       sessionDetailState.error = tree.error || deviations.error;
@@ -611,7 +641,7 @@ export async function ProcessTree(sess, sessList, onSelect, onOpenSession, onRef
   // the caller's onRefresh, which forces app.js's existing fetch-and-rerender
   // path) -- no new fetch abstraction.
   const refreshBtn = onRefresh ? Btn({ children: 'Refresh', variant: 'ghost', onClick: () => onRefresh(sess) }) : null;
-  if (!sess) return h('div', { class: 'ds-panel' }, h('div', { class: 'gm-toolbar' }, selector, refreshBtn), Empty('Select a session.'));
+  if (!sess) return h('div', { class: 'ds-panel' }, Toolbar( selector, refreshBtn), Empty('Select a session.'));
   const r = await api('/api/process-tree?sess=' + encodeURIComponent(sess));
   const gapsBlock = (r.gaps && r.gaps.length)
     ? h('div', { class: 'ds-panel gm-panel-danger' }, h('h2', { class: 'gm-text-danger' }, 'Gaps detected'),
@@ -660,7 +690,7 @@ export async function ProcessTree(sess, sessList, onSelect, onOpenSession, onRef
   function build() {
     if (!treeUiState.focusId) treeUiState.focusId = root.id;
     return h('div', { class: 'ds-panel' },
-      h('div', { class: 'gm-toolbar' }, selector, refreshBtn),
+      Toolbar( selector, refreshBtn),
       h('h2', {}, sess), PhaseWalk({ reached: r.phase_reached, gapKinds: [] }),
       gapsBlock,
       h('h2', { class: 'gm-mt-10' }, `Process Tree (${(r.nodes || []).length} events)`),
@@ -731,6 +761,8 @@ export function commitField(kind, row, field, value, since, setBody, validate) {
 const SEVERITY_TONE = { critical: 'danger', high: 'danger', medium: 'neutral', low: 'positive' };
 
 export async function PrdEditor(setBody) {
+  const unscoped = ScopedPanelState({ panel: "PRD Editor", cwd: state.cwd });
+  if (unscoped) return unscoped;
   const r = await api('/api/prd', { scoped: true });
   if (r.error) return Empty('Failed to load PRD: ' + r.error);
   if (!r.rows || !r.rows.length) return Empty('No PRD rows for this project.');
@@ -758,6 +790,8 @@ export async function PrdEditor(setBody) {
 }
 
 export async function MutablesEditor(setBody) {
+  const unscoped = ScopedPanelState({ panel: "Mutables Editor", cwd: state.cwd });
+  if (unscoped) return unscoped;
   const r = await api('/api/mutables', { scoped: true });
   if (r.error) return Empty('Failed to load mutables: ' + r.error);
   if (!r.rows || !r.rows.length) return Empty('No mutable rows for this project.');
@@ -793,16 +827,18 @@ export async function lifecycleAct(verb, payload) {
 }
 
 export async function LifecycleControl(setBody) {
+  const unscoped = ScopedPanelState({ panel: "Lifecycle Control", cwd: state.cwd });
+  if (unscoped) return unscoped;
   const [prd, mutables] = await Promise.all([api('/api/prd', { scoped: true }), api('/api/mutables', { scoped: true })]);
   if (prd.error || mutables.error) return Empty('Failed to load lifecycle state: ' + (prd.error || mutables.error));
   const pending = (prd.rows || []).filter(r => r.status !== 'resolved').length;
   const unknown = (mutables.rows || []).filter(r => r.status === 'unknown').length;
   return h('div', { class: 'ds-panel' }, h('h2', {}, 'Lifecycle Control'),
     StatsGrid({ items: [{ val: pending, lbl: 'PRD pending' }, { val: unknown, lbl: 'mutables unknown', cls: unknown ? 'err-rate' : '' }] }),
-    h('div', { class: 'gm-toolbar gm-mt-12' },
+    h('div', { class: 'gm-mt-12' }, Toolbar(
       Btn({ children: 'Transition', onClick: () => lifecycleAct('transition', {}) }),
       Btn({ children: 'Instruction', onClick: () => lifecycleAct('instruction', {}) }),
-      Btn({ children: 'Residual Scan', onClick: () => lifecycleAct('residual-scan', {}) })));
+      Btn({ children: 'Residual Scan', onClick: () => lifecycleAct('residual-scan', {}) }))));
 }
 
 // ---------------------------------------------------------------------------
@@ -810,8 +846,12 @@ export async function LifecycleControl(setBody) {
 // ---------------------------------------------------------------------------
 const codesearchState = { q: '', hits: null, loading: false, error: null };
 export function Codesearch(setBody) {
+  // Codesearch dispatches into a specific project's spool, so an unscoped search
+  // has no target -- say that instead of rendering a search box that cannot work.
+  const unscoped = ScopedPanelState({ panel: 'Codesearch', cwd: state.cwd });
+  if (unscoped) return unscoped;
   return h('div', { class: 'ds-panel' }, h('h2', {}, 'Codesearch'),
-    h('div', { class: 'gm-toolbar' },
+    Toolbar(
       h('input', { placeholder: 'search code/symbols...', value: codesearchState.q, oninput: (e) => { codesearchState.q = e.target.value; }, onkeydown: (e) => { if (e.key === 'Enter') runCodesearch(setBody); } }),
       Btn({ children: codesearchState.loading ? 'Searching...' : 'Search', disabled: codesearchState.loading, onClick: () => runCodesearch(setBody) })),
     codesearchState.error ? h('p', { class: 'gm-text-danger' }, codesearchState.error) : null,
@@ -844,18 +884,24 @@ export async function runCodesearch(setBody) {
 // ---------------------------------------------------------------------------
 // LOCALIZED GM CALL CONSOLE
 // ---------------------------------------------------------------------------
-const KNOWN_VERBS = ['instruction', 'transition', 'prd-add', 'prd-resolve', 'mutable-add', 'mutable-resolve',
-  'residual-scan', 'codesearch', 'recall', 'browser', 'exec_js', 'phase-status',
-  'git_status', 'git_log', 'git_diff', 'git_show', 'git_branch', 'git_add', 'git_commit',
-  'git_finalize', 'git_push', 'git_checkout', 'git_fetch', 'git_rm', 'git_revert', 'git_reset',
-  'memorize-fire', 'memorize-prune'];
-const consoleState = { verb: KNOWN_VERBS[0], payload: '{}', dispatched: null, polling: false, result: null };
+// The verb list is SERVER-PUBLISHED, not hardcoded. This file previously carried
+// a 27-verb literal while /api/capabilities publishes the authoritative allowlist
+// (92 verbs on the live route, measured) -- so two thirds of the verbs the server
+// would actually accept were unreachable from this console, and any verb gm added
+// later would stay invisible forever. shared.js verbAllowlist() returns the
+// fetched list, falling back to a 4-verb seed only until /api/capabilities lands.
+const consoleState = { verb: null, payload: '{}', dispatched: null, polling: false, result: null };
 export function GmCallConsole(setBody) {
+  const verbs = verbAllowlist();
+  // Default to the first published verb rather than pinning a literal, and keep a
+  // previously-chosen verb selected across re-renders even as the list grows.
+  if (!consoleState.verb || !verbs.includes(consoleState.verb)) consoleState.verb = verbs[0];
   return h('div', { class: 'ds-panel' }, h('h2', {}, 'Localized GM Call Console'),
-    h('div', { class: 'gm-toolbar' },
+    Toolbar(
       h('select', { value: consoleState.verb, onchange: (e) => { consoleState.verb = e.target.value; } },
-        ...KNOWN_VERBS.map(v => h('option', { value: v, selected: v === consoleState.verb ? true : null }, v))),
+        ...verbs.map(v => h('option', { value: v, selected: v === consoleState.verb ? true : null }, v))),
       Btn({ children: 'Dispatch', onClick: () => dispatchConsole(setBody) })),
+    h('p', { class: 'gm-muted-11' }, `${verbs.length} verb(s) published by /api/capabilities.`),
     h('textarea', { class: 'gm-textarea gm-h-80', oninput: (e) => { consoleState.payload = e.target.value; } }, consoleState.payload),
     consoleState.dispatched ? h('p', { class: 'gm-muted-11' }, `Dispatched: ${consoleState.dispatched.verb} -> ${consoleState.dispatched.file || ''} ${consoleState.polling ? '(polling for response...)' : ''}`) : null,
     consoleState.result ? JsonViewer({ value: consoleState.result, mode: 'tree', copyable: true, maxHeight: '420px' }) : Empty('No dispatch yet.'));
@@ -887,6 +933,8 @@ export async function dispatchConsole(setBody) {
 // BROWSER SESSIONS
 // ---------------------------------------------------------------------------
 export async function BrowserSessions() {
+  const unscoped = ScopedPanelState({ panel: "Browser Sessions", cwd: state.cwd });
+  if (unscoped) return unscoped;
   const r = await api('/api/browser-sessions', { scoped: true });
   if (r.error) return Empty('Failed to load browser sessions: ' + r.error);
   const sessions = Array.isArray(r.sessions) ? r.sessions : Object.entries(r.sessions || {}).map(([id, v]) => ({ id, ...(v || {}) }));
@@ -905,23 +953,16 @@ export async function BrowserSessions() {
         : Empty('No registered browser ports.')));
 }
 
-// ---------------------------------------------------------------------------
-// CONVERSATION HISTORY
-// ---------------------------------------------------------------------------
-export async function ConversationHistory(sess, sessList, onSelect) {
-  const selector = h('select', { value: sess || '', onchange: (e) => onSelect(e.target.value) },
-    h('option', { value: '' }, 'select session...'),
-    ...(sessList || []).map(s => h('option', { value: s.sess, selected: s.sess === sess ? true : null }, `${s.sess.slice(0, 40)} -- ${fmtTs(s.last_ts)}`)));
-  if (!sess) return h('div', { class: 'ds-panel' }, h('div', { class: 'gm-toolbar' }, selector), Empty('Select a session to view its dispatch timeline.'));
-  const r = await api('/api/process-tree?sess=' + encodeURIComponent(sess));
-  const entries = (r.nodes || []).filter(n => n.kind === 'instruction' || n.kind === 'transition' || n.kind === 'prd-add' || n.kind === 'prd-resolve' || n.kind === 'mutable-add' || n.kind === 'mutable-resolve');
-  return h('div', { class: 'ds-panel' }, h('div', { class: 'gm-toolbar' }, selector), h('h2', {}, `Conversation timeline: ${sess}`),
-    ...(entries.length ? entries.map((n, i) => h('div', { key: i, class: 'gm-list-row' },
-      h('span', { class: 'ts gm-mr-8' }, fmtTs(n.ts)),
-      h('strong', {}, n.kind), n.phase ? h('span', { class: 'gm-pill gm-ml-6' }, n.phase) : null,
-      n.id ? h('span', { class: 'gm-pill' }, n.id) : null))
-      : [Empty('No dispatch events recorded for this session.')]));
-}
+// CONVERSATION HISTORY -- removed (merged into ProcessTree).
+//
+// It fetched the SAME endpoint as ProcessTree (/api/process-tree?sess=) and then
+// filtered the result to a hardcoded 6-of-27 dispatch kinds. Every other kind the
+// server models -- dispatch, deviation, memorize, and anything gm adds later --
+// was silently dropped with nothing on screen saying rows had been withheld. That
+// is precisely the silent-omission failure the reporting invariant forbids, so the
+// panel is deleted rather than patched: ProcessTree already shows all kinds,
+// grouped by phase, over the identical data. app.js aliases `conversations` ->
+// `tree` so existing deep links still land on the superset view.
 
 // ---------------------------------------------------------------------------
 // CODEINSIGHT VISUAL -- squarified treemap of per-file size/complexity
@@ -1000,6 +1041,8 @@ function complexityColor(val, min, max) {
 const codeInsightUi = { selected: null };
 
 export async function CodeInsightPanel(setBody) {
+  const unscoped = ScopedPanelState({ panel: "CodeInsight", cwd: state.cwd });
+  if (unscoped) return unscoped;
   const r = await api('/api/codeinsight', { scoped: true });
   if (r.error) return Empty('No .codeinsight file found for this project (codeinsight has not run yet).');
   const summary = r.summary || {};
@@ -1079,6 +1122,8 @@ function neighborSet(edges, id) {
 }
 
 export async function MemoryGraphPanel() {
+  const unscoped = ScopedPanelState({ panel: "Memory Graph", cwd: state.cwd });
+  if (unscoped) return unscoped;
   stopMemoryGraphLayout();
   const r = await api('/api/memory-graph', { scoped: true });
   if (r.error) return Empty('Failed to load memory graph: ' + r.error);

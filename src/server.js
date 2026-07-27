@@ -1748,13 +1748,15 @@ function resolveScopedCwd(store, cwdParam) {
 //    (C:/dev/gm has none) and "prd.yml exists and is empty" -- indistinguishable to a client, so
 //    a missing store rendered as a satisfied one. `present` is stat-derived and separates them.
 function yamlRowsPayload(cwd, filename, reader, q) {
-  const filePath = path.join(cwd, '.gm', filename);
-  let present = false, fileBytes = null;
-  try { const st = fs.statSync(filePath); present = st.isFile(); fileBytes = st.size; } catch (_) {}
   const t0 = Date.now();
-  let mtimeMs = null, all = [], error = null;
-  try { const r = reader(cwd); mtimeMs = r.mtimeMs; all = r.rows || []; }
-  catch (e) { error = String(e?.message || e); }
+  // present/bytes come from the reader, which already stats the file to distinguish an ABSENT
+  // store from an empty one. Re-stat'ing here was a second, independent read of the same fact
+  // that could disagree with the reader's under concurrent writes.
+  let mtimeMs = null, all = [], error = null, present = false, fileBytes = null;
+  try {
+    const r = reader(cwd);
+    mtimeMs = r.mtimeMs; all = r.rows || []; present = !!r.present; fileBytes = r.bytes ?? null;
+  } catch (e) { error = String(e?.message || e); }
   const parseMs = Date.now() - t0;
   const offset = Number.isFinite(q?.offset) && q.offset > 0 ? q.offset : 0;
   const limit = Number.isFinite(q?.limit) && q.limit > 0

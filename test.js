@@ -52,8 +52,6 @@ assert.strictEqual(gui.status, 200, 'GUI / → 200');
 const html = await gui.text();
 assert(html.includes('gmsniff'), 'GUI has title');
 
-// --- Live feedback (SSE) regression ---
-// Use a dedicated temp logDir so we control appends without depending on real activity.
 const liveDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gmsniff-live-'));
 const liveDay = new Date().toISOString().slice(0, 10);
 fs.mkdirSync(path.join(liveDir, liveDay), { recursive: true });
@@ -86,7 +84,6 @@ await new Promise((resolve, reject) => {
     res.on('error', reject);
   });
   req.on('error', reject);
-  // wait for hello, then append, then wait for match
   (async () => {
     const helloDl = Date.now() + 3000;
     while (Date.now() < helloDl && !helloSeen) await new Promise(r => setTimeout(r, 50));
@@ -104,14 +101,8 @@ await new Promise((resolve, reject) => {
 await live.close();
 fs.rmSync(liveDir, { recursive: true, force: true });
 
-// --- Multi-project live fanout (server-side) ---
-// Two fake discovered projects, each with its own .gm/exec-spool/.watcher.log (evt: line
-// format, same shape gm-plugkit's watcher actually writes). GM_SPOOL_DIRS points
-// discoverSpoolLogs/MultiProjectWatcher at a dedicated temp root so this test is isolated
-// from any real projects on the machine. Verifies: concurrent per-project tailing, cwd
-// attribution preserved per event, dynamic appearance (a third project added after the
-// server/fanout already started) picked up without restart, and cwd-spoof resistance (a
-// crafted evt: line claiming a foreign cwd must be overridden by the real discovered cwd).
+// A watcher.log line's own `cwd` field is attacker-controlled: any project can write a line
+// claiming another project's cwd. Attribution must come from the discovered path instead.
 const fanoutRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gmsniff-fanout-'));
 function makeProject(name) {
   const proj = path.join(fanoutRoot, name);
@@ -164,17 +155,16 @@ await new Promise((resolve, reject) => {
     const markerB = 'FANOUT_B_' + Date.now();
     fs.appendFileSync(projA.logFp, `2026-07-06 evt: ${JSON.stringify({ ts: Date.now(), sub: 'plugkit', event: 'dispatch.end', marker: markerA })}\n`);
     fs.appendFileSync(projB.logFp, `2026-07-06 evt: ${JSON.stringify({ ts: Date.now(), sub: 'plugkit', event: 'dispatch.end', marker: markerB })}\n`);
-    // cwd-spoof attempt: crafted line claims cwd of project A while written into project B's log.
-    const spoofMarker = 'FANOUT_SPOOF_' + Date.now();
-    fs.appendFileSync(projB.logFp, `evt: ${JSON.stringify({ ts: Date.now(), sub: 'plugkit', event: 'dispatch.end', marker: spoofMarker, cwd: projA.proj })}\n`);
+    const markerOnLineClaimingAnotherProjectsCwd = 'FANOUT_SPOOF_' + Date.now();
+    fs.appendFileSync(projB.logFp, `evt: ${JSON.stringify({ ts: Date.now(), sub: 'plugkit', event: 'dispatch.end', marker: markerOnLineClaimingAnotherProjectsCwd, cwd: projA.proj })}\n`);
 
     const dl = Date.now() + 6000;
-    while (Date.now() < dl && !(fanoutReceived.some(e => e.marker === markerA) && fanoutReceived.some(e => e.marker === markerB) && fanoutReceived.some(e => e.marker === spoofMarker))) {
+    while (Date.now() < dl && !(fanoutReceived.some(e => e.marker === markerA) && fanoutReceived.some(e => e.marker === markerB) && fanoutReceived.some(e => e.marker === markerOnLineClaimingAnotherProjectsCwd))) {
       await new Promise(r => setTimeout(r, 100));
     }
     const evA = fanoutReceived.find(e => e.marker === markerA);
     const evB = fanoutReceived.find(e => e.marker === markerB);
-    const evSpoof = fanoutReceived.find(e => e.marker === spoofMarker);
+    const evSpoof = fanoutReceived.find(e => e.marker === markerOnLineClaimingAnotherProjectsCwd);
     assert(evA, `project A event not received (got ${fanoutReceived.length} events)`);
     assert(evB, `project B event not received (got ${fanoutReceived.length} events)`);
     assert.strictEqual(path.resolve(evA.cwd), projA.proj, 'project A event cwd attribution');
@@ -182,7 +172,6 @@ await new Promise((resolve, reject) => {
     assert(evSpoof, 'spoofed-cwd event not received');
     assert.strictEqual(path.resolve(evSpoof.cwd), projB.proj, 'spoofed cwd field must be overridden by the real discovered project B cwd, not the claimed project A cwd');
 
-    // Dynamic rediscovery: a third project appears on disk after the fanout already started.
     projC = makeProject('proj-c');
     process.env.GM_SPOOL_DIRS = [projA.proj, projB.proj, projC.proj].join(path.delimiter);
     const addedDl = Date.now() + 3000;
@@ -197,7 +186,6 @@ await new Promise((resolve, reject) => {
     while (Date.now() < cDl && !fanoutReceived.some(e => e.marker === markerC)) await new Promise(r => setTimeout(r, 100));
     assert(fanoutReceived.some(e => e.marker === markerC), 'newly-discovered project C event not delivered live without restart');
 
-    // Disappearance: delete project B's log file, expect project.removed within rediscovery window.
     fs.rmSync(projB.logFp, { force: true });
     process.env.GM_SPOOL_DIRS = [projA.proj, projC.proj].join(path.delimiter);
     const removedDl = Date.now() + 3000;
@@ -211,20 +199,11 @@ await new Promise((resolve, reject) => {
   })().catch(reject);
 });
 
-// /api/projects surfaces watching=true for a fanout-covered project (boot detection/surfacing).
 const projectsResp = await (await fetch(fanoutSrv.url + '/api/projects')).json();
 assert(Array.isArray(projectsResp.projects), '/api/projects returns projects array');
 
-// --- Skill Layout output feed (recent_sess/recent_events on /api/projects/live-state) ---
-// Real gm-plugkit .gm/next-step.md shape for project A so readLivePhaseState finds a live
-// phase, plus a real plugkit instruction.served event on project A's own watcher.log so
-// recentEventsForCwd's per-cwd activity index has something to surface. Project C (no
-// next-step.md, no matching-cwd events beyond its earlier dispatch.end marker) exercises the
-// zero-events/no-phase branch in the same request. The instruction body is deliberately >500
-// chars -- readLivePhaseState previously hard-capped instruction_excerpt at body.slice(0, 500),
-// silently clipping every real-world instruction (which routinely run several KB); this
-// regression-tests that the fix actually serves the full body, not just a longer-but-still-
-// truncated one.
+// The instruction body is over 500 chars on purpose: instruction_excerpt was once hard-capped
+// at body.slice(0, 500), silently clipping every real instruction (they run several KB).
 const longInstructionBody = 'test instruction line.\n'.repeat(30); // 24 * 30 = 720 chars, > 500
 fs.writeFileSync(path.join(projA.proj, '.gm', 'next-step.md'),
   '# Next step\n\nPhase: PLAN\nUpdated: ' + Date.now() + '\n\n---\n\n# PLAN\n\n' + longInstructionBody);

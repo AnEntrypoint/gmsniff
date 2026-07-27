@@ -1,30 +1,4 @@
 #!/usr/bin/env node
-// Repeatable, documented sync of gui/ds/ from the canonical anentrypoint-design
-// design SDK (sibling checkout). gmsniff ships gui/ds as static files served
-// verbatim by src/server.js's serveStatic() to the browser -- there is no
-// bundler and no npm dependency resolution at runtime, and gmsniff itself is
-// published as an installable package (bin: gmsniff, files: ["src/","gui/"])
-// that must run standalone via `npx gmsniff` with no sibling repo on disk.
-// A live filesystem import from ../anentrypoint-design is therefore not
-// viable in the shipped artifact -- this script is the sync step instead:
-// run it whenever anentrypoint-design's source changes and gui/ds needs to
-// pick up the update, then commit the copied files like any other source
-// change. It is intentionally NOT wired into `npm install`/`prepare` (that
-// would make installing gmsniff depend on a sibling checkout existing).
-//
-// Source file set mirrors exactly what gui/ds/ historically vendored:
-// anentrypoint-design's raw (unprefixed, unbundled) component/theme sources
-// and the vendor/webjsx runtime -- NOT dist/247420.js (single-file bundle,
-// classes scoped under .ds-247420, incompatible with gmsniff's unprefixed
-// ds- class usage) and NOT the package's `exports` map (it does not expose
-// these src/ subpaths for import).
-//
-// Usage: node scripts/sync-ds.mjs [--source <path-to-anentrypoint-design>] [--check]
-//   --source   override sibling repo path (default: ../anentrypoint-design
-//              resolved relative to this repo's root)
-//   --check    dry run: report drift (files differing from source) and exit
-//              non-zero if any are found, without writing anything
-
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -33,80 +7,85 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..');
 const DS_ROOT = path.join(REPO_ROOT, 'gui', 'ds');
 
+const USAGE = `sync-ds -- copy gui/ds/ from a sibling anentrypoint-design checkout
+
+  node scripts/sync-ds.mjs [--source <path>] [--check]
+
+  --source <path>  read from this checkout instead of ../anentrypoint-design
+  --check          report drift and exit non-zero without writing anything
+
+Never hand-edit gui/ds/: this script overwrites it byte-for-byte from the source
+checkout. Fix the file upstream, sync, then --check for zero drift.
+`;
+
 const args = process.argv.slice(2);
+if (args.includes('--help') || args.includes('-h')) {
+  process.stdout.write(USAGE);
+  process.exit(0);
+}
 const checkOnly = args.includes('--check');
 const sourceFlagIdx = args.indexOf('--source');
 const SOURCE_ROOT = sourceFlagIdx !== -1 && args[sourceFlagIdx + 1]
   ? path.resolve(args[sourceFlagIdx + 1])
   : path.resolve(REPO_ROOT, '..', 'anentrypoint-design');
 
-// [sourceRelPath, destRelPath] -- destRelPath relative to gui/ds/
-const FILES = [
-  ['src/components/content.js', 'src/components/content.js'],
-  ['src/components/data-density.js', 'src/components/data-density.js'],
-  ['src/components/editor-primitives.js', 'src/components/editor-primitives.js'],
-  ['src/components/overlay-primitives.js', 'src/components/overlay-primitives.js'],
-  ['src/components/shell.js', 'src/components/shell.js'],
-  ['src/components/theme-toggle.js', 'src/components/theme-toggle.js'],
-  // Live-agent-manager surface: SessionDashboard/SessionCard (per-agent stop /
-  // open / view + bulk selection), ContextPane, EmptyState/fmtFileSize, the
-  // form + interaction primitives, and the virtualizer LiveStream's 500-row
-  // render cap works around. Every import in this set resolves relatively
-  // within gui/ds (verified: zero bare specifiers in the transitive closure),
-  // so the bundler-free importmap in gui/index.html needs no new mapping.
-  ['src/components/sessions.js', 'src/components/sessions.js'],
-  ['src/components/context-pane.js', 'src/components/context-pane.js'],
-  ['src/components/files.js', 'src/components/files.js'],
-  ['src/components/form-primitives.js', 'src/components/form-primitives.js'],
-  ['src/components/interaction-primitives.js', 'src/components/interaction-primitives.js'],
-  ['src/virtual-scroll.js', 'src/virtual-scroll.js'],
-  // Leaf utilities the above import transitively -- no further dependencies.
-  ['src/locale.js', 'src/locale.js'],
-  ['src/i18n.js', 'src/i18n.js'],
-  ['src/debug.js', 'src/debug.js'],
-  ['src/theme.js', 'src/theme.js'],
-  // app-shell.css is only an @import manifest pointing at src/css/app-shell/*;
-  // vendoring it without those 17 sheets makes every rule 404 and silently
-  // dead (which is exactly what happened before -- PhaseWalk, StatTile, and
-  // every other data-density component rendered unstyled). The parts must
-  // stay listed alongside it.
-  ['app-shell.css', 'app-shell.css'],
-  ['colors_and_type.css', 'colors_and_type.css'],
-  ['editor-primitives.css', 'editor-primitives.css'],
-  // .ds-dash* / .ds-session* / .ds-context / status discs live here.
-  ['chat.css', 'chat.css'],
-  ['src/css/app-shell/base.css', 'src/css/app-shell/base.css'],
-  ['src/css/app-shell/topbar.css', 'src/css/app-shell/topbar.css'],
-  ['src/css/app-shell/primitives.css', 'src/css/app-shell/primitives.css'],
-  ['src/css/app-shell/panel-row.css', 'src/css/app-shell/panel-row.css'],
-  ['src/css/app-shell/hero-content.css', 'src/css/app-shell/hero-content.css'],
-  ['src/css/app-shell/responsive.css', 'src/css/app-shell/responsive.css'],
-  ['src/css/app-shell/chat-basic.css', 'src/css/app-shell/chat-basic.css'],
-  ['src/css/app-shell/files.css', 'src/css/app-shell/files.css'],
-  ['src/css/app-shell/catalog-theme.css', 'src/css/app-shell/catalog-theme.css'],
-  ['src/css/app-shell/chat-polish.css', 'src/css/app-shell/chat-polish.css'],
-  ['src/css/app-shell/sidebar-misc.css', 'src/css/app-shell/sidebar-misc.css'],
-  ['src/css/app-shell/states-interactions.css', 'src/css/app-shell/states-interactions.css'],
-  ['src/css/app-shell/loading-alerts.css', 'src/css/app-shell/loading-alerts.css'],
-  ['src/css/app-shell/responsive2-workspace.css', 'src/css/app-shell/responsive2-workspace.css'],
-  ['src/css/app-shell/row-print.css', 'src/css/app-shell/row-print.css'],
-  ['src/css/app-shell/data-density.css', 'src/css/app-shell/data-density.css'],
-  ['src/css/app-shell/kits-appended.css', 'src/css/app-shell/kits-appended.css'],
-  ['vendor/webjsx/applyDiff.js', 'vendor/webjsx/applyDiff.js'],
-  ['vendor/webjsx/attributes.js', 'vendor/webjsx/attributes.js'],
-  ['vendor/webjsx/constants.js', 'vendor/webjsx/constants.js'],
-  ['vendor/webjsx/createDOMElement.js', 'vendor/webjsx/createDOMElement.js'],
-  ['vendor/webjsx/createElement.js', 'vendor/webjsx/createElement.js'],
-  ['vendor/webjsx/elementTags.js', 'vendor/webjsx/elementTags.js'],
-  ['vendor/webjsx/factory.js', 'vendor/webjsx/factory.js'],
-  ['vendor/webjsx/index.js', 'vendor/webjsx/index.js'],
-  ['vendor/webjsx/jsx.js', 'vendor/webjsx/jsx.js'],
-  ['vendor/webjsx/jsx-dev-runtime.js', 'vendor/webjsx/jsx-dev-runtime.js'],
-  ['vendor/webjsx/jsx-runtime.js', 'vendor/webjsx/jsx-runtime.js'],
-  ['vendor/webjsx/package.json', 'vendor/webjsx/package.json'],
-  ['vendor/webjsx/renderSuspension.js', 'vendor/webjsx/renderSuspension.js'],
-  ['vendor/webjsx/types.js', 'vendor/webjsx/types.js'],
-  ['vendor/webjsx/utils.js', 'vendor/webjsx/utils.js'],
+const VENDORED_PATHS_RELATIVE_TO_BOTH_ROOTS = [
+  'src/components/content.js',
+  'src/components/data-density.js',
+  'src/components/editor-primitives.js',
+  'src/components/overlay-primitives.js',
+  'src/components/shell.js',
+  'src/components/theme-toggle.js',
+  'src/components/sessions.js',
+  'src/components/context-pane.js',
+  'src/components/files.js',
+  'src/components/form-primitives.js',
+  'src/components/interaction-primitives.js',
+  'src/virtual-scroll.js',
+  'src/locale.js',
+  'src/i18n.js',
+  'src/debug.js',
+  'src/theme.js',
+  // app-shell.css is an @import manifest with no rules of its own: vendoring it
+  // without every src/css/app-shell/ part it names leaves those rules 404 and
+  // silently inert, with no console error -- which is exactly what happened,
+  // and PhaseWalk/StatTile/LiveLog rendered unstyled for the life of the vendoring.
+  'app-shell.css',
+  'colors_and_type.css',
+  'editor-primitives.css',
+  'chat.css',
+  'src/css/app-shell/base.css',
+  'src/css/app-shell/topbar.css',
+  'src/css/app-shell/primitives.css',
+  'src/css/app-shell/panel-row.css',
+  'src/css/app-shell/hero-content.css',
+  'src/css/app-shell/responsive.css',
+  'src/css/app-shell/chat-basic.css',
+  'src/css/app-shell/files.css',
+  'src/css/app-shell/catalog-theme.css',
+  'src/css/app-shell/chat-polish.css',
+  'src/css/app-shell/sidebar-misc.css',
+  'src/css/app-shell/states-interactions.css',
+  'src/css/app-shell/loading-alerts.css',
+  'src/css/app-shell/responsive2-workspace.css',
+  'src/css/app-shell/row-print.css',
+  'src/css/app-shell/data-density.css',
+  'src/css/app-shell/kits-appended.css',
+  'vendor/webjsx/applyDiff.js',
+  'vendor/webjsx/attributes.js',
+  'vendor/webjsx/constants.js',
+  'vendor/webjsx/createDOMElement.js',
+  'vendor/webjsx/createElement.js',
+  'vendor/webjsx/elementTags.js',
+  'vendor/webjsx/factory.js',
+  'vendor/webjsx/index.js',
+  'vendor/webjsx/jsx.js',
+  'vendor/webjsx/jsx-dev-runtime.js',
+  'vendor/webjsx/jsx-runtime.js',
+  'vendor/webjsx/package.json',
+  'vendor/webjsx/renderSuspension.js',
+  'vendor/webjsx/types.js',
+  'vendor/webjsx/utils.js',
 ];
 
 function main() {
@@ -117,27 +96,27 @@ function main() {
   }
 
   let drifted = 0, missing = 0, copied = 0;
-  for (const [srcRel, destRel] of FILES) {
-    const srcPath = path.join(SOURCE_ROOT, srcRel);
-    const destPath = path.join(DS_ROOT, destRel);
+  for (const relPath of VENDORED_PATHS_RELATIVE_TO_BOTH_ROOTS) {
+    const srcPath = path.join(SOURCE_ROOT, relPath);
+    const destPath = path.join(DS_ROOT, relPath);
     if (!fs.existsSync(srcPath)) {
-      process.stderr.write(`sync-ds: MISSING source file ${srcRel}\n`);
+      process.stderr.write(`sync-ds: MISSING source file ${relPath}\n`);
       missing++;
       continue;
     }
     const srcBuf = fs.readFileSync(srcPath);
     const destBuf = fs.existsSync(destPath) ? fs.readFileSync(destPath) : null;
-    const same = destBuf && Buffer.compare(srcBuf, destBuf) === 0;
-    if (same) continue;
+    const alreadyByteIdentical = destBuf && Buffer.compare(srcBuf, destBuf) === 0;
+    if (alreadyByteIdentical) continue;
 
     if (checkOnly) {
-      process.stdout.write(`${destBuf ? 'DRIFT ' : 'NEW   '} ${destRel}\n`);
+      process.stdout.write(`${destBuf ? 'DRIFT ' : 'NEW   '} ${relPath}\n`);
       drifted++;
       continue;
     }
     fs.mkdirSync(path.dirname(destPath), { recursive: true });
     fs.writeFileSync(destPath, srcBuf);
-    process.stdout.write(`synced ${destRel}\n`);
+    process.stdout.write(`synced ${relPath}\n`);
     copied++;
   }
 
