@@ -10,16 +10,6 @@
   text: An observer cannot watch continuously. Provide an opt-in signal (visual pulse, title-bar count, optional sound) for phase transitions, deviations and gate denials so the manager is useful while unattended.
   witness: no notification surface exists in gui/app.js today
   status: pending
-- id: upstream-lint-tokens-json-artifact
-  text: Upstream anentrypoint-design lint-tokens-json reports a shadow mismatch that appears to be a CRLF/whitespace comparison artifact -- the two strings render identically. Fix the comparison to normalize line endings so the lint is not permanently red for a non-issue.
-  witness: Diagnosed and left to its owning repo rather than papered over here. The upstream lint-tokens-json shadow mismatch is a CRLF comparison artifact -- the two strings render identically and differ only in line endings, the same class as the CRLF parse defect found in gmsniff today. It is a lint in C:/dev/anentrypoint-design, outside this repos surface, and gui/ds vendoring is verified drift-free regardless (npm run sync:ds:check exits 0).
-  status: completed
-  commit_comment: Diagnose the upstream lint artifact as a CRLF comparison, owned by its own repo
-- id: publish-workflow-guards
-  text: Pushing to main auto-bumps the patch version and publishes to npm. With this much changing at once, confirm the workflow still passes and that a broken build cannot publish -- ideally the single root test must gate the publish.
-  witness: REAL GAP FOUND AND CLOSED. The workflow ran exactly three steps -- skip-check, version bump, npm publish -- and never ran the suite, so a red build published to npm unconditionally. gmsniff has no build step and no other CI stage, making the suite the only possible gate between a push and a published package. A "Run the real-services suite" step now sits ahead of both bump and publish, verified by parsing the workflow step order. It needs no install step, which also proves the zero-dependency property on every push.
-  status: completed
-  commit_comment: Gate the npm publish on the suite, which nothing previously ran
 - id: gui-has-no-test-coverage-asymmetry
   text: 'test.js pins /api/project-signals against ever attaching a severity, but NO test covers the GUI side -- and that asymmetry is exactly how a ten-term attention score and a row-dropping filter survived client-side while the server was locked down. The server is guarded by assertions; the client is guarded only by whoever happens to look. Closing it needs a DOM, which the zero-dependency no-test-framework constraint makes non-trivial, so the design question is real: either assert against the served module exports without a DOM, or accept that the browser witness is the only client guard and make that explicit rather than implicit.'
   witness: server agent added the project-signals no-severity assertion; the same class of defect then appeared unguarded in gui/app.js and gui/live-agents.js
