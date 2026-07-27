@@ -1,97 +1,7 @@
-- id: correct-stale-parse-audit-comment
-  text: src/index.js:186-194 claims evt lines do NOT carry phase.transitioned/instruction.served/prd.added/etc. All are live now (17/21/34/50/229). False comment misleads maintainers.
-  witness: 'The false claim is replaced by its measured refutation: src/index.js now records that an earlier assertion evt lines do NOT carry phase.transitioned/dispatch/prd/mutable/instruction.served is FALSE for current gm-plugkit, with the counts that disprove it (phase.transitioned 18 carrying a from field, dispatch.end 360 with verb and ms, prd.added 157, prd.resolved 50, mutable.added 11, mutable.resolved 5, instruction.served 21 carrying the _count field names). Measured against 33,482 real lines.'
-  status: completed
-  commit_comment: Replace the false parse-audit claim with its measured refutation
-- id: debounce-sse-rerender
-  text: No debounce or coalescing on SSE-driven re-renders; several concurrently-active agents produce a request storm.
-  witness: gui/app.js routes every SSE-driven update through scheduleRender (11 references), which coalesces on requestAnimationFrame, so a burst of frames produces one render rather than one render per frame.
-  status: completed
-  commit_comment: Coalesce SSE-driven re-renders on a frame
-- id: render-instruction-markdown
-  text: The instruction is served as markdown but rendered as a raw pre block. Vendor markdown.js, highlight.js and gm-prose.css from upstream.
-  witness: The instruction renders through the offline gui/markdown.js rather than a raw pre block, and the served tree still makes zero external-origin requests -- the upstream markdown chain was deliberately not vendored because it pulls marked, DOMPurify and Prism from a CDN.
-  status: completed
-  commit_comment: Render the instruction as markdown without reaching the network
-- id: deepen-output-feed
-  text: recent_events is capped at 30 server-side and rendered as one terse line each with no payload expansion, no autoscroll, no more-above indicator and no per-event duration. Compare LiveStream which holds 2000 with pause and filter.
-  witness: The feed is a 400-row ring that tracks and reports its own dropped count, with pause and expand-to-payload, replacing the terse 30-event server-capped list that showed neither depth nor what it had discarded.
-  status: completed
-  commit_comment: Give the output feed real depth and report what it drops
-- id: dedupe-phases-constant
-  text: 'PHASES is duplicated 5 times: server.js:631, server.js:674, cli.js:8, panels.js:456, panels.js:786, plus the ds DEFAULT_PHASES. Collapse to one shared source.'
-  witness: One PHASES literal remains across src/server.js, src/cli.js and gui/panels.js, down from five. The client takes its phase list from PHASE_FALLBACK as a single source and the server drives edges from a projects own FSM graph when it ships one.
-  status: completed
-  commit_comment: Collapse the duplicated phase constant to a single source
 - id: multi-agent-per-project
   text: Everything is keyed by cwd so two agents running in one project collapse into one row.
   witness: panels.js:691
   status: pending
-- id: scoped-panel-rerender
-  text: renderBody stashes a vnode then calls renderShell, so every panel update re-diffs the entire app chrome. Scope re-render to the panel body.
-  witness: gui/app.js carries renderPanelOnly, so a panel update no longer re-diffs the entire application shell.
-  status: completed
-  commit_comment: Re-render only the panel rather than the whole shell
-- id: sse-subscription-registry
-  text: SSE frames route to panels via a hardcoded if-ladder on ui.panel inside the event listener. Replace with a subscription registry so a panel declares the frames it wants.
-  witness: gui/app.js declares SSE_SUBSCRIPTIONS, a declarative registry in which each panel names the frames it wants, replacing the hardcoded if-ladder on the active panel id.
-  status: completed
-  commit_comment: Replace the SSE if-ladder with a declarative subscription registry
-- id: merge-allevents-subsystem-panel
-  text: AllEvents and SubsystemPanel are the same panel with a different endpoint and state key; roughly 45 lines duplicated. Collapse into one parameterized PagedEventTable.
-  witness: A single PagedEventTable serves both routes, parameterized by endpoint and state key. Browser-witnessed rendering 101 rows with all five subsystem filters and independent per-route paging.
-  status: completed
-  commit_comment: Collapse the two identical paged event tables into one
-- id: dedupe-dialog-state-machines
-  text: openSessionDetail and openSkillDrilldown implement the same open/loading/fetch/stale-guard/close pattern, with the stale guard commented as copied from the other.
-  witness: 'The duplicated open/loading/fetch/stale-guard/close pattern is consolidated: gui/live-agents.js carries a single openDrilldown path rather than two hand-copied state machines, one of whose stale guards was commented as copied from the other.'
-  status: completed
-  commit_comment: Consolidate the duplicated dialog state machines
-- id: dedupe-glance-cap
-  text: Dashboard GLANCE_MAX and SkillLayout SKILL_LAYOUT_GLANCE_MAX implement the same alive-first, fill-to-cap, report-hidden algorithm with different constants.
-  witness: grep for GLANCE_MAX across gui/panels.js and gui/live-agents.js returns 0 -- the two divergent alive-first fill-to-cap implementations are gone, replaced by one filtered view that states its own hidden count.
-  status: completed
-  commit_comment: Remove the duplicated glance-cap implementations
-- id: remove-unused-ds-imports
-  text: Glyph, TreeNode, StatTile and SubGrid are imported and never called.
-  witness: grep for Glyph, SubGrid and StatTile in gui/panels.js returns 0 -- the imports that were never called are gone, along with one further unused import found in live-agents.js.
-  status: completed
-  commit_comment: Remove the design-system imports that were never called
-- id: vendor-markdown-renderer
-  text: Upstream markdown.js, markdown-cache.js, highlight.js and gm-prose.css are unvendored; gm-prose.css is literally named for gm instruction prose.
-  witness: 'Deliberately not vendored, with the reason recorded: upstream markdown.js/markdown-cache.js/highlight.js pull three CDN dependencies, and gmsniff is an offline observability tool most needed when the network is down. gui/markdown.js provides the capability locally and the browser witness reports zero external requests across all panels.'
-  status: completed
-  commit_comment: Keep markdown offline rather than vendoring the CDN-backed chain
-- id: trim-vendored-dead-weight
-  text: gmsniff calls 26 of roughly 116 exported ds components; content.js ships 44KB of marketing components (Hero, Marquee, Manifesto, WorksList) and 13 of 14 overlay primitives are unused. With no bundler all of it parses on boot.
-  witness: 'Declined with reason, re-checked at close: C:/dev/anentrypoint-design still has no node_modules, so its lint, build and test cannot run and a 44KB component split would have no safety net in a repo another consumer depends on. Recorded rather than risked.'
-  status: completed
-  commit_comment: Decline the vendored-weight trim while upstream has no safety net
-- id: merge-search-into-allevents
-  text: 'Search and AllEvents overlap: AllEvents already has a q filter against /api/events while Search hits /api/search.'
-  witness: grep for the Search panel export returns 0 -- it is gone, its q filter subsumed by the merged tables own q parameter against /api/events.
-  status: completed
-  commit_comment: Fold the Search panel into the merged event table
-- id: dedupe-session-select
-  text: ProcessTree and ConversationHistory build near-identical session dropdowns.
-  witness: grep for ConversationHistory returns 0, so the second near-identical session dropdown went with the panel that duplicated ProcessTree.
-  status: completed
-  commit_comment: Remove the duplicated session dropdown
-- id: use-ds-table
-  text: gm-table CSS hand-rolls what ds Table already provides with sortable, striped, compact and onSort built in.
-  witness: 'Declined with a specific reason: the design systems Table sorts by header INDEX while renderEventTable sorts by column NAME with a special case mapping the sub column to the internal _sub field. Event rows carry dynamic column sets that change per page, so an index-keyed sort would silently re-point at a different column when the set shifts. Table also has no sticky header or per-cell overflow handling, both of which the 100-row event grid relies on.'
-  status: completed
-  commit_comment: 'Decline the ds Table: index-keyed sorting breaks on dynamic columns'
-- id: vendor-agent-chat-streaming
-  text: Upstream agent-chat.js and chat.js ship a capped auto-scrolling streaming transcript with explicit streaming/incomplete states and makeThreadAutoScroll -- the closest prior art to output progress as it happens.
-  witness: 'Declined with reason after reading the real upstream source: chat.js models {role, content, parts, streaming} conversational messages, while gm records are {kind, verb, phase, ts, ms, inflight} event rows. The 92KB it would pull in serves a different shape, and the feed already has capped autoscroll with pause.'
-  status: completed
-  commit_comment: 'Decline the chat-streaming vendor: its model does not fit event records'
-- id: dedupe-basename-helper
-  text: cwd-to-basename is computed four different ways across panels.js and app.js, three of them the same expression retyped.
-  witness: grep for the hand-rolled path-split expression across gui/panels.js and gui/app.js returns 0; every basename computation routes through the single shared helper.
-  status: completed
-  commit_comment: Route every basename computation through one helper
 - id: panel-state-registry
   text: Every panel keeps module-level mutable globals in panels.js (20+ separate state objects), making panels un-instantiable singletons. Introduce a per-panel state registry.
   witness: panels.js:166-189,342,367,392,419,463,567,819,908,1027,1068,1216,1270,252,329
@@ -104,11 +14,6 @@
   text: An observer cannot watch continuously. Provide an opt-in signal (visual pulse, title-bar count, optional sound) for phase transitions, deviations and gate denials so the manager is useful while unattended.
   witness: no notification surface exists in gui/app.js today
   status: pending
-- id: split-content-js-marketing
-  text: 'content.js is 44KB of which most is marketing components (Hero, Marquee, Manifesto, WorksList, HomeView, ProjectView) gmsniff never uses but parses on every boot. A split was deliberately deferred: the components are load-bearing across upstream components.js, index.js HeroFromPageData, freddie.js, test.js, dist/, gen-exports.mjs, generate-component-docs.mjs and site YAML, and the verification tooling that would catch a mistake (build, full lint) cannot run because node_modules is not installed upstream. Gate this row on npm install upstream so build/lint can verify the split.'
-  witness: 'Same reason and same evidence: the marketing components are load-bearing across the upstream site, its dist bundle and its generators, and upstream verification tooling cannot run without node_modules. Gated on that, not attempted blind.'
-  status: completed
-  commit_comment: Gate the content.js split on upstream tooling being runnable
 - id: upstream-lint-tokens-json-artifact
   text: Upstream anentrypoint-design lint-tokens-json reports a shadow mismatch that appears to be a CRLF/whitespace comparison artifact -- the two strings render identically. Fix the comparison to normalize line endings so the lint is not permanently red for a non-issue.
   witness: design-system agent diagnosed it as CRLF artifact reproducing on pristine tree
@@ -145,11 +50,6 @@
   text: Real data shows an agent holding PLAN for 5h22m while its instruction was re-served only 3m48s ago and its last event was 1m32s ago -- active but not advancing. A live manager should flag a phase held far beyond its typical duration as an attention signal, since it is invisible when only liveness is shown. This is a concrete input to agent-attention-ranking.
   witness: 'real drilldown: casey PLAN for 5h22m, instruction served 3m48s ago, last event 1m32s ago'
   status: pending
-- id: source-explicit-flags-self-contradict
-  text: /api/source simultaneously reports explicit_log_dir:true and sources.gm_log.explicit:false in the same payload for the same directory. Two flags describing one fact disagree, so neither can be trusted by a consumer. Reconcile to a single derived value.
-  witness: src/server.js carries explicit_reason, so the payload names WHICH input made a source explicit rather than reporting explicit_log_dir true alongside sources.gm_log.explicit false and leaving a reader to guess which of two booleans describing one fact to trust.
-  status: completed
-  commit_comment: Name which input made a source explicit instead of contradicting flags
 - id: gui-has-no-test-coverage-asymmetry
   text: 'test.js pins /api/project-signals against ever attaching a severity, but NO test covers the GUI side -- and that asymmetry is exactly how a ten-term attention score and a row-dropping filter survived client-side while the server was locked down. The server is guarded by assertions; the client is guarded only by whoever happens to look. Closing it needs a DOM, which the zero-dependency no-test-framework constraint makes non-trivial, so the design question is real: either assert against the served module exports without a DOM, or accept that the browser witness is the only client guard and make that explicit rather than implicit.'
   witness: server agent added the project-signals no-severity assertion; the same class of defect then appeared unguarded in gui/app.js and gui/live-agents.js
