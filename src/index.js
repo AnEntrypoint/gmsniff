@@ -271,16 +271,12 @@ export function replayWatcherLogAudited(fp, cwd) {
 }
 
 export const GM_TOOLS_DIR = process.env.GM_TOOLS_DIR || path.join(os.homedir(), '.gm-tools');
+export const AGENTPLUG_DIR = process.env.AGENTPLUG_DIR || path.join(os.homedir(), '.agentplug');
 
-// A DISCOVERY HINT, never a liveness list. MEASURED on a real machine: only 3 of its 12 entries
-// still exist on disk (the other 9 are deleted spoint worktrees and a removed C:\dev\test),
-// because the file is append-only and never self-prunes. Its value is that it reaches deep
-// worktree paths a one-level readdir cannot see (real example:
-// C:\dev\spoint\.claude\worktrees\wf_26bd1b5f-888-1); discoverSpoolLogs filters for real existence.
 export function readDaemonRegistry({ existingOnly = false } = {}) {
   let raw;
   try {
-    raw = fs.readFileSync(path.join(GM_TOOLS_DIR, 'daemon-registry.txt'), 'utf8')
+    raw = fs.readFileSync(path.join(AGENTPLUG_DIR, 'daemon-registry.txt'), 'utf8')
       .split('\n').map(s => s.trim()).filter(Boolean);
   } catch (_) { return []; }
   if (!existingOnly) return raw;

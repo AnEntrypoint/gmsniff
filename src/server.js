@@ -5,7 +5,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import {
   GmLogWatcher, MultiProjectWatcher, replayAll, SUBSYSTEMS, DEFAULT_LOG_DIR, EVENT_SCHEMA_VERSION,
-  correlationOf, correlationCoverage, GM_TOOLS_DIR, replayAllAudited, sourceStaleness,
+  correlationOf, correlationCoverage, AGENTPLUG_DIR, replayAllAudited, sourceStaleness,
 } from './index.js';
 import { pairDispatches } from './watcher-log.js';
 import {
@@ -547,13 +547,10 @@ function _readServedVersion(cwd) {
   }
 }
 
-// ~/.gm-tools/daemon-status.json's ts is observed DAYS stale on this machine while dispatches
-// are actively firing -- a real anomaly, hence staleness is an explicit reported boolean rather
-// than something a consumer has to notice.
 const DAEMON_HEARTBEAT_STALE_MS = parseInt(process.env.GM_DAEMON_STALE_MS, 10) || 10 * 60 * 1000;
 
 function readDaemonStatusGlobal() {
-  const fp = path.join(GM_TOOLS_DIR, 'daemon-status.json');
+  const fp = path.join(AGENTPLUG_DIR, 'daemon-status.json');
   const j = readJsonFile(fp);
   if (!j) return { present: false, pid: null, ts: null, active_projects: null, age_ms: null, stale: true, alert: null };
   const ts = Number.isFinite(j.ts) ? j.ts : null;
@@ -1855,7 +1852,7 @@ const API_ROUTES = [
   { path: '/api/stream', method: 'GET', params: ['Last-Event-ID header (or ?last_event_id=)'], response: 'text/event-stream. EVERY frame carries "id: <n>" (monotonic) so a reconnect resumes exactly where it left off. Frame kinds: "hello" {server_seq, heartbeat_ms, ring_size, replayed, gap, resumed_from, source} sent first on every connection (gap:true means the requested Last-Event-ID fell out of the ring and the client MUST refetch /api/projects/live-state); "event" (raw normalized event); "agent.output" {cwd, run, nodes[], since_ts, until_ts} — INCREMENTAL per-agent output the client APPENDS instead of refetching, node shape identical to live-state recent_events; "project.added"; "project.removed"; "project.phase-changed"; "error". Heartbeat is an SSE comment line ": hb <ms> seq=<n>" every GM_SSE_HEARTBEAT_MS (default 15000), ignored by EventSource message dispatch.' },
   { path: '/api/projects/instruction', method: 'GET', params: ['cwd'], response: '{cwd, present, phase, skill, instruction_key, instruction_heading, instruction_excerpt (FULL body), instruction_hash, instruction_tier, instruction_source_file, instruction_source_repo, instruction_auto_provisioned, updated_ts, stale, unparseable, last_prompt}. The drilldown source — live-state list mode deliberately omits the multi-KB body.' },
   { path: '/api/source', method: 'GET', params: [], response: '{selected, archive_used, explicit_log_dir, log_dir, window_ms, window_start, total_in_window, sources, warnings, population, project_count, event_count, newest_event_ts, newest_age_ms, stale, warning, daemon}. Provenance + window bound for every aggregate number.' },
-  { path: '/api/daemon', method: 'GET', params: [], response: '{present, pid, pid_alive, ts, active_projects, age_ms, stale, stale_threshold_ms, alert}. Machine-global shared-daemon heartbeat (~/.gm-tools/daemon-status.json); its ts is observed days stale while dispatches fire, hence the explicit alert.' },
+  { path: '/api/daemon', method: 'GET', params: [], response: '{present, pid, pid_alive, ts, active_projects, age_ms, stale, stale_threshold_ms, alert}. Machine-global shared-daemon heartbeat (~/.agentplug/daemon-status.json).' },
   { path: '/api/parse-health', method: 'GET', params: [], response: '{totals, correlation, dispatch_totals, projects: [{cwd, name, size, truncated, version, epoch, considered, modeled, signal, ignored, modeled_ratio, ignored_ratio, signal_ratio, unmodeled_ratio, other_lines, malformed_json, dispatch}], project_count, source, schemaVersion}. Parse coverage, dispatch pairing and correlation fidelity for EVERY project -- nothing filtered, no ratio compared against a threshold, no field collapsed into a word. ignored_ratio/signal_ratio split modeled_ratio: coverage built entirely from host noise (node deprecation warnings, Bun crash dumps) is a different state from coverage built from gm telemetry, and only that split distinguishes them. dispatch.malformed_verb_starts counts starts excluded from pairing because an upstream filename-split bug made the verb a path fragment -- they can never close, so they are kept apart from orphan_starts (benign in-flight/window-clipping) rather than inflating it. correlation.dominant_kind/dominant_ratio report what the grouping is really worth, since a handful of sess-carrying events makes best_kind "sess" while the rest of the set is run-keyed.' },
   { path: '/api/gates', method: 'GET', params: ['cwd?'], response: 'with cwd: {cwd, gates: [{gate, state: "pass"|"fail"|"unknown", detail, ts}], blockers, phase, fsm_graph, outgoing_edges: [{from, to, gates, blocked, blockers}], blocked, open_edges, blocked_edges, last_gate_fired: {key, ts, age_ms, is_current_block:false}, gate_deviation_repeats, gate_deviation_repeat_count}. Without cwd: {projects: [...]}. All 8 FSM gates; "unknown" is an honest verdict, never collapsed into "fail". last_gate_fired is the last-EVER firing, not a current block — always carries age_ms.' },
   { path: '/api/embed-health', method: 'GET', params: ['cwd?'], response: '{cwd, byEvent, query_failures, vector_failures, last_failure_ts, recent, note}. Raw failure counts, no verdict: when both counts are non-zero `note` names the causal chain (embed_query_failed cascading into rssearch_vector_hits_failed, so codesearch returns success while answering from bm25 only and silently missing semantic results).' },

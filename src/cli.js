@@ -6,7 +6,8 @@ import { GmLogWatcher, MultiProjectWatcher, replayAll, DEFAULT_LOG_DIR, correlat
 import { readWatcherStatus, readProjectLiveness, readInstalledVersions, readTurnState, readTurnSummary, VERB_ALLOWLIST, isUsableVerb, isRetiredVerb, isKnownVerb } from './registry.js';
 import { parseLine, readTail, DEFAULT_REPLAY_BYTES } from './watcher-log.js';
 
-const GM_TOOLS_DIR = path.join(os.homedir(), '.gm-tools');
+const GM_TOOLS_DIR = process.env.GM_TOOLS_DIR || path.join(os.homedir(), '.gm-tools');
+const AGENTPLUG_DIR = process.env.AGENTPLUG_DIR || path.join(os.homedir(), '.agentplug');
 
 const PHASES = ['PLAN', 'EXECUTE', 'EMIT', 'VERIFY', 'CONSOLIDATE', 'COMPLETE'];
 
@@ -211,7 +212,7 @@ EXIT CODES
 SOURCES
   primary                per-project <project>/.gm/exec-spool/.watcher.log -- "evt: {json}"
                          lines, the live stream every current-generation agentplug daemon
-                         writes. Discovery seeds from ~/.gm-tools/daemon-registry.txt (the
+                         writes. Discovery seeds from ~/.agentplug/daemon-registry.txt (the
                          daemon's own authoritative served-cwd list, worktrees included) plus
                          a scan of GM_SPOOL_DIRS, DEV_ROOT, GM_DEV_ROOT, cwd, C:/dev or ~/dev.
   archive (opt-in)       ~/.claude/gm-log day/subsystem jsonl files -- 1,131,698 events across
@@ -820,12 +821,7 @@ function watchers(all, opts = {}) {
   const deadShown = rows.length - aliveCount;
   const gt = readGmToolsVersions();
   const runningVersion = gt.plugkit;
-  // ~/.gm-tools/daemon-status.json was tried and rejected as the liveness source: measured live
-  // it named a 71h-old pid 4304 while the actual serving daemon was pid 3364 (per every
-  // project's .status.json, confirmed against the real process table), reporting "daemon down"
-  // for a fleet demonstrably running. Inferring from per-project activity is equally wrong -- a
-  // fleet can legitimately be all-idle while the daemon is up.
-  const daemonUp = (() => {
+  const daemonUpPerAnyRespondingProjectPid = (() => {
     for (const r of rows) {
       if (!r.pid) continue;
       try { process.kill(r.pid, 0); return true; } catch (_) {}
@@ -845,7 +841,7 @@ function watchers(all, opts = {}) {
     let note = '';
     if (r.update && versionIsNewer(r.update.latest, runningVersion)) {
       note = color(`-> v${r.update.latest}`, 33);
-    } else if (!daemonUp) {
+    } else if (!daemonUpPerAnyRespondingProjectPid) {
       note = color('daemon down', 31);
     }
     const served = readServedVersion(r.cwd);
@@ -1045,11 +1041,9 @@ function efficiency(all, sess) {
   }
 }
 
-// The only source that includes worktree-hosted projects (C:\dev\<repo>\.claude\worktrees\wf_*,
-// four levels deep), which a one-level readdir of the dev roots structurally cannot reach.
 function readDaemonRegistry() {
   try {
-    return fs.readFileSync(path.join(GM_TOOLS_DIR, 'daemon-registry.txt'), 'utf-8')
+    return fs.readFileSync(path.join(AGENTPLUG_DIR, 'daemon-registry.txt'), 'utf-8')
       .split(/\r?\n/).map(s => s.trim()).filter(Boolean);
   } catch (_) { return []; }
 }

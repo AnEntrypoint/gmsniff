@@ -188,16 +188,11 @@ function readTextOrNull(p) {
   try { return fs.readFileSync(p, 'utf-8').trim(); } catch (_) { return null; }
 }
 
-// Duplicated from index.js rather than imported, to keep registry.js free of an import cycle.
 export const GM_TOOLS_DIR = process.env.GM_TOOLS_DIR || path.join(os.homedir(), '.gm-tools');
+export const AGENTPLUG_DIR = process.env.AGENTPLUG_DIR || path.join(os.homedir(), '.agentplug');
 
-// ~/.gm-tools/daemon-status.json is NOT self-healing: a daemon that dies without unwinding leaves
-// its pid there forever and the successor does not always rewrite it. Measured live, the global
-// file held pid 4304 with a ts 3 DAYS old and dead while every project's own .status.json carried
-// pid 11132, freshly heartbeat and demonstrably alive -- so this file alone answers "is a daemon
-// up" wrong in exactly the case that matters. See daemonAliveFor.
 export function readDaemonStatus() {
-  const j = readJsonOrNull(path.join(GM_TOOLS_DIR, 'daemon-status.json'));
+  const j = readJsonOrNull(path.join(AGENTPLUG_DIR, 'daemon-status.json'));
   if (!j || !j.pid) return { present: false, pid: null, alive: false, ts: null, age_ms: null, active_projects: null };
   let alive = false;
   try { process.kill(j.pid, 0); alive = true; } catch (_) {}
@@ -722,13 +717,9 @@ function canon(p) {
   return p && path.resolve(p).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
 }
 
-// A discovery HINT, never a liveness list: daemon-registry.txt is append-only and never
-// self-prunes -- measured live, only 3 of its 12 entries still existed on disk. It is the only
-// source reaching worktree-hosted projects (C:\dev\spoint\.claude\worktrees\wf_*), which a
-// one-level readdir of the dev roots structurally cannot see.
 export function readDaemonRegistryCwds() {
   try {
-    return fs.readFileSync(path.join(GM_TOOLS_DIR, 'daemon-registry.txt'), 'utf-8')
+    return fs.readFileSync(path.join(AGENTPLUG_DIR, 'daemon-registry.txt'), 'utf-8')
       .split('\n').map(s => s.trim()).filter(Boolean);
   } catch (_) { return []; }
 }
