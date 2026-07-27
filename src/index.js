@@ -2,15 +2,51 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { EventEmitter } from 'events';
+import {
+  EVT_RE, classifyLine, parseLine, parseEventLine, parseSpawnLine, parseDispatchLine,
+  parseVersionLine, newParseStats, newParseContext, parseCoverage, replayWatcherLogWithStats,
+  readTail, DEFAULT_REPLAY_BYTES, normalizeTs,
+} from './watcher-log.js';
 
-// Single source of truth for the subsystem tag universe -- gui/panels.js imports this rather
-// than keeping its own copy. Confirmed against real ../gm source + the last 7 days of every
-// discovered project's real gm-log data: rs_learn (crate explicitly retired, rs-plugkit
-// wasm_dispatch/verbs.rs), rs_codeinsight, rs_search, plugkit_wrapper, acp-launcher, learning,
-// git, and exec all had zero live events in that window and no current emitter in ../gm source
-// -- removed. 'memory' added: rs-plugkit orchestrator/recall.rs tags every recall event
-// sub:"memory", confirmed live (hundreds/day in real logs) and previously unmodeled here.
-export const SUBSYSTEMS = ['plugkit', 'hook', 'bootstrap', 'memory'];
+export {
+  EVT_RE, classifyLine, parseLine, parseEventLine, parseSpawnLine, parseDispatchLine,
+  parseVersionLine, newParseStats, newParseContext, parseCoverage, replayWatcherLogWithStats,
+  readTail, DEFAULT_REPLAY_BYTES, normalizeTs,
+};
+export { correlationOf, correlationKey, correlationCoverage, CORRELATION_KINDS } from './correlation.js';
+
+// Seed for the subsystem tag universe -- gui/panels.js keeps a matching literal since the
+// browser bundle cannot import this module. This is a SEED, not a closed set: observeSubsystems
+// grows it from whatever tags real events actually carry, which is the only defence against the
+// hardcode drifting stale again.
+//
+// Verified against live per-project watcher.log data (the real current source; ~/.claude/gm-log
+// is dead): plugkit (untagged default, 11,979), hook (955), rs_learn (666), memory (88).
+// 'rs_learn' is restored -- the rs-learn CRATE is retired, but the TAG is still what every
+// pre-cutover recall event in real log history carries, and dropping it silently hid 666 real
+// events. 'memory' is the same event class under its current tag (recall.rs). 'bootstrap' has
+// zero live events in any discovered project but is retained as a seed only, since its absence
+// is an absence of activity rather than proof the tag was retired.
+export const SUBSYSTEMS = ['plugkit', 'hook', 'bootstrap', 'memory', 'rs_learn'];
+
+const _observedSubsystems = new Set(SUBSYSTEMS);
+
+// Records a tag seen in real data and returns the current union. Called from every parse path so
+// a genuinely new upstream tag becomes visible without a code change.
+export function observeSubsystem(sub) {
+  if (sub && !_observedSubsystems.has(sub)) _observedSubsystems.add(sub);
+  return _observedSubsystems;
+}
+
+export function observedSubsystems() {
+  return [..._observedSubsystems].sort();
+}
+
+// Derives the tag universe from a real event array rather than trusting the seed alone.
+export function deriveSubsystems(events) {
+  for (const e of events || []) observeSubsystem(e && e._sub);
+  return observedSubsystems();
+}
 
 // Schema version stamped on every parsed event — consumers can reject events with unknown
 // schema versions rather than silently misinterpreting a shape change. Bumped whenever the
@@ -34,6 +70,57 @@ export function discoverSubsystems(logDir) {
 }
 
 export const DEFAULT_LOG_DIR = process.env.GM_LOG_DIR || path.join(os.homedir(), '.claude', 'gm-log');
+
+// The central ~/.claude/gm-log tree is a DEAD ARCHIVE, and is never blended into the live
+// stream. Measured on a real machine: 72 day-dirs spanning 2026-05-11..2026-07-23 holding
+// 1,131,698 jsonl events, newest 4+ days old -- against 26,866 live spool evt records. The
+// archive is 42x LARGER than live data.
+//
+// That magnitude is exactly why a merge is wrong rather than merely imprecise: blended, every
+// count, rate, top-event, by-day figure and health percentage would be computed over ~98% dead
+// history while looking entirely plausible, with nothing for a user to notice. A silent blend
+// is worse than either source alone.
+//
+// Disposition: the live/default path reads the per-project spool ONLY. gm-log is reachable only
+// behind an explicit archive opt-in (replayAll's opts.archive / replayGmLog directly), and is
+// still honored when a user deliberately sets GM_LOG_DIR -- but even then it is a SOURCE
+// SELECTION, not an addition to live data. Every normalized event carries _src ('watcher.log'
+// or 'gm-log') so a consumer can always tell live from archive.
+export const GM_LOG_DIR_EXPLICIT = !!process.env.GM_LOG_DIR;
+
+// A selected source whose newest event is far older than now is reporting history as if it were
+// current. staleness() makes that explicit so a caller can warn loudly instead of rendering dead
+// numbers silently -- the present failure mode is entirely invisible.
+export const STALE_SOURCE_MS = parseInt(process.env.GM_STALE_SOURCE_MS, 10) || 6 * 60 * 60 * 1000;
+
+export function sourceStaleness(events, now = Date.now()) {
+  let newest = 0;
+  for (const e of events || []) {
+    const t = e && e.ts ? Date.parse(e.ts) : NaN;
+    if (Number.isFinite(t) && t > newest) newest = t;
+  }
+  if (!newest) return { newest_ts: null, age_ms: null, stale: true, reason: 'no timestamped events' };
+  const age = now - newest;
+  return {
+    newest_ts: new Date(newest).toISOString(),
+    age_ms: age,
+    stale: age > STALE_SOURCE_MS,
+    reason: age > STALE_SOURCE_MS ? `newest event is ${Math.round(age / 3600000)}h old` : null,
+  };
+}
+
+export function gmLogDirHasEvents(logDir = DEFAULT_LOG_DIR) {
+  try {
+    for (const d of fs.readdirSync(logDir, { withFileTypes: true })) {
+      if (!d.isDirectory()) continue;
+      for (const f of fs.readdirSync(path.join(logDir, d.name))) {
+        if (!f.endsWith('.jsonl')) continue;
+        try { if (fs.statSync(path.join(logDir, d.name, f)).size > 0) return true; } catch (_) {}
+      }
+    }
+  } catch (_) {}
+  return false;
+}
 const DEBOUNCE_MS = 50;
 // Real wall-clock gap given to libuv after issuing fs.watch handle closes, before a stop()
 // caller is allowed to proceed (e.g. to process.exit()) -- see GmLogWatcher.stop/
@@ -149,6 +236,10 @@ export class GmLogWatcher extends EventEmitter {
     try {
       if (s.fd === null) s.fd = fs.openSync(fp, 'r');
       const stat = fs.fstatSync(s.fd);
+      // Truncation/rotation reset, matching ProjectLogTailer._read: a rotated or re-created
+      // jsonl shrinks below the retained offset, and without this the tail would sit past EOF
+      // forever and silently stop emitting for that file for the process's lifetime.
+      if (stat.size < s.offset) { s.offset = 0; s.partial = ''; }
       if (stat.size <= s.offset) return;
       const buf = Buffer.allocUnsafe(stat.size - s.offset);
       const n = fs.readSync(s.fd, buf, 0, buf.length, s.offset);
@@ -174,43 +265,47 @@ export class GmLogWatcher extends EventEmitter {
   }
 }
 
-function normalizeTs(ts) {
-  if (typeof ts === 'string') return ts;
-  if (typeof ts === 'number' && Number.isFinite(ts)) return new Date(ts).toISOString();
-  return '';
+// Parse-completeness audit, re-measured against real current data (C:/dev/gmsniff's own
+// watcher.log, 33,482 lines / 13,688 evt lines, re-verified this pass): the earlier claim that
+// evt: lines do NOT carry phase.transitioned, dispatch.*, prd.*, mutable.*, or instruction.served
+// is FALSE for current gm-plugkit. All of those are live as their own evt: lines today
+// (phase.transitioned 18 -- and it carries a `from` field; dispatch.end 360 with verb+ms;
+// prd.added 157; prd.resolved 50; mutable.added 11; mutable.resolved 5; instruction.served 21,
+// carrying prd_pending_count/mutables_pending_count, NOT prd_pending/mutables_pending).
+//
+// What evt: genuinely does NOT cover is the ~58% of non-blank lines that are runtime chatter,
+// dispatch arrow lines, and supervisor spawn banners. Those are no longer silently discarded:
+// see watcher-log.js classifyLine and the parse-coverage stats returned alongside every replay.
+export function replayWatcherLog(fp, cwd) {
+  return replayWatcherLogWithStats(fp, cwd, EVENT_SCHEMA_VERSION).events;
 }
 
-const EVT_RE = /evt:\s*(\{.*\})\s*$/;
+// Same replay, plus the per-file parse-coverage counters (total/blank/event/dispatch/spawn/
+// runtime/retention/other/malformed_json + parsed_ratio/drop_ratio) so a caller can surface how
+// much of the file produced no structured event rather than letting that loss stay invisible.
+export function replayWatcherLogAudited(fp, cwd) {
+  return replayWatcherLogWithStats(fp, cwd, EVENT_SCHEMA_VERSION);
+}
 
-// Parse-completeness audit (real .watcher.log content from 6 live gm-plugkit repos, 87k+
-// lines): EVT_RE correctly parses every line gm-plugkit actually prefixes with "evt: ", but
-// that prefix covers only deviation.*, recall, embed.*, memory.*/memorize_*, git.*, and
-// codeinsight_rebuild -- it does NOT carry phase.transitioned, dispatch.start/end,
-// prd.added/resolved, mutable.added/resolved, instruction.served, or residual.fired/skipped
-// in any observed repo (those event classes were seen only inside git.commit summary text,
-// never as their own evt: line). This is a real upstream gap, not a parser bug: any project
-// whose only live source is this file (the common case -- gm-log is typically empty/absent,
-// see replayAll's fallback) will show near-empty Store.sessions()/healthSummary() phase-walk
-// and dispatch counts even while its .status.json proves the watcher is alive and busy.
-export function replayWatcherLog(fp, cwd) {
-  const events = [];
-  let text;
-  try { text = fs.readFileSync(fp, 'utf8'); } catch { return events; }
-  for (const line of text.split('\n')) {
-    const m = line.match(EVT_RE);
-    if (!m) continue;
-    let o;
-    try { o = JSON.parse(m[1]); } catch { continue; }
-    const sub = o.sub || 'plugkit';
-    const ts = normalizeTs(o.ts);
-    // cwd is always the discovered file's own project dir, never o.cwd from the log line's
-    // JSON body -- trusting log content for attribution would let a crafted watcher.log line
-    // claim an arbitrary cwd outside the discovered project registry (security scoping).
-    const ev = { ...o, ts, cwd, _sub: sub, _day: ts.slice(0, 10), _fp: fp, _src: 'watcher.log', _schema: EVENT_SCHEMA_VERSION };
-    if (!ev.event) ev.event = o.phase || o.action || o.kind || o.type || '?';
-    events.push(ev);
-  }
-  return events;
+// Machine-global gm-plugkit install dir. daemon-registry.txt is the AUTHORITATIVE list of every
+// cwd the shared daemon actually serves -- including worktree-hosted projects nested several
+// levels deep (real example: C:\dev\spoint\.claude\worktrees\wf_26bd1b5f-888-1), which the
+// one-level readdir scan of dev roots structurally cannot see.
+export const GM_TOOLS_DIR = process.env.GM_TOOLS_DIR || path.join(os.homedir(), '.gm-tools');
+
+// daemon-registry.txt is a DISCOVERY HINT, never a liveness list: it is append-only and never
+// self-prunes. Measured on a real machine, only 3 of its 12 entries still exist on disk (the
+// other 9 are deleted spoint worktrees and a removed C:\dev\test). Its value is purely that it
+// reaches deep worktree paths a one-level readdir cannot see; every candidate it yields is then
+// filtered by real existence downstream in discoverSpoolLogs.
+export function readDaemonRegistry({ existingOnly = false } = {}) {
+  let raw;
+  try {
+    raw = fs.readFileSync(path.join(GM_TOOLS_DIR, 'daemon-registry.txt'), 'utf8')
+      .split('\n').map(s => s.trim()).filter(Boolean);
+  } catch (_) { return []; }
+  if (!existingOnly) return raw;
+  return raw.filter(p => { try { return fs.existsSync(path.join(p, '.gm')); } catch (_) { return false; } });
 }
 
 export function discoverSpoolLogs(explicit) {
@@ -230,6 +325,7 @@ export function discoverSpoolLogs(explicit) {
     } else addProject(p);
     return [...found.values()];
   }
+  for (const cwd of readDaemonRegistry()) addProject(cwd);
   const roots = [];
   if (process.env.GM_SPOOL_DIRS) roots.push(...process.env.GM_SPOOL_DIRS.split(path.delimiter).filter(Boolean));
   for (const env of ['DEV_ROOT', 'GM_DEV_ROOT']) if (process.env[env]) roots.push(process.env[env]);
@@ -246,10 +342,55 @@ export function discoverSpoolLogs(explicit) {
   return [...found.values()];
 }
 
+// Primary replay path: every discovered project's watcher.log. Name kept for backward
+// compatibility with existing callers even though this is no longer a "fallback".
 export function replaySpoolFallback(explicit) {
+  return replaySpool(explicit).events;
+}
+
+// Same replay with per-project parse-coverage stats, current watcher-spawn epoch, and the
+// per-project served plugkit version aggregated.
+//
+// The read is BOUNDED by default (opts.maxBytes, default DEFAULT_REPLAY_BYTES = 2MB per file):
+// a real watcher.log reaches 6.1MB/85k lines, and reading full history on every CLI invocation
+// and GUI boot is the dominant cost of a cold read. Pass maxBytes:0 to read full history.
+export function replaySpool(explicit, opts = {}) {
   const events = [];
-  for (const { cwd, fp } of discoverSpoolLogs(explicit)) events.push(...replayWatcherLog(fp, cwd));
-  return events.sort((a, b) => (a.ts || '') < (b.ts || '') ? -1 : 1);
+  const perProject = [];
+  const totals = newParseStats();
+  for (const { cwd, fp } of discoverSpoolLogs(explicit)) {
+    const r = replayWatcherLogWithStats(fp, cwd, EVENT_SCHEMA_VERSION, opts);
+    events.push(...r.events);
+    perProject.push({ cwd, fp, epoch: r.epoch, version: r.version, truncated: r.truncated, size: r.size, ...r.stats });
+    for (const k of Object.keys(totals)) totals[k] += r.stats[k] || 0;
+  }
+  deriveSubsystems(events);
+  return {
+    events: events.sort((a, b) => (a.ts || '') < (b.ts || '') ? -1 : 1),
+    stats: parseCoverage(totals),
+    projects: perProject,
+  };
+}
+
+// Per-project live signals derived from the watcher.log itself: the current watcher-spawn epoch
+// (the only real correlation anchor available, since `sess` is absent from every live record)
+// and the served plugkit version banner (the only per-project version signal that still exists
+// -- .status.json dropped its `version` field entirely).
+export function readProjectLogSignals(cwd, opts = {}) {
+  const fp = path.join(cwd, '.gm', 'exec-spool', '.watcher.log');
+  let stat;
+  try { stat = fs.statSync(fp); } catch (_) { return { present: false, epoch: null, version: null, mtime_ms: null, size: null }; }
+  const r = replayWatcherLogWithStats(fp, cwd, EVENT_SCHEMA_VERSION, { maxBytes: opts.maxBytes === undefined ? DEFAULT_REPLAY_BYTES : opts.maxBytes });
+  return {
+    present: true,
+    epoch: r.epoch,
+    version: r.version,
+    versions: r.ctx ? r.ctx.versions : [],
+    mtime_ms: stat.mtimeMs,
+    size: stat.size,
+    truncated: r.truncated,
+    stats: r.stats,
+  };
 }
 
 // Read lazily (function, not a frozen module-load-time const) so a caller that sets
@@ -274,6 +415,15 @@ class ProjectLogTailer extends EventEmitter {
     this._partial = '';
     this._watcher = null;
     this._timer = null;
+    this._ctx = newParseContext();
+    this._stats = newParseStats();
+  }
+
+  // Live parse-coverage counters for this project's tail, plus the current watcher-spawn epoch
+  // and the last version banner seen -- surfaced so a caller can report real coverage rather
+  // than assuming every line produced an event.
+  stats() {
+    return { cwd: this.cwd, fp: this._fp, epoch: this._ctx.epoch, version: this._ctx.version, ...parseCoverage(this._stats) };
   }
 
   start() {
@@ -316,19 +466,17 @@ class ProjectLogTailer extends EventEmitter {
     }
   }
 
+  // cwd is always this tailer's own discovered project cwd, never o.cwd from the log line's
+  // JSON body -- see replayWatcherLog's identical hardening for the rationale. Structured
+  // non-JSON lines (dispatch arrows, spawn banners, version banners, stale-lock takeovers) are
+  // synthesized into real events by the shared parser and emitted on the same stream, tagged
+  // _origin:'line' so a consumer can always distinguish them from upstream evt: records.
   _line(raw) {
-    const m = raw.match(EVT_RE);
-    if (!m) return;
-    let o;
-    try { o = JSON.parse(m[1]); } catch { return; }
-    const sub = o.sub || 'plugkit';
-    const ts = normalizeTs(o.ts);
-    // cwd is always this tailer's own discovered project cwd, never o.cwd from the log
-    // line's JSON body -- see replayWatcherLog's identical hardening for the rationale.
-    const ev = { ...o, ts, cwd: this.cwd, _sub: sub, _day: ts.slice(0, 10), _fp: this._fp, _src: 'watcher.log', _schema: EVENT_SCHEMA_VERSION };
-    if (!ev.event) ev.event = o.phase || o.action || o.kind || o.type || '?';
+    const ev = parseLine(raw, { cwd: this.cwd, fp: this._fp, schema: EVENT_SCHEMA_VERSION, stats: this._stats, ctx: this._ctx });
+    if (!ev) return;
+    observeSubsystem(ev._sub);
     this.emit('event', ev);
-    this.emit(`sub:${sub}`, ev);
+    this.emit(`sub:${ev._sub}`, ev);
   }
 }
 
@@ -411,10 +559,11 @@ export class MultiProjectWatcher extends EventEmitter {
   }
 }
 
-export function replayAll(logDir = DEFAULT_LOG_DIR, opts = {}) {
+// Reads the legacy central gm-log tree only. Kept separate so replayAll can MERGE it rather
+// than choose between it and the live source.
+export function replayGmLog(logDir = DEFAULT_LOG_DIR) {
   const events = [];
-  if (opts.spool) return replaySpoolFallback(opts.spool);
-  if (!fs.existsSync(logDir)) return replaySpoolFallback();
+  if (!fs.existsSync(logDir)) return events;
   try {
     for (const d of fs.readdirSync(logDir, { withFileTypes: true })) {
       if (!d.isDirectory()) continue;
@@ -438,6 +587,64 @@ export function replayAll(logDir = DEFAULT_LOG_DIR, opts = {}) {
       }
     }
   } catch {}
-  if (!events.length) return replaySpoolFallback();
-  return events.sort((a, b) => (a.ts || '') < (b.ts || '') ? -1 : 1);
+  return events;
+}
+
+// PRIMARY read path: the per-project watcher.log fleet, and nothing else.
+//
+// This inverts the previous polarity, which consulted the spool only when gm-log was absent or
+// yielded zero events. That condition is provably never satisfied on a real machine -- gm-log
+// exists with 1.13M archived events -- so every non-tail read (every CLI invocation, every
+// Store.load()) returned a dead dataset and never saw live data at all.
+//
+// The archive is NOT merged. opts.archive:true selects gm-log INSTEAD, as a deliberate
+// historical query; GM_LOG_DIR being set also selects it, since setting it is an explicit
+// statement about which tree to read. Use replayAllAudited to get the source/staleness
+// accounting alongside the events.
+export function replayAll(logDir = DEFAULT_LOG_DIR, opts = {}) {
+  return replayAllAudited(logDir, opts).events;
+}
+
+export function replayAllAudited(logDir = DEFAULT_LOG_DIR, opts = {}) {
+  if (opts.spool) {
+    const one = replaySpool(opts.spool);
+    return {
+      events: one.events, source: 'spool', archive_used: false,
+      sources: { spool: { events: one.events.length, projects: one.projects.length }, gm_log: { used: false } },
+      stats: one.stats, projects: one.projects,
+      staleness: sourceStaleness(one.events), subsystems: observedSubsystems(),
+    };
+  }
+
+  const useArchive = opts.archive === true || (opts.archive !== false && GM_LOG_DIR_EXPLICIT);
+  if (useArchive) {
+    const events = replayGmLog(logDir).sort((a, b) => (a.ts || '') < (b.ts || '') ? -1 : 1);
+    deriveSubsystems(events);
+    const staleness = sourceStaleness(events);
+    return {
+      events, source: 'gm-log', archive_used: true,
+      sources: { spool: { used: false }, gm_log: { dir: logDir, explicit: GM_LOG_DIR_EXPLICIT, used: true, events: events.length } },
+      stats: null, projects: [],
+      staleness,
+      warnings: staleness.stale ? [`archive source ${logDir} is stale: ${staleness.reason}`] : [],
+      subsystems: observedSubsystems(),
+    };
+  }
+
+  const spool = replaySpool(undefined);
+  const staleness = sourceStaleness(spool.events);
+  const warnings = [];
+  if (staleness.stale) warnings.push(`live spool source is stale: ${staleness.reason}`);
+  if (!spool.events.length && gmLogDirHasEvents(logDir)) {
+    warnings.push(`no live spool events; a legacy archive exists at ${logDir} (not merged -- pass archive:true to read it)`);
+  }
+  return {
+    events: spool.events, source: 'spool', archive_used: false,
+    sources: {
+      spool: { events: spool.events.length, projects: spool.projects.length },
+      gm_log: { dir: logDir, explicit: GM_LOG_DIR_EXPLICIT, used: false, available: gmLogDirHasEvents(logDir) },
+    },
+    stats: spool.stats, projects: spool.projects,
+    staleness, warnings, subsystems: observedSubsystems(),
+  };
 }

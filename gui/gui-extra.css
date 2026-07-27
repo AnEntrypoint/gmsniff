@@ -61,8 +61,9 @@
 .gm-health-red { background: color-mix(in srgb, var(--danger, var(--flame, #c0392b)) 18%, var(--panel-bg)); border-color: var(--danger, var(--flame, #c0392b)); color: var(--text); }
 .gm-health-label { font-weight:600; }
 .gm-health-list { display:flex; gap:2px; flex-wrap:wrap; }
-.gm-health-item { background:none; border:none; padding:0; margin:0; font:inherit; color:inherit; cursor:pointer; text-decoration:underline; }
+.gm-health-item { background:none; border:none; padding:0 8px 0 0; margin:0; font:inherit; color:inherit; cursor:pointer; text-decoration:underline; text-align:left; }
 .gm-health-item:hover { opacity:.8; }
+.gm-health-omitted { color: var(--muted); }
 
 .gm-force-svg { width:100%; height:520px; display:block; background: var(--surface-2, var(--panel-bg)); border:1px solid var(--border); border-radius:6px; touch-action:none; }
 .gm-force-edge { stroke: var(--border); stroke-width:1; opacity:.6; }
@@ -150,4 +151,104 @@
   font-size:10px; color:#0a0a0a; padding:2px;
   left: var(--rx); top: var(--ry); width: var(--rw); height: var(--rh);
   background: var(--rect-bg); border: 1px solid var(--rect-border);
+}
+
+/* ---------------------------------------------------------------------------
+   LIVE AGENTS -- the manager surface (gui/live-agents.js). Every colour rides a
+   colors_and_type.css token; nothing here is a raw hex.
+   --------------------------------------------------------------------------- */
+.gm-agent-head { display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-bottom:8px; }
+.gm-agent-controls { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px; }
+
+/* Attention strip: the "where do I look first" answer, above the roster. */
+.gm-attention { display:flex; align-items:center; gap:8px; flex-wrap:wrap; padding:8px 12px; margin-bottom:10px;
+  border:1px solid var(--border); border-left:3px solid var(--warn, #d29922); border-radius:4px; font-size:12px; }
+.gm-attention-item { background:none; border:none; padding:0 6px 0 0; margin:0; font:inherit; color:inherit;
+  cursor:pointer; text-decoration:underline; text-align:left; }
+.gm-attention-item:hover { opacity:.8; }
+
+/* One-click reveal of the folded idle/finished majority. */
+.gm-reveal { background:none; border:1px dashed var(--border); border-radius:4px; color:var(--muted);
+  font:inherit; font-size:11px; padding:2px 8px; cursor:pointer; }
+.gm-reveal:hover { color:var(--text); border-color:var(--accent, var(--panel-accent)); }
+
+/* Phase strip that renders a revisit as a revisit (visited SET, not index math). */
+.gm-phase-strip { display:flex; gap:3px; flex-wrap:wrap; margin:6px 0; }
+.gm-phase-step { font-size:10px; padding:1px 7px; border-radius:9px; border:1px solid var(--border);
+  color:var(--muted); background:transparent; }
+.gm-phase-step.is-reached { color:var(--text); border-color:var(--accent, var(--panel-accent)); }
+.gm-phase-step.is-current { background:var(--accent, var(--panel-accent)); color:var(--panel-bg); font-weight:600; }
+
+/* Output feed: newest last, terminal-like, expand-to-payload. */
+/* The pane headings inherit the shell's h2 scale, which is display-sized for a
+   page title and dwarfs the instruction it labels inside a dialog. Pin them to
+   the dialog's own text scale so the CONTENT is the largest thing on screen. */
+.gm-pane-head { display:flex; align-items:baseline; justify-content:space-between; gap:8px; margin-bottom:6px;
+  border-bottom:1px solid var(--border); padding-bottom:4px; }
+.gm-pane-head h2 { font-size:14px; font-weight:600; letter-spacing:0; text-transform:none; }
+.gm-feed-scroll { max-height:58vh; overflow-y:auto; border:1px solid var(--border); border-radius:4px; }
+.gm-feed-row { padding:3px 8px; border-bottom:1px solid var(--border); cursor:pointer; font-size:11px; }
+.gm-feed-row:last-child { border-bottom:none; }
+.gm-feed-row:hover { background: var(--surface-2, var(--panel-bg)); }
+.gm-feed-row:focus-visible { outline:2px solid var(--accent, var(--panel-accent)); outline-offset:-2px; }
+.gm-feed-row.is-open { background: var(--surface-2, var(--panel-bg)); }
+.gm-feed-head { display:flex; align-items:center; flex-wrap:wrap; gap:2px; }
+.gm-feed-kind { color: var(--kind-tone, var(--text)); }
+.gm-feed-dur { color: var(--muted); font-family: ui-monospace, Consolas, monospace; }
+.gm-feed-inflight { color: var(--warn, #d29922); font-weight:600; }
+.gm-feed-muted { color: var(--muted); }
+.gm-feed-payload { font-size:10px; font-family: ui-monospace, Consolas, monospace; white-space:pre-wrap;
+  word-break:break-all; background: var(--panel-bg); padding:6px; margin:4px 0 0; border-radius:3px;
+  max-height:240px; overflow:auto; }
+.gm-feed-more { font-size:10px; color: var(--muted); padding:2px 0 4px; }
+
+/* Gate blockers: which gate denied, and how often it repeated. */
+.gm-gates { border:1px solid var(--border); border-left:3px solid var(--danger, var(--flame, #f85149));
+  border-radius:4px; padding:6px 10px; margin:8px 0; font-size:11px; }
+.gm-gates-head { display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-bottom:4px; }
+.gm-gate-row { padding:2px 0; }
+
+/* Driving prompt + rendered instruction. */
+.gm-prompt { margin:8px 0; font-size:11px; }
+.gm-prompt > summary { cursor:pointer; color: var(--muted); }
+.gm-prompt-body { white-space:pre-wrap; word-break:break-word; background: var(--surface-2, var(--panel-bg));
+  padding:8px; border-radius:3px; max-height:200px; overflow:auto; font-size:11px; margin:4px 0 0; }
+.gm-instruction-body { max-height:52vh; overflow-y:auto; border:1px solid var(--border); border-radius:4px; padding:10px; }
+.gm-provenance, .gm-metrics { margin-top:10px; font-size:11px; }
+.gm-provenance > summary, .gm-metrics > summary { cursor:pointer; color: var(--muted); }
+.gm-vendored-list { max-height:160px; overflow:auto; margin-top:4px; }
+.gm-metric-line { padding:2px 0; }
+.gm-mono-sm { font-family: ui-monospace, Consolas, monospace; font-size:11px; opacity:.8; word-break:break-all; }
+.gm-tone-warn { color: var(--warn, #d29922); }
+
+/* Zero-dependency markdown output (gui/markdown.js). */
+.gm-md { font-size:12px; line-height:1.5; }
+.gm-md .gm-md-h { margin:10px 0 4px; font-size:13px; }
+.gm-md .gm-md-p { margin:6px 0; }
+.gm-md .gm-md-list { margin:6px 0; padding-left:20px; }
+.gm-md .gm-md-quote { margin:6px 0; padding-left:10px; border-left:2px solid var(--border); color: var(--muted); }
+.gm-md .gm-md-hr { border:none; border-top:1px solid var(--border); margin:10px 0; }
+.gm-md .gm-md-code { background: var(--surface-2, var(--panel-bg)); padding:8px; border-radius:3px;
+  overflow-x:auto; font-size:11px; margin:6px 0; }
+.gm-md code { background: var(--surface-2, var(--panel-bg)); padding:1px 4px; border-radius:3px;
+  font-family: ui-monospace, Consolas, monospace; font-size:11px; }
+
+/* Honest empty/degraded states (gui/honest-state.js): every zero says which
+   zero it is, so "nothing happened" can never look like "nothing loaded". */
+.gm-state { padding:8px 0; }
+.gm-state-hint { color: var(--muted); font-size:11px; text-align:center; margin:4px 0 0; }
+.gm-state.is-error .ds-file-empty-text { color: var(--danger, var(--flame, #f85149)); }
+.gm-state.is-stale .ds-file-empty-text, .gm-state.is-unscoped .ds-file-empty-text { color: var(--warn, #d29922); }
+.gm-state-loading { display:flex; flex-direction:column; align-items:center; gap:6px; padding:24px 0; }
+.gm-skeleton-list { display:flex; flex-direction:column; gap:10px; padding:8px 0; }
+.gm-skeleton-row { display:flex; flex-direction:column; gap:5px; }
+
+/* Stream condition banner: a dropped or resumed stream is stated, never silent. */
+.gm-stream-note { display:flex; align-items:center; gap:10px; padding:6px 14px; margin-bottom:10px;
+  border:1px solid var(--warn, #d29922); border-radius:6px; font-size:12px;
+  background: color-mix(in srgb, var(--warn, #d29922) 12%, var(--panel-bg)); }
+.gm-stream-note-x { margin-left:auto; background:none; border:none; color:inherit; cursor:pointer; font:inherit; }
+
+@media (max-width: 900px) {
+  .gm-feed-scroll, .gm-instruction-body { max-height:40vh; }
 }

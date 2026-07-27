@@ -1,0 +1,197 @@
+/* ============================================================
+   Primitives
+   ============================================================ */
+.btn, .btn-primary, .btn-ghost {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  /* Fixed height + horizontal-only padding: the control height is exact and
+     alignable (flex centres the label vertically), the way webgeist snaps every
+     control to a height ladder. Default is the --ctl-md rung; --btn-sm/--btn-lg
+     retune height + h-padding + font per size. Density scales the ladder. */
+  height: var(--ctl-md); min-height: var(--ctl-md);
+  padding: 0 var(--space-2-75);
+  font-family: var(--ff-body);
+  font-weight: 600; font-size: var(--fs-sm);
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+  /* Rounded-rect app chrome, not a marketing-page stadium CTA.
+     Shape vocabulary: r-1/r-2 = actionable buttons, icon-buttons, and
+     containers; r-pill = reserved for status/input/chip/badge/progress
+     surfaces (composer input, chips, badges, progress bars, theme-toggle
+     segments) - never for actions. */
+  border-radius: var(--r-1);
+  border: var(--bw-hair) solid transparent;
+  box-shadow: none;
+  /* Restrained hover-lift: a 1px rise + hairline shadow reads as a crisp,
+     confident affordance rather than a soft glow-card float. */
+  transition: transform var(--dur-base) var(--ease-spring), background var(--dur-snap) var(--ease),
+    color var(--dur-snap) var(--ease), box-shadow var(--dur-base) var(--ease-spring),
+    border-color var(--dur-snap) var(--ease);
+}
+.btn { background: var(--bg-2); color: var(--fg); border-color: var(--rule); }
+.btn:hover { background: var(--bg-3); color: var(--fg); transform: translateY(-1px); box-shadow: var(--shadow-1); }
+/* Primary CTA — the electric lead as a solid editorial block; hover inverts to
+   an ink block with the lead as text, a confident two-tone flip. */
+.btn-primary {
+  background: var(--accent); color: var(--accent-fg);
+  font-weight: 700;
+}
+.btn-primary:hover { background: var(--fg); color: var(--accent-ink); transform: translateY(-1px); box-shadow: var(--shadow-2); }
+.btn-ghost { background: transparent; color: var(--fg); box-shadow: inset 0 0 0 2px var(--fg); }
+.btn-ghost:hover { background: var(--fg); color: var(--bg); transform: translateY(-1px); }
+.btn:active, .btn-primary:active, .btn-ghost:active { transform: translateY(1px); box-shadow: none; }
+.btn:focus-visible, .btn-primary:focus-visible, .btn-ghost:focus-visible, .ds-icon-btn:focus-visible {
+  outline: var(--focus-w) solid var(--focus-color);
+  outline-offset: var(--focus-offset);
+}
+
+/* Button size ladder — the size prop on Btn() (sm | md | lg). md is the base
+   rule above; sm/lg retune height (off the --ctl-* ladder), horizontal padding,
+   and font-size so a size swap is one class, never inline padding overrides
+   (the old preview faked sizes with style=). Applies to every variant. */
+.btn-sm, .btn-sm.btn-primary, .btn-sm.btn-ghost {
+  height: var(--ctl-sm); min-height: var(--ctl-sm);
+  padding: 0 var(--space-2); font-size: var(--fs-tiny); gap: var(--space-1);
+}
+.btn-lg, .btn-lg.btn-primary, .btn-lg.btn-ghost {
+  height: var(--ctl-lg); min-height: var(--ctl-lg);
+  padding: 0 var(--space-4); font-size: var(--fs-body); gap: var(--space-2);
+}
+
+/* App-mode quiet interactions — the marketing hover-lift (translateY + shadow)
+   and the .row .meta slide read as decorative float on a dense working surface.
+   Under [data-typescale="app"], state changes are background/border-only: crisp,
+   no motion, no elevation. Marketing surfaces (no data-typescale) keep the lift. */
+[data-typescale="app"] .btn:hover,
+[data-typescale="app"] .btn-primary:hover,
+[data-typescale="app"] .btn-ghost:hover { transform: none; box-shadow: none; }
+[data-typescale="app"] .btn:active,
+[data-typescale="app"] .btn-primary:active,
+[data-typescale="app"] .btn-ghost:active { transform: none; }
+[data-typescale="app"] .panel { transition: box-shadow var(--dur-snap) var(--ease), border-color var(--dur-snap) var(--ease); }
+[data-typescale="app"] a.row:hover .meta,
+[data-typescale="app"] .row[role="button"]:hover .meta { transform: none; }
+
+/* ============================================================
+   IconButton — square icon-only button
+   ============================================================ */
+.ds-icon-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 0; border: none; cursor: pointer;
+  border-radius: var(--r-1, 6px);
+  background: transparent; color: var(--fg);
+  width: 32px; height: 32px;
+}
+.ds-icon-btn-xs { width: 22px; height: 22px; }
+.ds-icon-btn-sm { width: 26px; height: 26px; }
+.ds-icon-btn-base { width: 32px; height: 32px; }
+.ds-icon-btn-lg { width: 40px; height: 40px; }
+.ds-icon-btn-xl { width: 48px; height: 48px; }
+.ds-icon-btn-ghost { background: transparent; }
+.ds-icon-btn-ghost:hover { background: var(--fg); color: var(--bg); }
+.ds-icon-btn-primary { background: var(--accent); color: var(--accent-fg); }
+.ds-icon-btn-primary:hover { background: var(--fg); color: var(--accent-ink); }
+/* warn = destructive ACTION tone; flame stays exclusively error STATUS. */
+.ds-icon-btn-danger { background: var(--warn); color: var(--on-color); }
+.ds-icon-btn-danger:hover { filter: brightness(0.92); }
+.ds-icon-btn:active { transform: translateY(1px); }
+.ds-icon-btn:disabled, .ds-icon-btn.is-disabled {
+  opacity: 0.5; cursor: not-allowed; pointer-events: none;
+}
+
+/* ============================================================
+   Badge — small inline count/status pill
+   ============================================================ */
+.ds-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 18px; height: 18px; padding: 0 6px;
+  font-size: var(--fs-micro); font-weight: 600; line-height: 1;
+  border-radius: var(--r-pill);
+  background: var(--bg-3); color: var(--fg-2);
+}
+/* Badge size ladder — sm for dense inline counts, lg for prominent markers.
+   Base (above) stays the 18px default. */
+.ds-badge.ds-badge--sm { min-width: 14px; height: 14px; padding: 0 var(--space-1); font-size: 10px; }
+.ds-badge.ds-badge--lg { min-width: 22px; height: 22px; padding: 0 var(--space-2); font-size: var(--fs-tiny); }
+/* Canonical tone names are tone-success / tone-error / tone-neutral. Every
+   other tone name grouped into the same rule below (tone-green/tone-live,
+   tone-flame, tone-wip, tone-sun/tone-yellow, tone-ok/tone-miss) is a
+   true-synonym legacy alias, kept working but sharing one declaration so the
+   tone-family colors can't drift apart across names. */
+.ds-badge.tone-green, .ds-badge.tone-live, .ds-badge.tone-success {
+  background: var(--green-tint); color: var(--green-deep);
+}
+.ds-badge.tone-flame, .ds-badge.tone-error {
+  background: var(--flame); color: var(--on-color);
+}
+.ds-badge.tone-wip, .ds-badge.tone-neutral {
+  background: var(--bg-3); color: var(--fg-2);
+}
+.ds-badge.tone-purple  { background: var(--purple-tint); color: var(--purple-deep); }
+.ds-badge.tone-mascot  { background: var(--mascot-tint); color: var(--ink); }
+.ds-badge.tone-sun, .ds-badge.tone-yellow {
+  background: var(--sun); color: var(--ink);
+}
+.ds-badge.tone-blue    { background: var(--accent-tint); color: var(--accent-ink); }
+.ds-badge.tone-orange  { background: color-mix(in oklab, var(--flame) 30%, var(--sun) 70%); color: var(--ink); }
+
+.chip {
+  display: inline-flex; align-items: center; gap: var(--space-1-75);
+  padding: 3px 10px;
+  background: var(--bg-2); color: var(--fg-2);
+  font-family: var(--ff-body);
+  font-size: var(--fs-tiny); font-weight: 600;
+  letter-spacing: var(--tr-caps); text-transform: uppercase;
+  border-radius: var(--r-pill);
+}
+/* Chip size ladder — sm for dense toolbars/table cells, lg for prominent
+   status. tone-* colouring (below) is orthogonal to size. */
+.chip.chip--sm { padding: var(--space-half) var(--space-2); font-size: var(--fs-micro); gap: var(--space-1); }
+.chip.chip--lg { padding: var(--space-1-75) var(--space-2-75); font-size: var(--fs-xs); }
+/* Tag variant — a rectangular, sentence-case chip for dense data (table cells,
+   inline labels) where the all-caps pill reads too shouty and space-hungry.
+   Keeps the tone-* palette; drops the caps + pill for a tight --r-0 corner. */
+.chip.chip--tag {
+  text-transform: none; letter-spacing: 0; font-weight: 500;
+  border-radius: var(--r-0); padding: var(--space-half) var(--space-2);
+}
+/* Same canonical/legacy-alias grouping as .ds-badge above. */
+.chip.tone-green, .chip.tone-live, .chip.tone-success, .chip.tone-ok {
+  background: var(--green-tint); color: var(--green-deep);
+}
+.chip.tone-flame, .chip.tone-error, .chip.tone-miss {
+  background: var(--flame); color: var(--on-color);
+}
+.chip.tone-wip, .chip.tone-neutral {
+  background: var(--bg-3); color: var(--fg-2);
+}
+.chip.tone-purple  { background: var(--purple-tint); color: var(--purple-deep); }
+.chip.tone-mascot  { background: var(--mascot-tint); color: var(--ink); }
+.chip.tone-sun, .chip.tone-yellow {
+  background: var(--sun); color: var(--ink);
+}
+.chip.tone-disabled { background: var(--bg-3);        color: var(--fg-3); }
+.chip.tone-blue     { background: var(--accent-tint); color: var(--accent-ink); }
+.chip.tone-orange   { background: color-mix(in oklab, var(--flame) 30%, var(--sun) 70%); color: var(--ink); }
+.chip.tone-yellow   { background: var(--sun);         color: var(--ink); }
+
+/* ds-pill — plain neutral chip, distinct from the toned .ds-badge/.chip family
+   (gmsniff's .pill: a bare rounded label with no semantic tone). */
+.ds-pill {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: var(--r-pill);
+  font-size: var(--fs-micro);
+  background: var(--bg-3); color: var(--fg-2);
+  margin: 1px;
+}
+.ds-pill.tone-accent { background: var(--accent-tint); color: var(--accent-ink); }
+.ds-pill.tone-muted  { background: transparent; color: var(--fg-3); box-shadow: inset 0 0 0 1px var(--rule); }
+
+.glyph {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px;
+  font-family: var(--ff-mono); font-size: var(--fs-tiny);
+  opacity: 0.8;
+}
+

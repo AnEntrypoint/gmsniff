@@ -1,0 +1,1187 @@
+/* chat.css — chat-specific styles. Most chat styles live in app-shell.css under
+   the .chat-* prefix. This file carries the AgentChat kit styles (the reusable
+   multi-agent orchestration chat surface). */
+
+.agentchat {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+  gap: var(--space-2, 8px);
+  /* The chat tab opts out of .ws-main's padding (mainFlush) so the thread can
+     manage its own --measure centering, but that left every direct child -
+     controls row, heading, empty-state, composer - flush against the column
+     edge with zero gutter (the crumb bar above keeps its own padding, so the
+     content below visibly touched the edge the crumb text did not). A
+     uniform inline gutter here restores breathing room for every row without
+     disturbing --measure centering (it centers within this padded box). */
+  padding-inline: var(--space-5);
+}
+
+/* agent + model picker, new/stop, status — wraps on narrow widths */
+.agentchat-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2, 8px);
+}
+.agentchat-controls .select,
+.agentchat-controls [role="combobox"] { min-width: 130px; max-width: 240px; }
+.agentchat-controls .ds-select { min-width: 130px; max-width: 240px; }
+/* One shared control metric for the most-seen chrome row (mirrors the
+   .ds-dash-toolbar precedent): selects, buttons, export acts all 32px / r-1. */
+.agentchat-controls .ds-select { min-height: 32px; padding: 4px 28px 4px 10px; font-size: var(--fs-sm); border-radius: var(--r-1); }
+.agentchat-controls .btn, .agentchat-controls .btn-primary { padding: 5px 12px; min-height: 32px; border-radius: var(--r-1); font-weight: 500; }
+@media (pointer: coarse) {
+  .agentchat-controls .ds-select, .agentchat-controls .btn, .agentchat-controls .btn-primary { min-height: 44px; }
+}
+
+/* Narrow viewports: let the agent/model selects share the row two-up, then
+   stack full-width on the smallest screens, and drop the status to its own
+   line so nothing is squeezed below a usable tap size. */
+@media (max-width: 640px) {
+  .agentchat-controls .select,
+  .agentchat-controls .ds-select,
+  .agentchat-controls [role="combobox"] { flex: 1 1 45%; max-width: none; }
+  .agentchat-status { margin-left: 0; flex-basis: 100%; }
+}
+@media (max-width: 360px) {
+  .agentchat-controls .select,
+  .agentchat-controls .ds-select,
+  .agentchat-controls [role="combobox"] { flex-basis: 100%; }
+}
+
+.agentchat-status {
+  display: inline-flex;
+  align-items: center;
+  gap: .4em;
+  white-space: nowrap;
+  margin-left: auto;
+  font-size: var(--fs-tiny);
+  color: var(--fg-3);
+}
+/* status disc — a CSS-drawn dot, not a glyph; pulses while streaming */
+.agentchat-status .status-dot-disc {
+  flex: none; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--fg-3);
+}
+.agentchat-status .status-dot-disc.status-dot-live {
+  background: var(--accent);
+  animation: agentchat-pulse 2s infinite;
+}
+@keyframes agentchat-pulse {
+  0%   { box-shadow: 0 0 0 0 color-mix(in oklab, var(--accent) 50%, transparent); }
+  70%  { box-shadow: 0 0 0 6px color-mix(in oklab, var(--accent) 0%, transparent); }
+  100% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--accent) 0%, transparent); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .agentchat-status .status-dot-disc { animation: none !important; }
+}
+
+/* working-directory bar */
+.agentchat-cwd {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2, 8px);
+  font-size: var(--fs-tiny);
+  color: var(--fg-3);
+  flex-wrap: wrap;
+}
+.agentchat-cwd-text {
+  font-family: var(--ff-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  /* 60ch overflows narrow phones; clamp to the viewport so the path ellipsizes
+     instead of pushing the row wider than the screen. */
+  max-width: min(60ch, 60vw);
+}
+.agentchat-cwd-btn {
+  background: none;
+  border: 1px solid var(--rule);
+  color: inherit;
+  border-radius: var(--r-1);
+  padding: 2px 8px;
+  cursor: pointer;
+  font: inherit;
+}
+.agentchat-cwd-btn:hover { border-color: var(--accent); }
+.agentchat-cwd-btn:focus-visible { outline: var(--focus-w) solid var(--focus-color); outline-offset: var(--focus-offset); }
+.agentchat-cwd-input {
+  flex: 1;
+  min-width: 12ch;
+  background: var(--bg-2);
+  border: var(--bw-hair) solid var(--rule);
+  color: var(--fg);
+  border-radius: var(--r-1);
+  padding: 4px 8px;
+  font: inherit;
+}
+.agentchat-cwd-input:focus-visible { outline: none; box-shadow: var(--focus-ring-inset); }
+.agentchat-cwd-input[aria-invalid='true'] { border-color: var(--flame); box-shadow: inset 0 0 0 var(--bw-hair) var(--flame); }
+.agentchat-cwd-input[aria-busy='true'] { border-color: var(--fg-3); box-shadow: inset 0 0 0 var(--bw-hair) var(--fg-3); }
+
+/* cwd practicality upgrade: editing mode stacks the input row plus any
+   optional roots/recent/browse rows the host wires, instead of a single flat
+   row - each sub-row wraps independently at narrow widths. */
+.agentchat-cwd-editing { flex-direction: column; align-items: stretch; }
+.agentchat-cwd-row { display: flex; align-items: center; gap: var(--space-2, 8px); flex-wrap: wrap; }
+.agentchat-cwd-roots, .agentchat-cwd-recent {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+}
+.agentchat-cwd-recent-label { font-size: var(--fs-tiny); color: var(--fg-3); }
+.agentchat-cwd-chip {
+  background: var(--bg-2); border: var(--bw-hair) solid var(--rule); color: var(--fg-2);
+  border-radius: var(--r-pill); padding: 3px 10px; font: inherit; font-size: var(--fs-tiny);
+  cursor: pointer;
+}
+.agentchat-cwd-chip:hover { border-color: var(--accent); color: var(--fg); }
+.agentchat-cwd-chip:focus-visible { outline: var(--focus-w) solid var(--focus-color); outline-offset: var(--focus-offset); }
+.agentchat-cwd-browse {
+  border: var(--bw-hair) solid var(--rule); border-radius: var(--r-1);
+  padding: var(--space-2, 8px); background: var(--bg-2);
+  display: flex; flex-direction: column; gap: 6px;
+  max-height: 220px;
+}
+.agentchat-cwd-browse-list { overflow-y: auto; display: flex; flex-direction: column; max-height: 160px; }
+.agentchat-cwd-browse-item {
+  background: none; border: none; color: var(--fg-2); text-align: left;
+  padding: 6px 8px; border-radius: var(--r-1); font: inherit; font-size: var(--fs-tiny);
+  cursor: pointer;
+}
+.agentchat-cwd-browse-item:hover, .agentchat-cwd-browse-item:focus-visible { background: var(--bg-3, var(--bg)); color: var(--fg); }
+.agentchat-cwd-browse-loading, .agentchat-cwd-browse-empty { padding: 6px 8px; font-size: var(--fs-tiny); color: var(--fg-3); }
+
+/* head + thread */
+.agentchat-head {
+  display: flex;
+  align-items: baseline;
+  gap: .5em;
+}
+.agentchat-title { font-size: 1em; margin: 0; }
+.agentchat-sub { font-size: var(--fs-tiny); color: var(--fg-3); }
+/* Optional inline content viewer beside the thread (sidePanel prop) - a
+   docstudio-cue addition (its chat view keeps a document/PDF preview open
+   next to the conversation rather than in a separate tab). SplitPanel (an
+   existing kit primitive) owns the resizable layout; these rules only shape
+   the two panes' internal structure. */
+.agentchat.has-side-panel { gap: 0; }
+.agentchat.has-side-panel > .ds-ep-split { flex: 1; min-height: 0; }
+.agentchat-main-col { display: flex; flex-direction: column; min-height: 0; height: 100%; gap: var(--space-2, 8px); }
+.agentchat-side-panel { display: flex; flex-direction: column; height: 100%; min-height: 0; border-left: var(--bw-hair) solid var(--bg-3); }
+.agentchat-side-panel-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: var(--space-2, 8px) var(--space-3, 12px); border-bottom: var(--bw-hair) solid var(--bg-3);
+  flex: 0 0 auto;
+}
+.agentchat-side-panel-title { font-size: var(--fs-tiny); font-weight: 600; color: var(--fg-2); text-transform: uppercase; letter-spacing: var(--tr-label); }
+.agentchat-side-panel-close {
+  display: inline-flex; align-items: center; justify-content: center;
+  background: none; border: none; color: var(--fg-3); cursor: pointer;
+  padding: 4px; border-radius: var(--r-1);
+}
+.agentchat-side-panel-close:hover { background: var(--bg-2); color: var(--fg); }
+.agentchat-side-panel-close:focus-visible { outline: var(--focus-w) solid var(--focus-color); outline-offset: var(--focus-offset); }
+.agentchat-side-panel-body { flex: 1; min-height: 0; overflow: auto; }
+@media (max-width: 900px) {
+  /* A resizable side-by-side split is impractical below tablet width - stack
+     the preview under the thread instead of horizontally squeezing both. */
+  .agentchat.has-side-panel > .ds-ep-split.horiz { flex-direction: column; }
+  .agentchat-side-panel { border-left: none; border-top: var(--bw-hair) solid var(--bg-3); max-height: 45vh; }
+}
+/* Thread wrapper hosts the absolutely-positioned jump-to-latest button. */
+.agentchat-thread-wrap { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.agentchat-thread {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--space-2, 8px) * var(--density, 1));
+}
+
+/* Jump-to-latest: hidden until the thread scroll listener adds .show. */
+.agentchat-jump {
+  position: absolute; right: 16px; bottom: 12px; z-index: 3;
+  display: none; align-items: center; gap: .35em;
+  padding: .4em .8em; font: inherit; font-size: var(--fs-tiny); cursor: pointer;
+  border-radius: var(--r-pill); border: var(--bw-hair) solid var(--rule);
+  background: var(--bg-2); color: var(--fg-2, var(--fg));
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--fg) 14%, transparent);
+}
+.agentchat-jump.show { display: inline-flex; }
+.agentchat-jump:hover { background: var(--bg-3); }
+.agentchat-jump:focus-visible { outline: var(--focus-w) solid var(--focus-color); outline-offset: var(--focus-offset); }
+
+/* Streaming caret: a thin blinking bar at the live edge of an assistant turn. */
+.chat-stream-caret {
+  display: inline-block; width: 2px; height: 1.05em; margin-left: 1px;
+  vertical-align: text-bottom; background: var(--accent, var(--fg));
+  animation: chat-caret-blink 1s step-end infinite;
+}
+@keyframes chat-caret-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .chat-stream-caret { animation: none; opacity: .8; } }
+
+/* Per-message hover-revealed action row (copy / retry / edit). */
+.chat-msg-actions { display: flex; gap: 2px; margin-top: 3px; opacity: 0; transition: opacity var(--dur-snap, .12s) var(--ease, ease); }
+.chat-msg:hover .chat-msg-actions, .chat-msg:focus-within .chat-msg-actions { opacity: 1; }
+.chat-msg-action {
+  display: inline-flex; align-items: center; justify-content: center; gap: 4px;
+  min-width: 26px; height: 26px; padding: 0 6px; cursor: pointer;
+  border: none; border-radius: var(--r-1, 4px); background: none; color: var(--fg-3);
+  font-family: var(--ff-body); font-size: var(--fs-tiny);
+}
+.chat-msg-action-label { font-size: var(--fs-tiny); }
+.chat-msg-action:hover { background: var(--bg-2); color: var(--fg); }
+.chat-msg-action:focus-visible { outline: var(--focus-w) solid var(--focus-color); outline-offset: 1px; opacity: 1; }
+.chat-msg-action.is-copied { color: var(--accent-ink); opacity: 1; }
+
+/* Empty state: a fresh thread is an invitation, not a void. */
+.agentchat-empty {
+  margin: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: .4em;
+  text-align: center;
+  padding: var(--space-6, 32px) var(--space-4, 16px);
+  color: var(--fg-3);
+  max-width: 46ch;
+}
+.agentchat-empty-title { margin: 0; font-size: 1.05em; color: var(--fg-2, var(--fg)); }
+.agentchat-empty-sub { margin: 0; font-size: var(--fs-sm); }
+.agentchat-empty-suggestions, .chat-empty-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .5em;
+  justify-content: center;
+  margin-top: .5em;
+}
+.agentchat-empty-suggestion, .chat-empty-suggestion {
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--fs-tiny);
+  padding: .4em .8em;
+  border-radius: var(--r-pill);
+  border: 1px solid color-mix(in srgb, var(--fg) 16%, transparent);
+  background: color-mix(in srgb, var(--fg) 5%, transparent);
+  color: var(--fg-2, var(--fg));
+}
+.agentchat-empty-suggestion:hover, .chat-empty-suggestion:hover { background: color-mix(in srgb, var(--accent, var(--fg)) 12%, transparent); }
+.agentchat-empty-suggestion:focus-visible, .chat-empty-suggestion:focus-visible { outline: 2px solid var(--accent, var(--fg)); outline-offset: var(--focus-offset); }
+/* Follow-up chips (contextual, based on the last turn) vs empty-state seed
+   chips (generic starter ideas) previously shared identical DOM shape with no
+   visual signal distinguishing them - a dashed border reads as "derived from
+   context" without introducing a new color/shape language. */
+.agentchat-followup { border-style: dashed; }
+
+/* Guided install path in the empty state: copy line + monospaced command rows
+   (each with its own copy button) + a recheck button. No animation. */
+.agentchat-install {
+  margin-top: var(--space-4, 16px);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2, 8px);
+  text-align: left;
+  width: 100%;
+}
+.agentchat-install-text { margin: 0; font-size: var(--fs-sm); color: var(--fg-3); }
+.agentchat-install-list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: var(--space-1, 4px); }
+.agentchat-install-row {
+  display: flex; align-items: center; gap: var(--space-2, 8px);
+  padding: var(--space-1, 4px) var(--space-2, 8px);
+  border: var(--bw-hair) solid var(--rule);
+  border-radius: var(--r-1, 4px);
+  background: var(--bg-2);
+}
+.agentchat-install-agent { flex: 0 0 auto; font-size: var(--fs-tiny); color: var(--fg-3); min-width: 8ch; }
+.agentchat-install-cmd {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: var(--ff-mono); font-size: var(--fs-sm); color: var(--fg-2, var(--fg));
+}
+.agentchat-install-copy {
+  flex: 0 0 auto; cursor: pointer; padding: 2px 8px; min-height: 24px;
+  border: var(--bw-hair) solid var(--bg-3); border-radius: var(--r-1, 4px);
+  background: none; color: var(--fg-3);
+  font-family: var(--ff-body); font-size: var(--fs-tiny);
+}
+.agentchat-install-copy:hover { background: var(--bg-3); color: var(--fg); }
+.agentchat-install-copy:focus-visible { outline: var(--focus-w) solid var(--focus-color); outline-offset: 1px; }
+.agentchat-install-actions { display: flex; justify-content: flex-start; }
+
+/* Host-supplied transcript export actions riding the controls row. */
+.agentchat-export-act {
+  cursor: pointer; padding: 4px 10px; min-height: 32px;
+  border: var(--bw-hair) solid var(--bg-3); border-radius: var(--r-1, 4px);
+  background: none; color: var(--fg-3);
+  font-family: var(--ff-body); font-size: var(--fs-tiny);
+}
+.agentchat-export-act:hover { background: var(--bg-2); color: var(--fg); }
+.agentchat-export-act:focus-visible { outline: var(--focus-w) solid var(--focus-color); outline-offset: 1px; }
+
+/* "working" tail: a long silent tool call shouldn't read as frozen. */
+.agentchat-working {
+  display: flex;
+  align-items: center;
+  gap: .5em;
+  padding: .3em .2em;
+  color: var(--fg-3);
+  font-size: var(--fs-tiny);
+}
+.agentchat-working-text { color: var(--fg-3); }
+/* Self-contained dots (chat-thinking-dots lives in a kit sheet not bundled
+   into this DS distribution, so the agentchat tail draws its own). */
+.agentchat-working .chat-thinking-dots { display: inline-flex; gap: 3px; }
+.agentchat-working .chat-thinking-dots span {
+  width: 5px; height: 5px; border-radius: 50%;
+  background: var(--fg); opacity: .4;
+  animation: agentchat-dot-bounce 1.2s infinite ease-in-out;
+}
+.agentchat-working .chat-thinking-dots span:nth-child(2) { animation-delay: .15s; }
+.agentchat-working .chat-thinking-dots span:nth-child(3) { animation-delay: .3s; }
+@keyframes agentchat-dot-bounce {
+  0%, 80%, 100% { transform: scale(.6); opacity: .3; }
+  40% { transform: scale(1); opacity: .9; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .agentchat-working .chat-thinking-dots span { animation: none; opacity: .7; }
+}
+/* Standalone thinking part (ThinkingNode renders .chat-bubble.chat-thinking with
+   .chat-thinking-dots + .chat-thinking-text OUTSIDE the .agentchat-working tail).
+   Without these base rules the dots are invisible empty spans and the text has
+   no muted tone. Reuse the agentchat-dot-bounce keyframe. */
+.chat-thinking { display: flex; align-items: center; gap: .5em; color: var(--fg-3); font-size: var(--fs-tiny); background: none; padding: .3em .2em; }
+.chat-thinking-text { color: var(--fg-3); }
+.chat-thinking-dots { display: inline-flex; gap: 3px; }
+.chat-thinking-dots span {
+  width: 5px; height: 5px; border-radius: 50%;
+  background: var(--fg); opacity: .4;
+  animation: agentchat-dot-bounce 1.2s infinite ease-in-out;
+}
+.chat-thinking-dots span:nth-child(2) { animation-delay: .15s; }
+.chat-thinking-dots span:nth-child(3) { animation-delay: .3s; }
+@media (prefers-reduced-motion: reduce) {
+  .chat-thinking-dots span { animation: none; opacity: .7; }
+}
+
+/* Responsive: the control cluster + cwd bar must stay usable on phones/tablets.
+   The cwd path can't eat the row beside its label + buttons on a narrow screen. */
+.agentchat-controls { flex-wrap: wrap; }
+.agentchat-cwd-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: min(60ch, 60vw); }
+@media (max-width: 900px) {
+  .agentchat-controls .ds-select { min-width: 110px; max-width: 180px; }
+}
+@media (max-width: 640px) {
+  .agentchat-cwd-text { max-width: 42vw; }
+  .agentchat-controls { gap: .4em; }
+}
+/* 360px: buttons fill full width so they remain tappable at the narrowest phones */
+@media (max-width: 400px) {
+  .agentchat-controls .btn, .agentchat-controls .btn-primary,
+  .agentchat-controls button { flex: 1 1 100%; }
+}
+/* Coarse-pointer (touch): raise cwd button to 44px minimum tap target */
+@media (pointer: coarse) {
+  .agentchat-cwd-btn, .agentchat-cwd-chip, .agentchat-cwd-browse-item { min-height: 44px; }
+}
+
+/* ----------------------------------------------------------------------------
+   Global status disc — a CSS-drawn status indicator (no text glyph) usable
+   outside .agentchat-status (session rows, dashboard cards). Tone via modifier.
+---------------------------------------------------------------------------- */
+/* Single canonical status disc — one source for live/error/connecting/stale
+   everywhere (crumb dot, conversation row, dashboard card, composer status).
+   The app's index.html disc/pulse override is deleted in favour of this. Only
+   the -live disc pulses; -stale is deliberately static (a stuck session must NOT
+   read as busy). Pulse colour is derived from --accent via color-mix so it
+   tracks the theme instead of a hardcoded rgba. */
+.status-dot-disc {
+  display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--fg-3); flex: 0 0 auto;
+}
+/* Each variant carries a non-colour channel (fill vs halo vs hollow ring) so the
+   states stay distinguishable for colour-blind users and when stale/connecting
+   would otherwise share a hue. Mirrors the rail-tone shape differentiation. */
+/* One canonical stale tone (disc + word + rail share it) — a muted grey-warn,
+   deliberately desaturated so it is NOT the saturated --amber used by
+   connecting/connecting-stream (which would re-collide hues). */
+:root { --stale: color-mix(in oklab, var(--warn) 70%, var(--fg-3)); }
+/* Live: a persistent faint concentric ring (resting shape channel, independent
+   of motion) with the pulse layered on top — so even at the pulse trough the
+   disc reads as solid-fill + ring, never a bare solid that aliases stale. */
+.status-dot-disc.status-dot-live { background: var(--accent-ink); box-shadow: 0 0 0 2px color-mix(in oklab, var(--accent-ink) 30%, transparent); animation: status-disc-pulse 1.8s ease-in-out infinite; }
+.status-dot-disc.status-dot-error { background: var(--flame); box-shadow: 0 0 0 1.5px color-mix(in oklab, var(--flame) 38%, transparent); }
+.status-dot-disc.status-dot-connecting { background: transparent; box-shadow: inset 0 0 0 2px var(--amber); }
+/* Stale: a muted ring with a hollow centre — silhouette distinct from live's
+   filled disc and connecting's amber hollow ring (hue + inset core). */
+.status-dot-disc.status-dot-stale { background: transparent; box-shadow: inset 0 0 0 1px var(--stale), inset 0 0 0 3px var(--bg); }
+@keyframes status-disc-pulse {
+  /* First shadow is the persistent resting ring; second is the animated halo —
+     the ring is always present so the trough never collapses to a bare solid. */
+  0%, 100% { box-shadow: 0 0 0 2px color-mix(in oklab, var(--accent) 30%, transparent), 0 0 0 2px color-mix(in oklab, var(--accent) 55%, transparent); }
+  50%      { box-shadow: 0 0 0 2px color-mix(in oklab, var(--accent) 30%, transparent), 0 0 0 6px color-mix(in oklab, var(--accent) 0%, transparent); }
+}
+@media (prefers-reduced-motion: reduce) {
+  /* The base rule already carries the persistent ring; just stop the pulse. */
+  .status-dot-disc.status-dot-live { animation: none; }
+}
+
+/* ----------------------------------------------------------------------------
+   ConversationList — left-rail "Chats" column.
+---------------------------------------------------------------------------- */
+.ds-sessions { display: flex; flex-direction: column; min-height: 0; height: 100%; }
+/* agentgui's search-results export row sits as a sibling ABOVE ConversationList
+   (not threaded through any of its props) - the wrapper must replicate the
+   same flex-column layout .ds-sessions itself uses so ConversationList's own
+   internal scroll region isn't broken by an extra non-flex ancestor. */
+.agentgui-search-rail-wrap { display: flex; flex-direction: column; min-height: 0; height: 100%; }
+.agentgui-search-export-row { flex: 0 0 auto; padding: var(--space-2) var(--space-3) 0; }
+/* One row: quiet icon new-chat beside the search. The list's new-chat must not
+   repeat the rail's primary CTA - two identical green buttons on screen at
+   once read as a layout mistake, and the rail action already owns 'new'. */
+.ds-session-head { flex: 0 0 auto; display: flex; flex-direction: row; align-items: center; gap: var(--space-2); padding: var(--space-3); border-bottom: var(--bw-hair) solid var(--bg-3); }
+.ds-session-new {
+  display: inline-flex; align-items: center; justify-content: center; gap: 0;
+  flex: 0 0 auto; order: 2;
+  width: 36px; min-height: 36px; padding: 0;
+  background: transparent; color: var(--fg-2);
+  border: var(--bw-hair) solid var(--rule);
+  border-radius: var(--r-1); cursor: pointer; font-family: var(--ff-body);
+  font-size: var(--fs-sm); font-weight: 500;
+}
+.ds-session-new > span { display: none; }
+.ds-session-new:hover { background: var(--bg-2); color: var(--fg); }
+/* Rail filter uses the shared .ds-search-input primitive (provides bg/border/
+   radius/focus-ring); only the rail layout + touch floor live here. */
+.ds-session-head .ds-search-input { order: 1; flex: 1 1 auto; min-width: 0; min-height: 36px; padding: 0 10px; }
+.ds-session-new:focus-visible { outline: var(--focus-w) solid var(--focus-color); outline-offset: var(--focus-offset); }
+/* Touch floor (must FOLLOW the base rules - same specificity, order decides). */
+@media (pointer: coarse) {
+  .ds-session-new { width: 44px; min-height: 44px; }
+  .ds-session-head .ds-search-input { min-height: 44px; }
+}
+.ds-session-list, .ds-session-groups { flex: 1; min-height: 0; overflow-y: auto; padding: var(--space-2); }
+.ds-session-loadmore {
+  width: 100%; margin-top: var(--space-1); padding: 8px 12px;
+  font-size: var(--fs-sm); font-family: inherit; color: var(--fg-3);
+  background: none; border: var(--bw-hair) dashed var(--rule); border-radius: var(--r-1);
+  cursor: pointer; text-align: center;
+}
+.ds-session-loadmore:hover { color: var(--fg); border-color: var(--fg-3); }
+.ds-session-loadmore:focus-visible { outline: var(--focus-w) solid var(--focus-color); outline-offset: var(--focus-offset); }
+@media (pointer: coarse) { .ds-session-loadmore { min-height: 44px; } }
+/* Grouped rows (Today/Yesterday/...) lay out like the flat list; the section
+   label sticks to the top of the scroll area for Claude-Desktop-style headers. */
+.ds-session-group { display: flex; flex-direction: column; }
+.ds-session-group-rows { display: flex; flex-direction: column; gap: 2px; }
+.ds-session-group-label { position: sticky; top: 0; z-index: 1; background: var(--bg-1, var(--bg)); font-size: var(--fs-tiny); font-weight: 600; color: var(--fg-3); text-transform: uppercase; letter-spacing: var(--tr-label); padding: var(--space-2) var(--space-2) var(--space-1); }
+.ds-session-row {
+  position: relative; display: flex; align-items: center; gap: var(--space-2);
+  width: 100%; padding: var(--space-2); min-height: 52px; margin-bottom: 2px;
+  background: transparent; border: none; border-radius: var(--r-1);
+  cursor: pointer; text-align: left; color: var(--fg);
+}
+.ds-session-row:hover { background: var(--bg-2); }
+.ds-session-row:focus-visible { outline: var(--focus-w) solid var(--focus-color); outline-offset: calc(var(--focus-offset) * -1); }
+.ds-session-row.active { background: var(--accent-tint); box-shadow: inset 2px 0 0 var(--accent); }
+.ds-session-row.rail-green::before, .ds-session-row.rail-purple::before, .ds-session-row.rail-flame::before {
+  content: ''; position: absolute; left: 0; top: 8px; bottom: 8px; width: 3px; border-radius: var(--r-hair);
+}
+/* Rail tones MUST match .row.rail-* in app-shell.css so the same semantic state
+   reads as one colour across the conversation list and content rows. */
+.ds-session-row.rail-green::before { background: var(--accent-ink); }
+.ds-session-row.rail-purple::before { background: var(--purple-2); }
+.ds-session-row.rail-flame::before { background: var(--flame); }
+.ds-session-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.ds-session-title { font-size: var(--fs-sm); color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ds-session-sub { font-size: var(--fs-tiny); color: var(--fg-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ds-session-meta { display: flex; align-items: center; gap: var(--space-2); flex: 0 0 auto; }
+.ds-session-agent { font-size: var(--fs-tiny); color: var(--fg-3); }
+/* New-activity cue is a hollow accent RING so it stays shape-distinct from the
+   running live disc (a solid pulsing accent dot) for colour-blind / reduced-motion users. */
+.ds-session-unread { width: 8px; height: 8px; border-radius: 50%; background: var(--fg-2); display: inline-block; }
+.ds-session-state { padding: var(--space-5) var(--space-3); text-align: center; color: var(--fg-3); font-size: var(--fs-sm); }
+.ds-session-state-error { color: var(--flame); }
+
+/* ----------------------------------------------------------------------------
+   SessionDashboard — grid of live-session cards.
+---------------------------------------------------------------------------- */
+.ds-dash { display: flex; flex-direction: column; min-height: 0; }
+.ds-dash-header { flex: 0 0 auto; display: flex; align-items: center; gap: var(--space-3); row-gap: var(--space-2); flex-wrap: wrap; padding: var(--space-3) var(--space-4) 0; }
+.ds-dash-count { font-size: var(--fs-sm); color: var(--fg-2); font-weight: 600; }
+/* Stop is a quiet destructive control in chrome, not a page-level red CTA;
+   it only goes loud while ARMED (the one-shot press-again confirm). */
+.ds-dash-header .btn, .ds-dash-header .btn-primary {
+  margin-left: 0;
+  padding: 5px 12px; min-height: 32px; border-radius: var(--r-1); font-weight: 500;
+}
+.ds-dash-header .btn-primary.danger {
+  background: transparent; color: var(--warn);
+  border: var(--bw-hair) solid var(--warn);
+}
+.ds-dash-header .btn-primary.danger:hover {
+  background: color-mix(in oklab, var(--warn) 12%, transparent); color: var(--warn);
+}
+.ds-dash-header .btn-primary.danger.is-armed { background: var(--warn); color: var(--paper); border-color: var(--warn); }
+.ds-dash-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: var(--space-2); padding: var(--space-3); }
+@media (min-width: 1500px) { .ds-dash-grid { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); } }
+.ds-dash-card { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-3); background: var(--bg-2); border: var(--bw-hair) solid var(--bg-3); border-radius: var(--r-2); }
+.ds-dash-card.is-error { border-color: var(--flame); }
+.ds-dash-card-head { display: flex; align-items: center; gap: var(--space-2); }
+.ds-dash-status { font-size: var(--fs-tiny); font-weight: 600; text-transform: uppercase; letter-spacing: var(--tr-caps); }
+/* running tone unified on --accent (the later is-running rule + the live disc all
+   use --accent); the dead var(--green) duplicate that lived here was removed. */
+.ds-dash-status.is-error { color: var(--flame); }
+.ds-dash-agent { font-size: var(--fs-body); font-weight: 600; color: var(--fg); }
+.ds-dash-model { font-family: var(--ff-mono); font-size: var(--fs-tiny); color: var(--fg-3); margin-left: auto; }
+.ds-dash-meta { display: flex; flex-direction: column; gap: 2px; }
+.ds-dash-cwd { font-family: var(--ff-mono); font-size: var(--fs-tiny); color: var(--fg-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ds-dash-stat { font-family: var(--ff-mono); font-size: var(--fs-tiny); color: var(--fg-2); }
+.ds-dash-stat-cost { color: var(--fg); font-weight: 600; }
+.ds-dash-activity { font-size: var(--fs-tiny); color: var(--fg-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ds-dash-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-1); }
+.ds-dash-state { padding: var(--space-6) var(--space-4); text-align: center; color: var(--fg-3); font-size: var(--fs-body); }
+.ds-dash-state-error { color: var(--flame); }
+
+@media (max-width: 640px) {
+  .ds-dash-grid { grid-template-columns: 1fr; padding: var(--space-3); }
+}
+
+/* ----------------------------------------------------------------------------
+   ContextPane — compact right-hand context panel for the chat surface.
+---------------------------------------------------------------------------- */
+.ds-context { display: flex; flex-direction: column; gap: var(--space-3); padding: var(--space-3); }
+.ds-context .panel { background: var(--bg-2); border: var(--bw-hair) solid var(--bg-3); border-radius: var(--r-2); }
+.ds-context .row .meta { font-family: var(--ff-mono); font-size: var(--fs-xs); color: var(--fg-2); }
+.ds-context .row .sub { font-size: var(--fs-xs); color: var(--fg-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ds-context-actions { display: flex; gap: var(--space-2); }
+/* Lighter fact groups for secondary context blocks (conversation/last turn/
+   recent files): a small caps label + Row list with no card chrome, so a
+   2-row fact doesn't compete visually with the primary bordered panel above
+   it. Separated from neighbors by a hairline rule, not a border box. */
+.ds-context-group { padding-top: var(--space-3); border-top: var(--bw-hair) solid var(--rule); }
+.ds-context-group-label {
+  font-size: var(--fs-tiny); font-weight: 600; color: var(--fg-3);
+  letter-spacing: var(--tr-caps); text-transform: uppercase;
+  padding: 0 0 var(--space-2);
+}
+.ds-context-group .row + .row { margin-top: 2px; }
+
+/* ============================================================================
+   Cohesion sweep (gui-cohesion.js): one-product polish across surfaces.
+============================================================================ */
+
+/* --- A1/A2/E3: per-block code copy. The <pre> is wrapped in .chat-code-block
+   (position:relative) so the copy button sits top-right and reveals on hover/
+   focus-within, matching the .chat-msg-actions pattern. The structured CodeNode
+   head + preview head place the button inline (always visible). --- */
+.chat-code-block { position: relative; }
+.chat-code-copy {
+  position: absolute; top: 6px; right: 6px;
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 48px; min-height: 24px; padding: 2px 8px;
+  border: var(--bw-hair) solid var(--bg-3); border-radius: var(--r-1, 4px);
+  background: var(--bg-2); color: var(--fg-2); cursor: pointer;
+  font-family: var(--ff-body); font-size: var(--fs-tiny);
+  opacity: 0; transition: opacity var(--dur-snap, .12s) var(--ease, ease);
+}
+.chat-code-block:hover .chat-code-copy, .chat-code-block:focus-within .chat-code-copy { opacity: 1; }
+.chat-code-copy.is-copied { color: var(--accent-ink); border-color: var(--accent); }
+.chat-code-copy:focus-visible { outline: var(--focus-w) solid var(--focus-color); outline-offset: 1px; opacity: 1; }
+/* Head-placed copy (structured CodeNode + FilePreviewCode) is always visible. */
+.chat-code-head .spread { flex: 1; }
+.chat-code-copy-head { position: static; opacity: 1; }
+
+/* --- B1: streaming pre shell — monospaced bubble while a fenced block streams,
+   so it does not reflow prose->block on settle. --- */
+.chat-stream-pre pre { margin: 0; white-space: pre-wrap; word-break: break-word; font-family: var(--ff-mono); font-size: var(--fs-sm); }
+/* Persistent minimal chrome so a fenced block does not pop a border + lang tab +
+   copy button only on settle - the streaming slab already reads as a code block. */
+.chat-stream-pre { position: relative; }
+.chat-stream-pre pre {
+  border: var(--bw-hair) solid var(--rule); border-radius: var(--r-1);
+  padding: var(--space-3); background: color-mix(in oklab, var(--fg) 4%, transparent);
+}
+
+/* --- reply-preview banner shown above the composer while replying to a message. --- */
+.cm-composer-wrap { display: flex; flex-direction: column; width: 100%; }
+.cm-reply-preview {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--space-2);
+  padding: var(--space-1) var(--space-3); border-bottom: var(--bw-hair) solid var(--rule);
+  background: color-mix(in oklab, var(--accent) 6%, transparent);
+  font-family: var(--ff-mono); font-size: var(--fs-tiny); color: var(--fg-2);
+}
+.cm-reply-preview-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cm-reply-preview-close {
+  display: inline-flex; align-items: center; justify-content: center;
+  background: none; border: none; color: var(--fg-3); cursor: pointer; padding: var(--space-1);
+  border-radius: var(--r-1); flex: 0 0 auto;
+}
+.cm-reply-preview-close:hover { color: var(--fg); background: color-mix(in oklab, var(--fg) 8%, transparent); }
+.cm-reply-preview-close:focus-visible { outline: var(--focus-w) solid var(--focus-color); outline-offset: var(--focus-offset); }
+
+/* --- A5: composer context line (agent / model / cwd at point of typing). --- */
+.chat-composer-context {
+  display: block; width: 100%; text-align: left; padding: 4px var(--space-3) 0;
+  background: none; border: none; cursor: default; color: var(--fg-3);
+  font-family: var(--ff-mono); font-size: var(--fs-tiny);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* Below ~480px a single nowrap line silently truncates most of the agent /
+   model / cwd context (no way to recover it - no title attr on the container,
+   only on individual bits). Let it wrap instead of clipping. */
+@media (max-width: 480px) {
+  .chat-composer-context { white-space: normal; overflow: visible; text-overflow: clip; }
+}
+button.chat-composer-context { cursor: pointer; }
+button.chat-composer-context:hover { color: var(--fg-2); }
+button.chat-composer-context:focus-visible { outline: var(--focus-w) solid var(--focus-color); outline-offset: var(--focus-offset); }
+
+/* Composer send/cancel button row: a non-wrapping cluster pinned to the
+   bottom-right of the flex-end composer (was unstyled, so the send button
+   could wrap below the textarea instead of anchoring like claude.ai/code). */
+.chat-composer-toolbar { display: flex; align-items: center; gap: var(--space-1); flex: 0 0 auto; margin-left: auto; align-self: flex-end; }
+/* Unify the toolbar cluster on one 32px / --r-1 square metric (the round 40px
+   ghost buttons + 36px square send read as two button systems; the kit moved
+   .btn* off --r-pill). chat.css loads after app-shell.css so this wins by order. */
+.chat-composer-toolbar .composer-btn,
+.chat-composer-toolbar .send { width: 32px; height: 32px; border-radius: var(--r-1); }
+@media (pointer: coarse) {
+  .chat-composer-toolbar .composer-btn,
+  .chat-composer-toolbar .send { width: 44px; height: 44px; }
+}
+
+/* --- B2: follow-up chips below the last settled assistant turn. --- */
+.agentchat-followups { display: flex; flex-wrap: wrap; gap: var(--space-2); padding: var(--space-2) var(--space-3); }
+
+/* --- C1: stale/idle dashboard status (static, NOT pulsing). --- */
+.ds-dash-status.is-stale { color: var(--stale); }
+.ds-dash-status.is-running { color: var(--accent-ink); }
+
+/* --- C2: dashboard sort/filter toolbar + stream-state line. --- */
+/* The toolbar is part of the ONE header row (count | heartbeat ... filter,
+   sort, errors-only, stop): compact controls that align on a shared 32px
+   height, never a stacked full-width form column. */
+.ds-dash-toolbar { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+.ds-dash-toolbar .ds-search-input {
+  width: 200px; min-height: 32px; padding: 5px 10px;
+  font-size: var(--fs-sm); border-radius: var(--r-1);
+}
+.ds-dash-toolbar .ds-select, .ds-dash-toolbar select {
+  min-height: 32px; padding: 4px 10px; font-size: var(--fs-sm);
+  width: auto; border-radius: var(--r-1);
+}
+.ds-dash-stream { font-size: var(--fs-tiny); color: var(--fg-3); }
+.ds-dash-stream.is-connected { color: var(--accent-ink); }
+.ds-dash-stream.is-lost { color: var(--flame); }
+.ds-dash-stream.is-connecting { color: var(--amber); }
+.ds-dash-header .spread { flex: 1; }
+.ds-dash-errors-toggle {
+  padding: 4px 10px; min-height: 32px; border: var(--bw-hair) solid var(--bg-3);
+  border-radius: var(--r-1); background: var(--bg-2); color: var(--fg-2);
+  cursor: pointer; font-family: var(--ff-body); font-size: var(--fs-tiny);
+}
+.ds-dash-errors-toggle.active { background: var(--accent-tint); color: var(--fg); border-color: var(--accent); }
+.ds-dash-errors-toggle:focus-visible { outline: var(--focus-w) solid var(--focus-color); outline-offset: 1px; }
+
+/* --- C3: per-card select checkbox. --- */
+.ds-dash-select {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 24px; min-height: 24px; padding: 0; cursor: pointer;
+  border: none; background: none; color: var(--fg-3);
+  font-family: var(--ff-mono); font-size: var(--fs-sm);
+}
+.ds-dash-select[aria-checked="true"] { color: var(--accent-ink); }
+.ds-dash-select:focus-visible { outline: var(--focus-w) solid var(--focus-color); outline-offset: 1px; }
+
+/* --- C5: active dashboard card (current conversation). --- */
+.ds-dash-card.is-active { box-shadow: inset 2px 0 0 var(--accent); }
+.ds-dash-card.is-selected { background: var(--accent-tint); }
+/* Stale/idle card: a positive amber inset bar (mirrors is-active) so a stuck
+   agent is flagged in a dense grid, not merely faded near-invisibly. The word
+   'idle' co-carries state, so this stays colour-blind safe. */
+.ds-dash-card.is-stale { box-shadow: inset 2px 0 0 var(--stale); }
+/* Active identity always wins over stale amber when both classes are present. */
+.ds-dash-card.is-active.is-stale { box-shadow: inset 2px 0 0 var(--accent); }
+
+/* --- H3: dashboard live disc pulses; stale/error do not (handled by H1). --- */
+
+/* --- C6: per-tab conversation-list caption. --- */
+.ds-session-caption { padding: var(--space-2) var(--space-3) 0; font-size: var(--fs-tiny); color: var(--fg-3); }
+
+/* --- F1: context-pane empty state. --- */
+.ds-context-empty { padding: var(--space-4) var(--space-3); color: var(--fg-3); font-size: var(--fs-sm); line-height: 1.5; }
+
+/* --- E1: inline file preview pane (split view, non-modal). --- */
+.ds-preview-pane { display: flex; flex-direction: column; min-height: 0; height: 100%; overflow: hidden; }
+.ds-preview-pane:focus-visible { outline: var(--focus-w) solid var(--focus-color); outline-offset: calc(var(--focus-offset) * -1); }
+.ds-preview-pane .ds-preview-body { flex: 1; min-height: 0; overflow: auto; }
+.ds-preview-pane-empty { align-items: center; justify-content: center; color: var(--fg-3); font-size: var(--fs-sm); }
+.ds-preview-code-wrap { display: flex; flex-direction: column; min-height: 0; }
+.ds-preview-code-head { flex: 0 0 auto; }
+/* --- E2: prev/next stepper in preview head. --- */
+.ds-preview-step { display: inline-flex; gap: 2px; }
+.ds-preview-step .ds-file-act { min-width: 40px; padding: 0 6px; font-family: var(--ff-body); font-size: var(--fs-tiny); }
+
+/* --- D1: file grid "show more" row. --- */
+.ds-file-more { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3); justify-content: center; }
+.ds-file-more-count { font-size: var(--fs-tiny); color: var(--fg-3); }
+.ds-file-more-btn {
+  padding: 4px 12px; min-height: 32px; border: var(--bw-hair) solid var(--bg-3);
+  border-radius: var(--r-1); background: var(--bg-2); color: var(--fg-2); cursor: pointer;
+  font-family: var(--ff-body); font-size: var(--fs-tiny);
+}
+.ds-file-more-btn:focus-visible { outline: var(--focus-w) solid var(--focus-color); outline-offset: 1px; }
+/* --- D3: locked/no-access file row. --- */
+.ds-file-row.is-locked { opacity: .6; }
+
+/* --- D4: roots picker segmented control. --- */
+.ds-roots-picker { display: inline-flex; gap: 2px; padding: 2px; background: var(--bg-2); border-radius: var(--r-1); }
+.ds-roots-tab {
+  padding: 4px 10px; min-height: 32px; border: none; border-radius: var(--r-1);
+  background: none; color: var(--fg-3); cursor: pointer;
+  font-family: var(--ff-body); font-size: var(--fs-tiny);
+}
+.ds-roots-tab:hover { background: var(--bg-2); color: var(--fg); }
+.ds-roots-tab.active { background: var(--bg); color: var(--fg); }
+.ds-roots-tab:focus-visible { outline: var(--focus-w) solid var(--focus-color); outline-offset: 1px; }
+
+/* --- H4: touch targets. On a coarse pointer / narrow screen the hover-revealed
+   action rows are made permanently visible and small controls floor to 44px so
+   they are reachable by finger. --- */
+@media (pointer: coarse), (max-width: 640px) {
+  .chat-msg-actions { opacity: 1; }
+  .chat-code-copy { opacity: 1; }
+  .chat-tool-copy { opacity: 1; min-width: 44px; min-height: 44px; }
+  .chat-msg-action { min-width: 44px; height: 44px; }
+  .ds-dash-select { min-width: 44px; min-height: 44px; }
+  .ds-file-more-btn, .ds-roots-tab, .ds-dash-errors-toggle { min-height: 44px; }
+  .agentchat-export-act { min-height: 44px; }
+  .agentchat-install-copy { min-height: 44px; min-width: 44px; }
+}
+
+/* --- SessionMeta: middot-separated session metadata strip. Class is
+   .ds-session-meta-strip (.ds-session-meta is taken by ConversationList row
+   meta above). Wraps at narrow widths. --- */
+.ds-session-meta-strip {
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2);
+  font-size: var(--fs-tiny); color: var(--fg-3);
+}
+.ds-session-meta-item { display: inline-flex; align-items: center; gap: var(--space-1); min-width: 0; }
+.ds-session-meta-item + .ds-session-meta-item::before { content: '\00B7'; color: var(--fg-3); margin-right: var(--space-1); }
+.ds-session-meta-label { color: var(--fg-3); }
+.ds-session-meta-value { font-family: var(--ff-mono); color: var(--fg-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ds-session-meta-copy, .ds-session-meta-action {
+  padding: 2px 8px; min-height: 24px; cursor: pointer;
+  background: var(--bg-2); border: var(--bw-hair) solid var(--bg-3); border-radius: var(--r-1);
+  color: var(--fg-3); font-family: var(--ff-body); font-size: var(--fs-micro);
+}
+.ds-session-meta-copy:hover, .ds-session-meta-action:hover { background: var(--bg-3); color: var(--fg); }
+.ds-session-meta-copy:focus-visible, .ds-session-meta-action:focus-visible { outline: var(--focus-w) solid var(--focus-color); outline-offset: 1px; }
+@media (pointer: coarse), (max-width: 640px) {
+  .ds-session-meta-copy, .ds-session-meta-action { min-height: 44px; min-width: 44px; }
+}
+
+/* ============================================================================
+   Logic/predictability sweep (2026-06-10): composer ergonomics, turn notices,
+   windowed thread, dashboard stopping/external states, cwd validation.
+============================================================================ */
+
+/* Enter-to-send hint: visible at rest so a new user with an empty composer
+   can discover Enter-vs-Shift+Enter without having to focus it first;
+   hidden under 420px to save rows. */
+.chat-composer-hint {
+  display: block; width: 100%; order: 5; padding: 2px var(--space-1) 0;
+  font-size: var(--fs-micro); color: var(--fg-3);
+}
+@media (max-width: 420px) {
+  .chat-composer .chat-composer-hint { display: none; }
+}
+
+/* Transient composer note (paste/drop not supported), aria-live polite. */
+.chat-composer-note {
+  padding: 4px var(--space-3); font-size: var(--fs-tiny); color: var(--fg-2);
+}
+
+/* Streaming elapsed-time counter: ticks m:ss while a turn is in flight.
+   Tabular-nums so the digits don't jitter the layout every second. */
+.chat-composer-elapsed {
+  order: 5; padding: 2px var(--space-1) 0;
+  font-size: var(--fs-micro); color: var(--fg-3);
+  font-variant-numeric: tabular-nums; font-feature-settings: 'tnum';
+}
+
+/* Detected-attachment badge: a dismissible pill above the textarea, styled
+   like the composer-note treatment (same tone/scale) rather than inventing
+   new chrome. */
+.chat-composer-detected-badge {
+  display: flex; align-items: center; gap: var(--space-2, 8px);
+  padding: 4px var(--space-3); font-size: var(--fs-tiny); color: var(--fg-2);
+  background: var(--bg-2); border: var(--bw-hair) solid var(--rule);
+  border-radius: var(--r-1); width: 100%; order: -1;
+}
+.chat-composer-detected-label { flex: 1 1 auto; }
+.chat-composer-detected-dismiss {
+  flex: 0 0 auto; background: none; border: none; cursor: pointer;
+  color: var(--fg-3); font: inherit; font-size: var(--fs-tiny);
+  padding: 2px 6px; border-radius: var(--r-1);
+}
+.chat-composer-detected-dismiss:hover { color: var(--fg); }
+.chat-composer-detected-dismiss:focus-visible { outline: var(--focus-w) solid var(--focus-color); outline-offset: var(--focus-offset); }
+@media (pointer: coarse) {
+  .chat-composer-detected-dismiss { min-height: 44px; min-width: 44px; }
+}
+
+/* Drag-over ring: token accent, never a hex. */
+.chat-composer.dragover { outline: var(--focus-w) solid var(--focus-color); outline-offset: calc(var(--focus-offset) * -1); border-radius: var(--r-2); }
+
+/* Per-bit composer context: only the bit that owns a control is a button. */
+.chat-composer-context-bit {
+  display: inline; padding: 0; margin: 0;
+  background: none; border: none; cursor: pointer;
+  font: inherit; color: inherit; text-decoration: underline dotted;
+}
+.chat-composer-context-bit:hover { color: var(--fg-2); }
+.chat-composer-context-bit:focus-visible { outline: var(--focus-w) solid var(--focus-color); outline-offset: var(--focus-offset); }
+@media (pointer: coarse) {
+  .chat-composer-context-bit { min-height: 44px; }
+}
+
+/* Out-of-band turn notices: neutral tone (NOT error red) — a stopped or
+   incomplete turn must not read as a finished answer. */
+.chat-msg-notice {
+  margin-top: var(--space-1); padding: 6px 10px;
+  border: var(--bw-hair) solid var(--rule); border-radius: var(--r-2);
+  background: var(--bg-2); color: var(--fg-2); font-size: var(--fs-tiny);
+}
+.chat-msg-notice.is-incomplete { border-style: dashed; }
+/* Error is the one genuine failure state among these notices — reserving
+   the destructive tone for it (unlike stopped/incomplete, which are neutral
+   "not a finished answer" states, not failures). */
+.chat-msg-notice.is-error {
+  border-color: var(--danger); color: var(--danger-ink, var(--danger));
+  display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap;
+}
+.chat-msg-retry-btn {
+  border: var(--bw-hair) solid var(--danger); border-radius: var(--r-1);
+  background: transparent; color: var(--danger-ink, var(--danger));
+  font: inherit; font-size: var(--fs-tiny); padding: 2px 10px; cursor: pointer;
+}
+.chat-msg-retry-btn:hover { background: var(--danger); color: var(--bg); }
+.chat-msg-retry-btn:focus-visible { outline: var(--focus-w) solid var(--focus-color); outline-offset: var(--focus-offset); }
+
+/* Tail-window streaming head ('streaming · N KB so far'). */
+.chat-stream-head {
+  padding: 2px 0 6px; font-family: var(--ff-mono);
+  font-size: var(--fs-micro); color: var(--fg-3);
+}
+
+/* Windowed thread: 'show N earlier turns' control at the top. */
+.agentchat-earlier {
+  display: flex; align-items: center; justify-content: center;
+  gap: var(--space-3); padding: var(--space-2) var(--space-3);
+}
+.agentchat-earlier-count { font-size: var(--fs-tiny); color: var(--fg-3); }
+.agentchat-earlier-btn {
+  padding: 4px 12px; min-height: 32px; border: var(--bw-hair) solid var(--bg-3);
+  border-radius: var(--r-1); background: var(--bg-2); color: var(--fg-2); cursor: pointer;
+  font-family: var(--ff-body); font-size: var(--fs-tiny);
+}
+.agentchat-earlier-btn:hover { background: var(--bg-2); color: var(--fg); }
+.agentchat-earlier-btn:focus-visible { outline: var(--focus-w) solid var(--focus-color); outline-offset: 1px; }
+@media (pointer: coarse) {
+  .agentchat-earlier-btn { min-height: 44px; }
+}
+
+/* Inline cwd validation line (checking / error) under the cwd input. */
+.agentchat-cwd-hint { font-size: var(--fs-tiny); color: var(--fg-3); }
+.agentchat-cwd-hint.is-error { color: var(--flame); }
+.agentchat-cwd-hint.is-checking { color: var(--fg-2); font-style: italic; }
+
+/* Dashboard: shared session title heading (same string as the rails). */
+.ds-dash-title {
+  font-size: var(--fs-sm); font-weight: 600; color: var(--fg);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* Stopping state: in-flight cancel reads distinctly from running/error. */
+.ds-dash-status.is-stopping { color: var(--amber); }
+
+/* External (observed, not owned) session card: no stop control exists. */
+.ds-dash-external {
+  padding: 1px 6px; border: var(--bw-hair) solid var(--bg-3); border-radius: var(--r-pill);
+  font-size: var(--fs-micro); color: var(--fg-3); text-transform: uppercase; letter-spacing: var(--tr-caps);
+}
+.ds-dash-card.is-external { border-style: dashed; }
+
+/* One connection vocabulary: offline (is-lost kept as legacy alias). */
+.ds-dash-stream.is-offline { color: var(--flame); }
+
+/* ============================================================
+   10th run - Claude-Code-web design-language parity
+   ============================================================ */
+
+/* Flat full-width chat turns (claude.ai/code), replacing the messenger
+   avatar-disc + colored-bubble layout. AgentChat passes flat:true; the demo
+   Chat keeps the bubble layout. Turns are full-width to --measure; the user vs
+   assistant distinction is a role label + a faint assistant background. */
+/* Center the flat turn at the reading measure so a wide content column does not
+   dump a one-sided dead gutter (claude.ai/code centers the thread). Padding
+   scales through --density so data-density=compact tightens the thread. */
+.chat-msg-flat { display: block; max-width: var(--measure); margin-inline: auto; padding: calc(var(--space-3) * var(--density, 1)) var(--space-4); margin-block: 0; background: none; border-radius: var(--r-2); }
+.chat-msg-flat.them { background: color-mix(in oklab, var(--fg) 3%, transparent); }
+.chat-msg-flat.you { background: none; }
+.chat-msg-flat .chat-stack { max-width: var(--measure); width: 100%; margin: 0; align-items: stretch; }
+.chat-msg-flat.you .chat-stack { align-items: stretch; }
+.chat-role { font-size: var(--fs-tiny); font-weight: 600; text-transform: uppercase; letter-spacing: var(--tr-caps); color: var(--fg-3); margin-bottom: var(--space-1); }
+.chat-msg-flat.you .chat-role { color: var(--accent-ink); }
+.chat-msg-flat .chat-bubble { background: none; border: none; border-radius: 0; padding: 0; max-width: 100%; box-shadow: none; transform: none; }
+.chat-msg-flat.you .chat-bubble { background: none; color: inherit; }
+/* Flat user turns reset their bubble to transparent, but the messenger rule
+   (.chat-msg.you .chat-bubble code) tints inline code on --accent-fg, which is
+   invisible/wrong on the bare page surface. Reset to the neutral fg-10% tint the
+   sibling assistant turns get (wins over app-shell.css by later source order). */
+.chat-msg-flat.you .chat-bubble code { background: color-mix(in oklab, var(--fg) 10%, transparent); }
+/* Flat turns strip the bubble padding, so the role label sat 4px above the first
+   paragraph and the .them tint hugged text flush. Restore reading rhythm + give
+   the tinted assistant row inner breathing room so it reads as a card. */
+.chat-msg-flat .chat-role { margin-bottom: var(--space-2); }
+.chat-msg-flat .chat-md { line-height: var(--lh-long); }
+.chat-msg-flat .chat-md p { margin: var(--space-2) 0; }
+.chat-msg-flat.them { padding-block: calc(var(--space-3) * var(--density, 1) + 2px); }
+/* Inline backtick code (renderInline tags <code class=chat-tick>) - was a dead
+   class relying on the generic .chat-bubble code rule, so notices / non-bubble
+   surfaces got unstyled monospace. Self-style it regardless of container. */
+.chat-tick { font-family: var(--ff-mono); font-size: .92em; background: color-mix(in oklab, var(--fg) 10%, transparent); padding: 1px 6px; border-radius: var(--r-1); }
+/* Structured tool/code output earns more width than running prose (claude.ai/code
+   lets diffs/tables break out wider than the reading measure). A flat turn that
+   contains a tool card or code block widens itself AND its stack past --measure;
+   prose-only turns stay clamped. */
+.chat-msg-flat:has(.chat-tool),
+.chat-msg-flat:has(.chat-bubble.chat-code) { max-width: calc(var(--measure) + 14ch); }
+.chat-msg-flat:has(.chat-tool) .chat-stack,
+.chat-msg-flat:has(.chat-bubble.chat-code) .chat-stack { max-width: calc(var(--measure) + 14ch); }
+/* Hover tint exceeds each role's REST tint so the row gives feedback (and the
+   ladder stays monotonic): assistant 5% > its 3% rest; user 4% > transparent. */
+.chat-msg-flat.them:hover { background: color-mix(in oklab, var(--fg) 5%, transparent); }
+.chat-msg-flat.you:hover { background: color-mix(in oklab, var(--fg) 4%, transparent); }
+/* A turn whose only assistant content is a bordered tool card or code block
+   already carries its own --bg surface + rule border; the turn-level .them tint
+   would stack a second, wider-than-measure surface behind it. Suppress it so the
+   card is the single surface (claude.ai/code keeps tool cards on bare canvas).
+   Selectors mirror the breakout pair above so suppression + widening always
+   cover the same turns. */
+.chat-msg-flat.them:has(.chat-tool),
+.chat-msg-flat.them:has(.chat-bubble.chat-code),
+.chat-msg-flat.them:has(.chat-tool):hover,
+.chat-msg-flat.them:has(.chat-bubble.chat-code):hover { background: none; }
+.chat-msg-flat:hover .chat-bubble { transform: none; box-shadow: none; background: none; }
+.chat-msg-flat .chat-avatar { display: none; }
+
+/* Tool-call card: a bordered, status-toned, scannable card (claude.ai/code),
+   not the raw mascot-tinted details dump. The node keeps the .chat-bubble
+   class, so these rules de-frame it and restyle. Placed after the flat-bubble
+   reset so they win on equal specificity. */
+.chat-msg .chat-tool {
+  display: block; max-width: 100%; padding: 0; margin: var(--space-1) 0;
+  background: var(--bg); color: var(--fg);
+  border: var(--bw-hair) solid var(--rule); border-radius: var(--r-2);
+  box-shadow: none; overflow: hidden;
+}
+.chat-msg .chat-tool[open] { background: var(--bg); }
+.chat-msg .chat-tool .chat-tool-head {
+  display: flex; align-items: center; gap: var(--space-2);
+  padding: var(--space-2) var(--space-3); cursor: pointer;
+  font-size: var(--fs-sm); list-style: none;
+}
+.chat-msg .chat-tool .chat-tool-head::-webkit-details-marker { display: none; }
+.chat-msg .chat-tool .chat-tool-head:hover { background: var(--bg-2); }
+.chat-msg .chat-tool .chat-tool-head:focus-visible { outline: var(--focus-w) solid var(--focus-color); outline-offset: calc(var(--focus-offset) * -1); }
+.chat-tool-icon { display: inline-flex; color: var(--fg-3); }
+.chat-tool-name { font-family: var(--ff-mono); font-weight: 600; color: var(--fg); }
+.chat-tool-label { color: var(--fg-3); font-size: var(--fs-tiny); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.chat-tool-status {
+  margin-left: auto; flex: 0 0 auto;
+  font-size: var(--fs-micro); font-weight: 700; text-transform: uppercase; letter-spacing: var(--tr-caps);
+  color: var(--fg-3);
+  padding: 2px var(--space-2); border-radius: var(--r-pill);
+  background: color-mix(in oklab, var(--fg) 6%, transparent);
+}
+.chat-msg .chat-tool.tool-running .chat-tool-status { color: var(--accent-ink); background: color-mix(in oklab, var(--accent) 12%, transparent); }
+.chat-msg .chat-tool.tool-error .chat-tool-status { color: var(--flame); background: color-mix(in oklab, var(--flame) 12%, transparent); }
+/* Completed tool: a positive (success) tone so done reads distinctly from the
+   neutral pill and from the accent-toned running pill. --success/--green-2
+   measures under 4.5:1 as TEXT on paper/bg-2 (fine at 12%-tint fill/non-text
+   use) - --green is the text-safe deep tone, same split the accent/accent-ink
+   pair already uses. */
+.chat-msg .chat-tool.tool-done .chat-tool-status { color: var(--green); background: color-mix(in oklab, var(--success) 12%, transparent); }
+.chat-tool-body { border-top: var(--bw-hair) solid var(--rule); padding: var(--space-2) var(--space-3); display: flex; flex-direction: column; gap: var(--space-2); }
+/* details' intrinsic min-content sizing: an unbroken token in the pre must not
+   widen the tool card past the bubble column. */
+.chat-msg .chat-tool, .chat-tool-body, .chat-tool-section { min-width: 0; max-width: 100%; }
+.chat-tool-section { display: flex; flex-direction: column; gap: var(--space-1); }
+.chat-tool-section-label { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); font-size: var(--fs-tiny); font-weight: 600; text-transform: uppercase; letter-spacing: var(--tr-caps); color: var(--fg-3); }
+.chat-tool-copy { position: static; opacity: 0; }
+.chat-tool-section:hover .chat-tool-copy, .chat-tool-section:focus-within .chat-tool-copy { opacity: 1; }
+.chat-tool-copy:focus-visible { outline: var(--focus-w) solid var(--focus-color); outline-offset: 1px; opacity: 1; }
+.chat-tool-pre { margin: 0; padding: var(--space-2); background: var(--bg-2); border-radius: var(--r-1); font-family: var(--ff-mono); font-size: var(--fs-tiny); line-height: 1.45; overflow-x: auto; max-height: 320px; overflow-y: auto; }
+.chat-tool-pre.is-error { color: var(--flame); }
+.chat-tool-pre.chat-tool-empty { color: var(--fg-3); }
+
+/* Fenced-code language tab on every rendered-markdown block (not just the
+   structured CodeNode). injectCodeCopy reads the language- class. */
+.chat-code-block { position: relative; }
+.chat-code-lang {
+  position: absolute; top: 0; left: 0; z-index: 2;
+  padding: 2px var(--space-2); border-bottom-right-radius: var(--r-1);
+  font-family: var(--ff-mono); font-size: var(--fs-micro); text-transform: uppercase; letter-spacing: var(--tr-caps);
+  color: var(--fg-3); background: color-mix(in oklab, var(--fg) 6%, transparent);
+  pointer-events: none;
+}
+.chat-code-block pre { padding-top: calc(var(--space-3) + 4px); }
+
+/* Motion + microinteraction polish (all reduced-motion guarded). */
+.ds-session-row { transition: background var(--dur-snap) var(--ease), box-shadow var(--dur-snap) var(--ease); }
+@media (prefers-reduced-motion: no-preference) {
+  .agentchat-thread { scroll-behavior: smooth; }
+  .ds-alert { animation: ds-alert-in var(--dur-base) var(--ease); }
+}
+@keyframes ds-alert-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+.chat-code-copy { transition: opacity var(--dur-snap, .12s) var(--ease, ease), color var(--dur-snap) var(--ease), border-color var(--dur-snap) var(--ease), background var(--dur-snap) var(--ease); }
+.chat-msg-action { transition: background var(--dur-snap) var(--ease), color var(--dur-snap) var(--ease); }
+.agentchat-install-copy { transition: background var(--dur-snap) var(--ease), color var(--dur-snap) var(--ease); }
+@media (prefers-reduced-motion: no-preference) {
+  .btn.is-armed, .btn-primary.is-armed { animation: ds-arm-pulse var(--dur-slow) var(--ease); }
+}
+@keyframes ds-arm-pulse { 0% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--warn) 55%, transparent); } 100% { box-shadow: 0 0 0 6px color-mix(in oklab, var(--warn) 0%, transparent); } }
+.ds-dash-card.is-new { box-shadow: inset 2px 0 0 var(--accent), 0 0 0 1px color-mix(in oklab, var(--accent) 40%, transparent); }
+/* Error card carries the strongest left-bar tone (flame > stale amber > active
+   accent), placed last so its inset bar wins source order over is-active/is-stale.
+   The full-perimeter border-color (line ~396) stays for extra severity emphasis. */
+.ds-dash-card.is-error { box-shadow: inset 2px 0 0 var(--flame); }
+/* A newly-arrived AND errored card: keep the LEFT inset bar flame (severity
+   precedence, never accent) while restoring the is-new arrival outline as a
+   full-perimeter accent glow that does not collide with the flame bar. Placed
+   after both is-new and is-error so it wins source order. */
+.ds-dash-card.is-new.is-error { box-shadow: inset 2px 0 0 var(--flame), 0 0 0 1px color-mix(in oklab, var(--accent) 40%, transparent); }
+@media (prefers-reduced-motion: no-preference) {
+  .ds-dash-card.is-new { animation: ds-card-in var(--dur-slow) var(--ease); }
+}
+@keyframes ds-card-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+/* Live command-center: status-bucket groups + header breakdown + heartbeat. */
+.ds-dash-group { display: flex; flex-direction: column; gap: var(--space-2); }
+.ds-dash-group-label { font-size: var(--fs-tiny); font-weight: 600; text-transform: uppercase; letter-spacing: var(--tr-label); color: var(--fg-3); padding: 0 var(--space-1); }
+.ds-dash-breakdown { display: flex; align-items: center; gap: var(--space-1); font-size: var(--fs-sm); color: var(--fg-2); }
+/* Shape-channel discs mirror the .status-dot-disc vocabulary (solid /
+   solid+halo / hollow ring) so a colour-blind user can scan the breakdown by
+   shape, not hue alone. CSS-drawn discs, not glyphs (glyph policy clean). */
+.ds-dash-breakdown .seg { display: inline-flex; align-items: center; gap: var(--space-1); font-weight: 600; }
+.ds-dash-breakdown .seg::before { content: ''; width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.ds-dash-breakdown .seg.is-running { color: var(--accent-ink); }
+.ds-dash-breakdown .seg.is-running::before { background: var(--accent); box-shadow: 0 0 0 1.5px color-mix(in oklab, var(--accent) 30%, transparent); }
+.ds-dash-breakdown .seg.is-error { color: var(--flame); }
+.ds-dash-breakdown .seg.is-error::before { background: var(--flame); box-shadow: 0 0 0 1.5px color-mix(in oklab, var(--flame) 38%, transparent); }
+.ds-dash-breakdown .seg.is-idle { color: var(--stale); }
+.ds-dash-breakdown .seg.is-idle::before { background: transparent; box-shadow: inset 0 0 0 1px var(--stale), inset 0 0 0 3px var(--bg); }
+.ds-dash-stream-disc { display: inline-flex; align-items: center; gap: var(--space-1); }
+.ds-dash-selectall { display: inline-flex; align-items: center; gap: var(--space-1); font-size: var(--fs-tiny); color: var(--fg-2); cursor: pointer; background: none; border: none; padding: var(--space-1); }
+.ds-dash-selectall:hover { color: var(--fg); }
+.ds-dash-selectall:focus-visible { outline: var(--focus-w) solid var(--focus-color); outline-offset: 1px; }
+.ds-dash-clear { background: none; border: none; color: var(--fg-3); cursor: pointer; font-size: var(--fs-tiny); text-decoration: underline dotted; padding: var(--space-1); }
+.ds-dash-clear:hover { color: var(--fg); }
+.ds-dash-clear:focus-visible { outline: var(--focus-w) solid var(--focus-color); outline-offset: 1px; border-radius: var(--r-1); }
+
+/* Conversation-rail loading skeleton (cold ccsniff walk). */
+.ds-session-row-skeleton { display: flex; flex-direction: column; gap: 6px; padding: var(--space-2) var(--space-3); }
+.ds-session-row-skeleton .ds-skel { background: var(--bg-3); border-radius: var(--r-1); }
+.ds-session-row-skeleton .ds-skel-title { height: 12px; width: 70%; }
+.ds-session-row-skeleton .ds-skel-meta { height: 9px; width: 45%; }
+@media (prefers-reduced-motion: no-preference) {
+  .ds-session-row-skeleton .ds-skel { animation: ds-skel-shimmer 1.3s ease-in-out infinite; background: linear-gradient(90deg, var(--bg-3) 0%, var(--bg-2) 50%, var(--bg-3) 100%); background-size: 200% 100%; }
+}
+@keyframes ds-skel-shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+
+/* Agent-picker list loading skeleton (shares the .ds-skel shimmer base above). */
+.ds-agent-list-skeleton { display: flex; flex-direction: column; gap: var(--space-2); }
+.ds-agent-row-skeleton { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-3); }
+.ds-agent-row-skeleton .ds-skel { background: var(--bg-3); border-radius: var(--r-1); }
+.ds-agent-row-skeleton .ds-skel-icon { height: 18px; width: 18px; flex: none; border-radius: var(--r-round, 50%); }
+.ds-agent-row-skeleton .ds-skel-title { height: 12px; width: 40%; }
+.ds-agent-row-skeleton .ds-skel-meta { height: 9px; width: 25%; margin-left: auto; }
+.ds-agent-list-skeleton-status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); }
+@media (prefers-reduced-motion: no-preference) {
+  .ds-agent-row-skeleton .ds-skel { animation: ds-skel-shimmer 1.3s ease-in-out infinite; background: linear-gradient(90deg, var(--bg-3) 0%, var(--bg-2) 50%, var(--bg-3) 100%); background-size: 200% 100%; }
+}
+
+/* File code preview: paint Prism tokens (the bundle scoped them to the chat
+   block only) + an optional non-selectable line-number gutter. */
+.ds-preview-code code { color: var(--fg); }
+.ds-preview-code .token.comment, .ds-preview-code .token.prolog, .ds-preview-code .token.doctype, .ds-preview-code .token.cdata { color: var(--fg-3); }
+.ds-preview-code .token.punctuation { color: var(--fg-2); }
+.ds-preview-code .token.property, .ds-preview-code .token.tag, .ds-preview-code .token.boolean, .ds-preview-code .token.number, .ds-preview-code .token.constant, .ds-preview-code .token.symbol { color: var(--purple-2); }
+.ds-preview-code .token.selector, .ds-preview-code .token.attr-name, .ds-preview-code .token.string, .ds-preview-code .token.char, .ds-preview-code .token.builtin { color: var(--code-string, var(--green)); }
+.ds-preview-code .token.atrule, .ds-preview-code .token.attr-value, .ds-preview-code .token.keyword { color: var(--code-keyword, var(--sky)); }
+.ds-preview-code .token.function, .ds-preview-code .token.class-name { color: var(--code-fn, var(--flame)); }
+.ds-preview-code.has-gutter { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 0 var(--space-2); }
+.ds-preview-code.has-gutter code { display: block; min-width: 0; overflow-x: auto; }
+.ds-preview-gutter { user-select: none; text-align: right; padding: 0 var(--space-2) 0 0; color: var(--fg-3); border-right: var(--bw-hair) solid var(--rule); font-family: var(--ff-mono); white-space: pre; line-height: inherit; }
+
+/* Image preview: fit/actual control + alpha checkerboard. */
+.ds-preview-media-controls { display: flex; gap: var(--space-2); padding: var(--space-2); justify-content: center; }
+.ds-preview-media-alpha {
+  background-image: linear-gradient(45deg, var(--bg-3) 25%, transparent 25%), linear-gradient(-45deg, var(--bg-3) 25%, transparent 25%), linear-gradient(45deg, transparent 75%, var(--bg-3) 75%), linear-gradient(-45deg, transparent 75%, var(--bg-3) 75%);
+  background-size: 16px 16px; background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+}
+.ds-preview-media.is-actual { max-width: none; max-height: none; }
+
+/* ----------------------------------------------------------------------------
+   Compact-button tiers — ONE spec for the small quiet rect buttons that eight
+   surfaces used to clone with drifting metrics/tones. chat.css loads after
+   app-shell.css in the bundle, so these same-specificity rules win by order.
+   Tier A (toolbar-grade, 32px) matches .ds-file-toolbar .btn, the reference;
+   tier B (inline-row-grade, 24px) for actions inside dense row strips.
+   Hover/focus/active-state rules on the originals still apply.
+---------------------------------------------------------------------------- */
+.row-act, .ds-dash-errors-toggle, .agentchat-export-act, .ds-file-more-btn {
+  min-height: 32px; padding: 5px 12px; border-radius: var(--r-1);
+  font-family: var(--ff-body); font-size: var(--fs-tiny); font-weight: 500;
+  background: transparent; border: var(--bw-hair) solid var(--rule); color: var(--fg-2);
+  cursor: pointer;
+}
+.row-act:hover, .ds-dash-errors-toggle:hover, .agentchat-export-act:hover, .ds-file-more-btn:hover {
+  background: var(--bg-2); color: var(--fg);
+}
+.agentchat-install-copy, .ds-upload-act, .ds-session-meta-copy {
+  min-height: 24px; padding: 2px 8px; border-radius: var(--r-1);
+  font-family: var(--ff-body); font-size: var(--fs-tiny);
+  background: transparent; border: var(--bw-hair) solid var(--rule); color: var(--fg-3);
+  cursor: pointer;
+}
+.agentchat-install-copy:hover, .ds-upload-act:hover, .ds-session-meta-copy:hover {
+  background: var(--bg-2); color: var(--fg);
+}
+@media (pointer: coarse) {
+  .row-act, .ds-dash-errors-toggle, .agentchat-export-act, .ds-file-more-btn,
+  .agentchat-install-copy, .ds-upload-act, .ds-session-meta-copy { min-height: 44px; }
+}
+
+/* 11th run: ultrawide widens the reading measure where there is room. */
+@media (min-width: 1600px) {
+  .agentchat-thread { --measure: 84ch; }
+}
+
+/* Stop/cancel composer control: re-tone the accent send button as a quiet
+   neutral control so 'stop generating' reads as distinct from accent send.
+   Flame/warn stay reserved (flame=error STATUS, warn=destructive ACTION); a
+   neutral quiet tone is the claude-code-aligned read for an in-flight stop. */
+.chat-composer .send.cancel {
+  background: var(--bg-3);
+  color: var(--fg);
+  box-shadow: inset 0 0 0 var(--bw-hair, 1px) var(--rule-strong, var(--rule));
+}
+.chat-composer .send.cancel:hover {
+  background: color-mix(in oklab, var(--fg) 8%, var(--bg-3));
+  filter: none;
+}
+.chat-composer .send.cancel:active { filter: brightness(0.96); }

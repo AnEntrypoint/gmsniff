@@ -227,28 +227,56 @@ assert(Array.isArray(projectsResp.projects), '/api/projects returns projects arr
 const longInstructionBody = 'test instruction line.\n'.repeat(30); // 24 * 30 = 720 chars, > 500
 fs.writeFileSync(path.join(projA.proj, '.gm', 'next-step.md'),
   '# Next step\n\nPhase: PLAN\nUpdated: ' + Date.now() + '\n\n---\n\n# PLAN\n\n' + longInstructionBody);
-const sessMarker = 'cwd-test-sess-' + Date.now();
-fs.appendFileSync(projA.logFp, `evt: ${JSON.stringify({ ts: Date.now(), sub: 'plugkit', event: 'instruction.served', sess: sessMarker, phase: 'PLAN', prd_pending: 2, cwd: projA.proj })}\n`);
+// REALISTIC live shape: no `sess` field, and the real instruction.served field names
+// (prd_pending_count/mutables_pending_count, NOT prd_pending/mutables_pending). Live watcher.log
+// events carry no sess at all, so an injected synthetic one would encode the very bug this
+// asserts is fixed -- recent_events must be non-empty for a project identified only by
+// (cwd, ts-ordering, daemon-boot epoch).
+fs.appendFileSync(projA.logFp, `evt: ${JSON.stringify({ ts: Date.now(), sub: 'plugkit', event: 'instruction.served', phase: 'PLAN', prd_pending_count: 2, mutables_pending_count: 0, cwd: projA.proj })}\n`);
 // Give the fanout tailer a moment to ingest the freshly-appended line into store.events.
 await new Promise(r => setTimeout(r, 500));
 
-const liveStateResp = await (await fetch(fanoutSrv.url + '/api/projects/live-state')).json();
+// ?all=1: live-state hides idle/abandoned agents by DEFAULT (678 discovered projects on a real
+// machine, a handful working), always reporting the hidden count. Tests assert over the whole
+// discovered population, so they opt in explicitly.
+const liveStateResp = await (await fetch(fanoutSrv.url + '/api/projects/live-state?all=1')).json();
 assert(Array.isArray(liveStateResp.projects), '/api/projects/live-state returns projects array');
+assert.strictEqual(liveStateResp.mode, 'list', 'live-state defaults to the light list payload');
+assert.strictEqual(typeof liveStateResp.hidden, 'number', 'live-state reports how many projects the activity filter hid');
+assert(liveStateResp.source && typeof liveStateResp.source.selected === 'string',
+  'live-state carries source provenance so a total is never rendered unlabelled');
 const liveA = liveStateResp.projects.find(p => path.resolve(p.cwd) === projA.proj);
 assert(liveA, 'project A present in live-state response');
 assert.strictEqual(liveA.phase, 'PLAN', 'project A live phase read from next-step.md');
-assert(liveA.instruction_excerpt.endsWith(longInstructionBody),
-  `instruction_excerpt must contain the FULL untruncated body (got ${liveA.instruction_excerpt.length} chars, expected it to end with the ${longInstructionBody.length}-char body)`);
-assert(liveA.instruction_excerpt.length > 500,
-  `instruction_excerpt must exceed the old 500-char cap to prove it is no longer truncated (got ${liveA.instruction_excerpt.length})`);
+// The light payload carries a bounded preview + length, never the multi-KB body.
+assert.strictEqual(liveA.instruction_excerpt, undefined, 'list mode omits the full instruction body');
+assert(liveA.instruction_length >= longInstructionBody.length,
+  `instruction_length reports the FULL body size (got ${liveA.instruction_length}, expected >= ${longInstructionBody.length})`);
+assert(liveA.instruction_truncated, 'preview is flagged truncated for a body this long');
+
+// The full body remains available untruncated, via ?full=1 and via the drilldown route.
+const liveFull = await (await fetch(fanoutSrv.url + '/api/projects/live-state?full=1&all=1')).json();
+const liveAFull = liveFull.projects.find(p => path.resolve(p.cwd) === projA.proj);
+assert(liveAFull.instruction_excerpt.endsWith(longInstructionBody),
+  `full mode must serve the FULL untruncated body (got ${liveAFull.instruction_excerpt.length} chars)`);
+assert(liveAFull.instruction_excerpt.length > 500,
+  `full body must exceed the old 500-char cap (got ${liveAFull.instruction_excerpt.length})`);
+const drill = await (await fetch(fanoutSrv.url + '/api/projects/instruction?cwd=' + encodeURIComponent(projA.proj))).json();
+assert(drill.instruction_excerpt.endsWith(longInstructionBody), 'drilldown route serves the full instruction body');
+
+// THE ACCEPTANCE CHECK for correlation: a project whose events carry no `sess` must still
+// produce a non-empty output feed, keyed on the real correlation identity.
 assert(Array.isArray(liveA.recent_events), 'project A recent_events is an array');
-assert(liveA.recent_events.some(n => n.kind === 'instruction' && n.phase === 'PLAN' && n.prd_pending === 2),
-  `project A recent_events missing the instruction.served node (got ${JSON.stringify(liveA.recent_events)})`);
-assert.strictEqual(liveA.recent_sess, sessMarker, 'project A recent_sess matches the session that produced the most recent event');
+assert(liveA.recent_events.length > 0,
+  'project A recent_events must be NON-EMPTY for sess-less live events (the correlation-key fix)');
+assert(liveA.recent_events.some(n => n.kind === 'instruction' && n.phase === 'PLAN' && n.prd_pending_count === 2),
+  `project A recent_events missing the instruction.served node with the REAL field names (got ${JSON.stringify(liveA.recent_events)})`);
+assert(liveA.recent_correlation_kind && liveA.recent_correlation_kind !== 'sess',
+  `correlation kind must be a real non-sess identity for live data (got ${liveA.recent_correlation_kind})`);
+assert.strictEqual(typeof liveA.recent_total, 'number', 'recent_events cap is explicit in the payload');
 const liveC = liveStateResp.projects.find(p => path.resolve(p.cwd) === projC.proj);
 assert(liveC, 'project C present in live-state response');
-assert.strictEqual(liveC.recent_sess, null, 'project C (no sess-tagged events) has null recent_sess, not a crash');
-assert.deepStrictEqual(liveC.recent_events, [], 'project C recent_events is an empty array, not undefined/null');
+assert(Array.isArray(liveC.recent_events), 'project C recent_events is an array, not undefined/null');
 
 await fanoutSrv.close();
 if (prevSpoolDirs === undefined) delete process.env.GM_SPOOL_DIRS; else process.env.GM_SPOOL_DIRS = prevSpoolDirs;
@@ -359,4 +387,172 @@ assert(helpOut.indexOf('QUICK START') > -1 && helpOut.indexOf('QUICK START') < h
 const schemaOut = JSON.parse(spawnSync(process.execPath, ['src/cli.js', '--schema'], { encoding: 'utf8' }).stdout);
 assert(schemaOut.subcommands.every(s => typeof s.tier === 'string'), 'schema subcommand tier');
 
-console.log(`gmsniff OK — ${snap.total} events across ${days.length} days · live-feedback verified · multi-project fanout verified · formal-spec verified · stuck-state+throughput+memory-health+codeinsight-age verified · total-parser verified`);
+// --- watcher.log total-line parser, source priority, correlation identity, project state ---
+// Real files on a real temp root; no mocks. Exercises the line classes that make up ~80% of a
+// real watcher.log and were previously discarded silently, plus the source-selection polarity.
+{
+  const wl = await import('./src/watcher-log.js');
+  const idx = await import('./src/index.js');
+  const reg = await import('./src/registry.js');
+  const corr = await import('./src/correlation.js');
+
+  const parseRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gmsniff-parse-'));
+  const pProj = path.join(parseRoot, 'proj');
+  const pSpool = path.join(pProj, '.gm', 'exec-spool');
+  fs.mkdirSync(pSpool, { recursive: true });
+  const pLog = path.join(pSpool, '.watcher.log');
+  fs.writeFileSync(pLog, [
+    '--- watcher spawn 2026-07-27T10:00:00.000Z supervisor=999 reason=planned-restart ---',
+    '[plugkit-wasm] plugkit v0.1.999 (wasm)',
+    '[dispatch] -> verb=git_finalize task=7 body=1659b',
+    `evt: ${JSON.stringify({ ts: 1785150000000, event: 'dispatch.end', verb: 'git_finalize', ms: 42 })}`,
+    '[plugkit-wasm] stale lock (holder pid=4242 dead, age=5656ms); taking over',
+    '[plugkit-wasm:warn] instruction::handle start body_len=740',
+    '[retention] swept 4 out/ files older than 1h',
+    '[plugkit-wasm] unimplemented WASI call: path_remove_directory args=3',
+    '',
+  ].join('\n'));
+
+  const rep = wl.replayWatcherLogWithStats(pLog, pProj, 'v1');
+  const byEvent = Object.fromEntries(rep.events.map(e => [e.event, e]));
+  assert(byEvent['dispatch.start'], 'dispatch.start synthesized from [dispatch] -> line');
+  assert.strictEqual(byEvent['dispatch.start'].verb, 'git_finalize', 'synthesized dispatch.start keeps verb');
+  assert.strictEqual(byEvent['dispatch.start'].task, '7', 'synthesized dispatch.start keeps task');
+  assert.strictEqual(byEvent['dispatch.start'].body_bytes, 1659, 'synthesized dispatch.start keeps body size');
+  assert.strictEqual(byEvent['dispatch.start']._origin, 'line', 'synthesized events marked _origin=line');
+  assert.strictEqual(byEvent['dispatch.end']._origin, 'evt', 'evt-sourced events marked _origin=evt');
+  assert.strictEqual(rep.version, '0.1.999', 'served version recovered from wasm banner');
+  assert.strictEqual(rep.epoch, '2026-07-27T10:00:00.000Z', 'watcher-spawn epoch extracted');
+  assert.strictEqual(byEvent['lock.stale-takeover'].holder_pid, 4242, 'stale-lock takeover parsed');
+  assert.strictEqual(byEvent['retention.swept'].swept, 4, 'retention sweep parsed');
+  assert(byEvent['instruction.handle-start'], 'turn-entry boundary parsed');
+  assert(rep.events.every(e => e._run === '2026-07-27T10:00:00.000Z'), 'every event tagged with its daemon-boot epoch');
+  assert(rep.events.every(e => path.resolve(e.cwd) === path.resolve(pProj)), 'cwd attribution comes from the discovered project');
+  // Coverage counters make the discard visible rather than silent.
+  assert.strictEqual(rep.stats.runtime_lines, 1, 'runtime chatter counted, not silently dropped');
+  assert(rep.stats.drop_ratio > 0 && rep.stats.drop_ratio < 1, 'drop_ratio reported');
+  assert.strictEqual(rep.stats.unmodeled_ratio, 0, 'every crafted line matched a known shape');
+
+  // Bounded replay: maxBytes truncates from the head and never yields a partial first line.
+  const bounded = wl.replayWatcherLogWithStats(pLog, pProj, 'v1', { maxBytes: 120 });
+  assert.strictEqual(bounded.truncated, true, 'bounded replay reports truncation');
+  assert(bounded.stats.total < rep.stats.total, 'bounded replay reads fewer lines than full replay');
+
+  // Correlation identity is honest: no sess in this data, so it must resolve to run, not invent one.
+  const cov = corr.correlationCoverage(rep.events);
+  assert.strictEqual(cov.best_kind, 'run', 'correlation falls back to daemon-boot epoch when sess is absent');
+  assert.strictEqual(cov.has_true_session, false, 'correlation does not claim session fidelity it lacks');
+  assert.strictEqual(cov.counts.sess, 0, 'no synthetic sess key is minted');
+  assert.strictEqual(corr.correlationOf({ sess: 'real-sess' }).kind, 'sess', 'a real sess field still wins when present');
+
+  // Source priority: spool is read even though a non-empty gm-log dir exists.
+  const legacyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gmsniff-legacy-'));
+  fs.mkdirSync(path.join(legacyDir, '2026-05-11'), { recursive: true });
+  fs.writeFileSync(path.join(legacyDir, '2026-05-11', 'plugkit.jsonl'),
+    `${JSON.stringify({ ts: 1747000000000, event: 'ancient.event' })}\n`);
+  const prevSpool = process.env.GM_SPOOL_DIRS;
+  process.env.GM_SPOOL_DIRS = pProj;
+  const audited = idx.replayAllAudited(legacyDir);
+  assert.strictEqual(audited.source, 'spool', 'live spool is the default source even when a legacy archive exists');
+  assert.strictEqual(audited.archive_used, false, 'legacy archive is not blended into the live stream');
+  assert(audited.events.every(e => e.event !== 'ancient.event'), 'archive events never leak into the default read');
+  assert.strictEqual(audited.sources.gm_log.available, true, 'archive availability is still reported');
+  const archived = idx.replayAllAudited(legacyDir, { archive: true });
+  assert.strictEqual(archived.source, 'gm-log', 'archive is reachable behind an explicit opt-in');
+  assert(archived.events.some(e => e.event === 'ancient.event'), 'archive opt-in actually reads the archive');
+  assert(archived.staleness.stale === true, 'a years-old archive is reported stale');
+  assert(archived.warnings.length > 0, 'stale source selection emits a loud warning');
+  if (prevSpool === undefined) delete process.env.GM_SPOOL_DIRS; else process.env.GM_SPOOL_DIRS = prevSpool;
+
+  // Per-project liveness must ignore the shared-daemon heartbeat, which ticks for every project
+  // on the machine simultaneously (measured: gmsniff 281ms, spoint 131ms, casey 210ms and test
+  // 258ms all at once, while casey's real work was 2.2 hours cold). A project whose OWN signals
+  // -- watcher.log mtime, turn-summary ts, turn-state ts -- are all old must read as inactive no
+  // matter how fresh that heartbeat is. Every per-project signal is backdated here; only the
+  // heartbeat is current.
+  const coldMs = Date.now() - (48 * 3600 * 1000);
+  fs.writeFileSync(path.join(pSpool, '.status.json'),
+    JSON.stringify({ pid: process.pid, ts: Date.now(), daemon: true, shared_process: true, runtime: 'agentplug' }));
+  fs.writeFileSync(path.join(pProj, '.gm', 'turn-state.json'),
+    JSON.stringify({ phase: 'VERIFY', session_id: null, last_skill: 'gm-verify', updated_at_ms: coldMs }));
+  fs.utimesSync(pLog, new Date(coldMs), new Date(coldMs));
+  const liveness = reg.readProjectLiveness(pProj);
+  assert.strictEqual(liveness.active, false, 'a fresh shared-daemon heartbeat does not make a cold project active');
+  assert(liveness.heartbeat_age_ms < 60000, 'heartbeat age is still reported for diagnostics');
+  assert(liveness.last_activity_age_ms > 3600000, 'activity age comes from real per-project signals');
+  // ...and a project whose own log really is fresh must read active through the same path.
+  fs.utimesSync(pLog, new Date(), new Date());
+  assert.strictEqual(reg.readProjectLiveness(pProj).active, true, 'a genuinely fresh watcher.log marks the project active');
+
+  // turn-state.json is the primary phase source; next-step.md prose is the fallback.
+  const ts0 = reg.readTurnState(pProj);
+  assert.strictEqual(ts0.phase, 'VERIFY', 'turn-state.json phase read');
+  fs.writeFileSync(path.join(pProj, '.gm', 'next-step.md'),
+    `# Next step\n\nPhase: PLAN\nUpdated: ${Date.now()}\n\n---\n\n# PLAN\n\nbody\n`);
+  const phaseState = reg.readLivePhaseState(pProj);
+  assert.strictEqual(phaseState.phase, 'VERIFY', 'turn-state.json wins over next-step.md prose');
+  assert.strictEqual(phaseState.phase_source, 'turn-state.json', 'phase source is reported');
+  assert.strictEqual(phaseState.prose_phase, 'PLAN', 'prose phase retained alongside');
+  assert.strictEqual(phaseState.phase_divergence, true, 'mid-transition divergence surfaced, not hidden');
+
+  // Legacy phaseless turn-state.json must not be mistaken for a null-phase project.
+  const legacyProj = path.join(parseRoot, 'legacy-shape');
+  fs.mkdirSync(path.join(legacyProj, '.gm'), { recursive: true });
+  fs.writeFileSync(path.join(legacyProj, '.gm', 'turn-state.json'), JSON.stringify({ turnId: 1778877945946, firstToolFired: false }));
+  const legacyTs = reg.readTurnState(legacyProj);
+  assert.strictEqual(legacyTs.legacy_shape, true, 'legacy phaseless turn-state.json flagged');
+  assert.strictEqual(legacyTs.phase, null, 'legacy shape reports no phase rather than guessing');
+
+  // Marker files that carry live state.
+  fs.writeFileSync(path.join(pSpool, '.codeinsight-digest'), 'v3:296bc62dce39fec4:files=28');
+  fs.writeFileSync(path.join(pSpool, '.last-gate-fired.json'), JSON.stringify({ key: 'gates/long-gap-no-instruction', ts: 1784888665055 }));
+  fs.writeFileSync(path.join(pProj, '.gm', 'last-dispatch-ts'), '1785151839332');
+  fs.writeFileSync(path.join(pProj, '.gm', 'claim-audit-fired'), 'clean');
+  const markers = reg.readProjectMarkers(pProj);
+  assert.strictEqual(markers.codeinsight_digest.files, 28, 'codeinsight digest parsed');
+  assert.strictEqual(markers.codeinsight_digest.hash, '296bc62dce39fec4', 'codeinsight digest hash parsed');
+  assert.strictEqual(markers.last_gate.key, 'gates/long-gap-no-instruction', 'last-gate-fired marker read');
+  assert.strictEqual(markers.last_dispatch_ts, 1785151839332, 'last-dispatch-ts read');
+  assert.strictEqual(markers.claim_audit_result, 'clean', 'claim-audit marker body read');
+
+  // runtime key collision: .status.json runtime is the host, .turn-summary.json runtime is the guest.
+  fs.writeFileSync(path.join(pSpool, '.turn-summary.json'),
+    JSON.stringify({ phase: 'PLAN', ts: Date.now(), runtime: 'native', prd_pending_count: 3, mutables_pending_count: 1, long_gap_threshold_ms: 300000 }));
+  const summary = reg.readTurnSummary(pProj);
+  const wstatus = reg.readWatcherStatus(pProj);
+  assert.strictEqual(summary.guest_runtime, 'native', 'turn-summary runtime surfaced as guest_runtime');
+  assert.strictEqual(wstatus.host_runtime, 'agentplug', 'status.json runtime surfaced as host_runtime');
+  assert.notStrictEqual(summary.guest_runtime, wstatus.host_runtime, 'the two runtime keys are never merged');
+  assert.strictEqual(summary.prd_pending_count, 3, 'instruction.served-style *_count fields consumed');
+  assert.strictEqual(wstatus.version, null, 'absent version is an honest null, not fabricated');
+
+  // rewriteRow preserves a legacy `- title:` boundary instead of reshaping it to `- id:`.
+  const legacyYaml = '- title: Some legacy row\n  id: legacy-1\n  status: pending\n- id: normal-1\n  status: pending\n';
+  const rewritten = reg.rewriteRow(legacyYaml, 'legacy-1', { status: 'done' });
+  assert(rewritten.startsWith('- title:'), 'rewriteRow keeps the original row boundary field');
+  assert(rewritten.includes('status: done'), 'rewriteRow applies the requested field change');
+  assert(rewritten.includes('- id: normal-1\n  status: pending'), 'rewriteRow leaves other rows byte-identical');
+
+  // Verb allowlist: new runner verbs recognized, retired verbs recognized but not usable.
+  assert.strictEqual(reg.isKnownVerb('plugin-refresh'), true, 'runner verb plugin-refresh recognized');
+  assert.strictEqual(reg.isKnownVerb('background-convert'), true, 'runner verb background-convert recognized');
+  assert.strictEqual(reg.isUsableVerb('learn'), false, 'retired verb learn is not usable');
+  assert.strictEqual(reg.isUsableVerb('wait'), false, 'retired verb wait is not usable');
+  assert.strictEqual(reg.isKnownVerb('learn'), true, 'retired verb is still a recognized dispatch target');
+
+  // Subsystem universe grows from real observed tags rather than a closed hardcode.
+  assert(idx.SUBSYSTEMS.includes('rs_learn'), 'rs_learn restored to the subsystem seed');
+  idx.deriveSubsystems([{ _sub: 'brand_new_tag' }]);
+  assert(idx.observedSubsystems().includes('brand_new_tag'), 'a genuinely new tag is observed at runtime');
+
+  // Status vocabulary is policy, not a hardcode.
+  const prevClosed = process.env.GM_PRD_CLOSED_STATUSES;
+  process.env.GM_PRD_CLOSED_STATUSES = 'shipped';
+  assert(reg.prdClosedStatuses().includes('shipped'), 'closed-status vocabulary is configurable');
+  if (prevClosed === undefined) delete process.env.GM_PRD_CLOSED_STATUSES; else process.env.GM_PRD_CLOSED_STATUSES = prevClosed;
+
+  fs.rmSync(parseRoot, { recursive: true, force: true });
+  fs.rmSync(legacyDir, { recursive: true, force: true });
+}
+
+console.log(`gmsniff OK — ${snap.total} events across ${days.length} days · live-feedback verified · multi-project fanout verified · formal-spec verified · stuck-state+throughput+memory-health+codeinsight-age verified · total-parser verified · watcher-log-total-parse+source-priority+correlation+project-state verified`);

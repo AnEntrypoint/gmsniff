@@ -1,11 +1,17 @@
 import http from 'http';
+import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { GmLogWatcher, MultiProjectWatcher, replayAll, SUBSYSTEMS, DEFAULT_LOG_DIR, EVENT_SCHEMA_VERSION } from './index.js';
+import {
+  GmLogWatcher, MultiProjectWatcher, replayAll, SUBSYSTEMS, DEFAULT_LOG_DIR, EVENT_SCHEMA_VERSION,
+  correlationOf, correlationCoverage, GM_TOOLS_DIR, replayAllAudited, sourceStaleness,
+} from './index.js';
 import {
   readPrd, readMutables, rewriteRow, atomicWriteFile, discoverProjects, isKnownVerb, isAllowedProjectCwd,
   readWatcherStatus, VERB_ALLOWLIST, readLivePhaseState, resolveInstructionTier, discoverVendoredSettings,
+  readProjectLiveness as registryProjectLiveness, readTurnState, readTurnSummary, readProjectMarkers,
+  readDaemonStatus, readInstalledVersions,
 } from './registry.js';
 
 const MAX_QUERY_LEN = 4096;
@@ -70,10 +76,70 @@ const INFO_LABELS = {
   '/api/throughput': 'public',
   '/api/memory-store-health': 'public',
   '/api/codeinsight-age': 'public',
+  '/api/vendored-settings': 'project-local',
+  '/api/source': 'public',
+  '/api/daemon': 'internal',
+  '/api/gates': 'project-local',
+  '/api/embed-health': 'public',
+  '/api/fsm-graph': 'project-local',
 };
 
 function randomSuffix() {
   return Math.random().toString(36).slice(2, 8);
+}
+
+// Default phase walk. This is a FALLBACK ONLY: .gm/instructions/fsm/graph.json is a real
+// per-project override that is live on this machine today (C:/dev/gm), so a project's own graph
+// -- not this array -- is authoritative wherever one exists. Single module-level declaration;
+// no function-local redeclaration may shadow it.
+const PHASES = ['PLAN', 'EXECUTE', 'EMIT', 'VERIFY', 'CONSOLIDATE', 'COMPLETE'];
+
+// Recall/embed telemetry carries two subsystem tags in real data -- `rs_learn` on every
+// pre-cutover event and `memory` on current-generation ones. Both are the same event class.
+const MEMORY_SUBS = new Set(['memory', 'rs_learn']);
+function isMemorySub(sub) { return MEMORY_SUBS.has(sub); }
+
+// Real embed/vector failure event names, measured against live watcher.log data. `embed_fail`
+// (the name the old filter used) has zero live occurrences.
+const EMBED_FAILURE_EVENTS = new Set([
+  'embed_init_fail', 'embed_query_failed', 'code_index_slow_file_embed',
+  'rssearch_vector_hits_failed', 'rssearch_vectors_write_failed', 'rssearch_vectors_migrate_row_failed',
+]);
+
+// -- Silent semantic-search degradation --
+// Live data shows embed_query_failed cascading into rssearch_vector_hits_failed on dispatch:
+// the vector half of codesearch fails, the query silently falls back to bm25, and the caller
+// still receives a success response with hits. Nothing in the response says the semantic half
+// was skipped. This returns-success-while-broken class is precisely what an observability tool
+// exists to catch, so it is surfaced as an explicit degradation verdict rather than left to be
+// inferred from a raw event count.
+function embedDegradation(events, cwd = null) {
+  const scoped = cwd ? events.filter(e => e.cwd === cwd) : events;
+  const byEvent = {};
+  let newest = 0;
+  const recent = [];
+  for (const e of scoped) {
+    if (!EMBED_FAILURE_EVENTS.has(e.event)) continue;
+    byEvent[e.event] = (byEvent[e.event] || 0) + 1;
+    const t = e.ts ? Date.parse(e.ts) : 0;
+    if (t > newest) newest = t;
+    recent.push({ ts: e.ts, event: e.event, cwd: e.cwd || null, detail: e.detail ?? e.err ?? null });
+  }
+  const queryFailures = (byEvent.embed_query_failed || 0) + (byEvent.embed_init_fail || 0);
+  const vectorFailures = (byEvent.rssearch_vector_hits_failed || 0) + (byEvent.rssearch_vectors_write_failed || 0);
+  const degraded = queryFailures > 0 && vectorFailures > 0;
+  return {
+    degraded,
+    severity: degraded ? 'silent-degradation' : (queryFailures || vectorFailures ? 'partial' : 'ok'),
+    byEvent,
+    query_failures: queryFailures,
+    vector_failures: vectorFailures,
+    last_failure_ts: newest ? new Date(newest).toISOString() : null,
+    recent: recent.slice(-20).reverse(),
+    explanation: degraded
+      ? 'embedding queries are failing and vector hits are being dropped; codesearch still returns success but is answering from bm25 only — semantic results are silently missing'
+      : null,
+  };
 }
 
 // -- rs-tools aggregation: adapted from cli.js's embedFailures/recallMisses/recallScores/
@@ -141,7 +207,7 @@ function rsToolsMemoryLeverage(evs, days = 7, sess) {
     }
   }
   for (const e of filtered) {
-    if (e._sub !== 'memory' || e.event !== 'recall') continue;
+    if (!isMemorySub(e._sub) || e.event !== 'recall') continue;
     const k = e.sess || '(no-session)';
     const s = bySess.get(k);
     if (!s) continue;
@@ -157,14 +223,18 @@ function rsToolsMemoryLeverage(evs, days = 7, sess) {
 }
 
 function rsToolsEmbedFailures(evs) {
-  const structured = evs.filter(e => e.event === 'embed_fail' || (e._sub === 'memory' && e.event === 'embed_fail'));
+  // Real live embed/vector failure events, measured: embed_init_fail, embed_query_failed,
+  // rssearch_vector_hits_failed, rssearch_vectors_write_failed,
+  // rssearch_vectors_migrate_row_failed, code_index_slow_file_embed. The single `embed_fail`
+  // name this filtered on has zero live occurrences.
+  const structured = evs.filter(e => EMBED_FAILURE_EVENTS.has(e.event));
   const byStep = new Map();
   for (const e of structured) {
     const step = e.step || '?';
     let s = byStep.get(step);
     if (!s) { s = { step, count: 0, last_ts: 0 }; byStep.set(step, s); }
     s.count++;
-    const tsNum = typeof e.ts === 'number' ? e.ts : (e.ts ? Date.parse(e.ts) : 0);
+    const tsNum = e.ts ? Date.parse(e.ts) : 0;
     if (tsNum && tsNum > s.last_ts) s.last_ts = tsNum;
   }
   return { total: structured.length, byStep: [...byStep.values()].sort((a, b) => b.count - a.count).slice(0, 20) };
@@ -331,15 +401,428 @@ function listDisciplines(cwd) {
   } catch (_) { return []; }
 }
 
+// -- Per-project .gm state files --
+// Every one of these carries authoritative live truth that no event stream reproduces, and all
+// of them were unread before. Paths verified against real on-disk state in every discovered
+// project this session. All readers are total: a missing/garbage file yields null, never a throw.
+function readJsonFile(fp) {
+  try { return JSON.parse(fs.readFileSync(fp, 'utf-8')); } catch (_) { return null; }
+}
+function readTextFile(fp, max = 8192) {
+  try { return fs.readFileSync(fp, 'utf-8').slice(0, max); } catch (_) { return null; }
+}
+function readNumberFile(fp) {
+  const t = readTextFile(fp, 64);
+  if (t === null) return null;
+  const n = Number(t.trim());
+  return Number.isFinite(n) ? n : null;
+}
+function statMs(fp) {
+  try { return fs.statSync(fp).mtimeMs; } catch (_) { return null; }
+}
+
+// A marker file's mere presence is the signal; its body (when non-empty) is the verdict --
+// .gm/claim-audit-fired really contains "clean" on a passing project, while
+// .gm/residual-check-fired is a real zero-byte touch file. Return both so a consumer can tell
+// "fired and clean" from "fired, verdict unknown" from "never fired".
+function readMarker(fp) {
+  const mtime = statMs(fp);
+  if (mtime === null) return { fired: false, verdict: null, ts: null };
+  const body = (readTextFile(fp, 256) || '').trim();
+  return { fired: true, verdict: body || null, ts: Math.round(mtime) };
+}
+
+// The eight FSM gates gm-plugkit actually enforces. Only residual-scan-fired was ever modeled.
+// Each entry resolves to {gate, state: 'pass'|'fail'|'unknown', detail, ts} from real on-disk
+// evidence -- never from a guess. 'unknown' is an honest verdict for a gate whose evidence file
+// this project has never produced, and is deliberately NOT collapsed into 'fail'.
+const FSM_GATES = [
+  'residual-scan-fired', 'prd-all-closed', 'mutables-all-resolved', 'worktree-clean',
+  'ci-validated-fresh', 'browser-witness-coverage', 'claim-audit-clean', 'submodules-clean',
+];
+
+// The six-phase walk is a DEFAULT, not the model. .gm/instructions/fsm/graph.json is a real
+// per-project override that exists on this machine today (C:/dev/gm), and it is what actually
+// declares which edges exist and which gates each edge carries -- including that every
+// re-plan edge (EXECUTE->PLAN, EMIT->PLAN, VERIFY->PLAN) has an empty `gates` array, while
+// VERIFY->CONSOLIDATE carries the real gate list. Read it per-project so gate evaluation and
+// phase-walk validity are driven by the project's own graph rather than a hardcode.
+function readFsmGraph(cwd) {
+  const fp = path.join(cwd, '.gm', 'instructions', 'fsm', 'graph.json');
+  const j = readJsonFile(fp);
+  if (!j || !Array.isArray(j.states) || !Array.isArray(j.edges)) {
+    return { present: false, source: null, phases: PHASES, states: null, edges: null, gatesByEdge: {} };
+  }
+  const gatesByEdge = {};
+  for (const e of j.edges) {
+    if (!e || !e.from || !e.to) continue;
+    gatesByEdge[`${e.from}->${e.to}`] = Array.isArray(e.gates) ? e.gates : [];
+  }
+  return {
+    present: true,
+    source: fp,
+    phases: j.states.map(s => s.key).filter(Boolean),
+    states: j.states.map(s => ({ key: s.key, prose_key: s.prose_key ?? null, skill: s.skill ?? null })),
+    edges: j.edges.map(e => ({ from: e.from, to: e.to, gates: Array.isArray(e.gates) ? e.gates : [] })),
+    gatesByEdge,
+  };
+}
+
+function readFsmGates(cwd, { prd_pending = null, mut_unknown = null, phase = null } = {}) {
+  const spool = path.join(cwd, '.gm', 'exec-spool');
+  const gm = path.join(cwd, '.gm');
+  const residual = readMarker(path.join(gm, 'residual-check-fired'));
+  const claim = readMarker(path.join(gm, 'claim-audit-fired'));
+  const ciValidated = readJsonFile(path.join(spool, '.ci-validated'));
+  const lastGate = readJsonFile(path.join(spool, '.last-gate-fired.json'));
+  const repeats = readJsonFile(path.join(spool, '.gate-deviation-repeats.json')) || {};
+  const witnessMtime = statMs(path.join(gm, 'witness'));
+  const hasSubmodules = statMs(path.join(cwd, '.gitmodules')) !== null;
+
+  const g = (gate, state, detail, ts = null) => ({ gate, state, detail, ts });
+  const gates = [
+    // .gm/residual-check-fired is a 0-byte touch file on every live project -- existence and
+    // mtime ARE the whole signal, an empty body is not missing data.
+    g('residual-scan-fired', residual.fired ? 'pass' : 'unknown',
+      residual.fired ? 'residual-check-fired marker present (touch file, no body)' : 'no .gm/residual-check-fired marker', residual.ts),
+    g('prd-all-closed', prd_pending === null ? 'unknown' : (prd_pending === 0 ? 'pass' : 'fail'),
+      prd_pending === null ? 'prd.yml not readable' : `${prd_pending} pending PRD rows`),
+    g('mutables-all-resolved', mut_unknown === null ? 'unknown' : (mut_unknown === 0 ? 'pass' : 'fail'),
+      mut_unknown === null ? 'mutables.yml not readable' : `${mut_unknown} unresolved mutables`),
+    // worktree-clean / submodules-clean are git-state gates: gmsniff is a read-only observer and
+    // must not shell out to git on every request, so evidence is limited to what plugkit itself
+    // wrote. Absence is reported as unknown rather than fabricated as pass.
+    g('worktree-clean', 'unknown', 'git worktree state is not recorded in .gm; not observable read-only'),
+    g('ci-validated-fresh', ciValidated && ciValidated.head_sha ? 'pass' : 'unknown',
+      ciValidated && ciValidated.head_sha ? `.ci-validated at ${String(ciValidated.head_sha).slice(0, 12)}` : 'no .ci-validated record',
+      statMs(path.join(spool, '.ci-validated'))),
+    g('browser-witness-coverage', witnessMtime === null ? 'unknown' : 'pass',
+      witnessMtime === null ? 'no .gm/witness directory' : '.gm/witness present',
+      witnessMtime === null ? null : Math.round(witnessMtime)),
+    g('claim-audit-clean',
+      !claim.fired ? 'unknown' : (claim.verdict === null || claim.verdict === 'clean' ? 'pass' : 'fail'),
+      claim.fired ? `claim-audit-fired verdict: ${claim.verdict || '(empty)'}` : 'no .gm/claim-audit-fired marker',
+      claim.ts),
+    g('submodules-clean', hasSubmodules ? 'unknown' : 'pass',
+      hasSubmodules ? '.gitmodules present; submodule state not observable read-only' : 'no .gitmodules — vacuously clean'),
+  ];
+  const byGate = new Map(gates.map(x => [x.gate, x]));
+  const graph = readFsmGraph(cwd);
+  // Which gates actually apply RIGHT NOW is an edge property, not a project property: only the
+  // outgoing edges from the current phase can block. Re-plan edges carry no gates at all, so a
+  // project sitting at VERIFY with failing gates is still free to go back to PLAN -- reporting
+  // it as flatly "blocked" would be wrong.
+  const outgoing = [];
+  const edges = graph.present ? graph.edges : DEFAULT_EDGES;
+  for (const e of edges) {
+    if (phase && e.from !== phase) continue;
+    const required = e.gates.map(g => byGate.get(g) || { gate: g, state: 'unknown', detail: 'gate not modeled', ts: null });
+    const failing = required.filter(g => g.state === 'fail');
+    outgoing.push({ from: e.from, to: e.to, gates: required, blocked: failing.length > 0, blockers: failing });
+  }
+  const currentBlockers = outgoing.filter(e => e.blocked);
+  const openEdges = outgoing.filter(e => !e.blocked);
+  const lastGateTs = lastGate && Number.isFinite(lastGate.ts) ? lastGate.ts : null;
+  return {
+    gates,
+    // Project-wide failing gates, regardless of whether any current edge requires them.
+    blockers: gates.filter(x => x.state === 'fail'),
+    // Edge-scoped truth: is the agent actually stuck, and which way can it still go?
+    phase,
+    fsm_graph: { present: graph.present, source: graph.source, phases: graph.phases },
+    outgoing_edges: outgoing,
+    blocked: outgoing.length > 0 && openEdges.length === 0,
+    open_edges: openEdges.map(e => `${e.from}->${e.to}`),
+    blocked_edges: currentBlockers.map(e => ({ edge: `${e.from}->${e.to}`, blockers: e.blockers.map(g => g.gate) })),
+    // last-gate-fired is the last-EVER gate firing, not a currently-blocking one: gmsniff's
+    // points days back while an active project's is minutes old. Age is always returned so a
+    // client never renders a stale marker as a live block.
+    last_gate_fired: lastGate && lastGate.key
+      ? { key: lastGate.key, ts: lastGateTs, age_ms: lastGateTs ? Date.now() - lastGateTs : null, is_current_block: false }
+      : null,
+    // `{}` is the NORMAL healthy state here (2 bytes on every live project), not missing data.
+    gate_deviation_repeats: repeats,
+    gate_deviation_repeat_count: Object.keys(repeats).length,
+  };
+}
+
+// Fallback edge set when a project has no graph.json override: the linear walk plus the
+// gate-free re-plan edges, matching the real graph.json's own shape.
+const DEFAULT_EDGES = [
+  ...PHASES.slice(0, -1).map((from, i) => ({ from, to: PHASES[i + 1], gates: [] })),
+  { from: 'EXECUTE', to: 'PLAN', gates: [] },
+  { from: 'EMIT', to: 'PLAN', gates: [] },
+  { from: 'VERIFY', to: 'PLAN', gates: [] },
+];
+
+// .gm/exec-spool/.codeinsight-digest is the index-freshness record plugkit itself maintains, and
+// it was never read -- the codeinsight routes only ever stat'd the repo-root .codeinsight file.
+// Real shape (measured): "v3:296bc62dce39fec4:files=28".
+function readCodeInsightDigest(cwd) {
+  const fp = path.join(cwd, '.gm', 'exec-spool', '.codeinsight-digest');
+  const raw = readTextFile(fp, 512);
+  if (raw === null) return null;
+  const text = raw.trim();
+  const m = text.match(/^v(\d+):([0-9a-f]+):files=(\d+)/i);
+  const mtime = statMs(fp);
+  return {
+    raw: text,
+    version: m ? Number(m[1]) : null,
+    hash: m ? m[2] : null,
+    files: m ? Number(m[3]) : null,
+    mtimeMs: mtime === null ? null : Math.round(mtime),
+    age_ms: mtime === null ? null : Math.round(Date.now() - mtime),
+  };
+}
+
+// The REAL per-project served plugkit version. .status.json's `version` field is null on every
+// agentplug-driven project (the whole current fleet), because the wasm guest updates
+// independently of the runner binary. The version is announced in watcher.log's own
+// "[plugkit-wasm] plugkit v0.1.824 (wasm)" banner -- the only place it is stated per project.
+const WASM_VERSION_RE = /\[plugkit-wasm\][^\n]*plugkit v([0-9][0-9.]*)\s*\(wasm\)/;
+const WASM_VERSION_TAIL_BYTES = 256 * 1024;
+
+function readServedVersion(cwd) {
+  return cachedPerProject('version', cwd, () => _readServedVersion(cwd));
+}
+
+function _readServedVersion(cwd) {
+  const fp = path.join(cwd, '.gm', 'exec-spool', '.watcher.log');
+  let fd = null;
+  try {
+    const size = fs.statSync(fp).size;
+    fd = fs.openSync(fp, 'r');
+    // The banner is re-emitted on every daemon boot, so the newest one is near the tail; reading
+    // a bounded tail avoids pulling a 6MB log into memory per request.
+    const start = Math.max(0, size - WASM_VERSION_TAIL_BYTES);
+    const buf = Buffer.allocUnsafe(size - start);
+    const n = fs.readSync(fd, buf, 0, buf.length, start);
+    const text = buf.toString('utf8', 0, n);
+    let version = null;
+    for (const line of text.split('\n')) {
+      const m = line.match(WASM_VERSION_RE);
+      if (m) version = m[1];
+    }
+    return version ? { version, source: 'watcher.log wasm banner' } : { version: null, source: null };
+  } catch (_) {
+    return { version: null, source: null };
+  } finally {
+    if (fd !== null) try { fs.closeSync(fd); } catch (_) {}
+  }
+}
+
+// Machine-global shared-daemon heartbeat: ~/.gm-tools/daemon-status.json {pid, ts,
+// active_projects}. Its ts is observed DAYS stale on this machine while dispatches are actively
+// firing -- a real anomaly, so staleness is reported as an explicit boolean rather than left for
+// a consumer to notice.
+const DAEMON_HEARTBEAT_STALE_MS = parseInt(process.env.GM_DAEMON_STALE_MS, 10) || 10 * 60 * 1000;
+
+function readDaemonStatusGlobal() {
+  const fp = path.join(GM_TOOLS_DIR, 'daemon-status.json');
+  const j = readJsonFile(fp);
+  if (!j) return { present: false, pid: null, ts: null, active_projects: null, age_ms: null, stale: true, alert: null };
+  const ts = Number.isFinite(j.ts) ? j.ts : null;
+  const age = ts ? Date.now() - ts : null;
+  const stale = age === null || age > DAEMON_HEARTBEAT_STALE_MS;
+  let pidAlive = null;
+  if (j.pid) { try { process.kill(j.pid, 0); pidAlive = true; } catch (_) { pidAlive = false; } }
+  const alert = stale
+    ? `daemon heartbeat is ${age === null ? 'absent' : Math.round(age / 60000) + 'min'} stale (threshold ${Math.round(DAEMON_HEARTBEAT_STALE_MS / 60000)}min)`
+    : null;
+  return {
+    present: true, pid: j.pid ?? null, pid_alive: pidAlive, ts,
+    active_projects: Number.isFinite(j.active_projects) ? j.active_projects : null,
+    age_ms: age, stale, stale_threshold_ms: DAEMON_HEARTBEAT_STALE_MS, alert,
+  };
+}
+
+// -- Per-project liveness --
+// registry.readProjectLiveness is authoritative: it derives activity ONLY from signals this
+// project's own work writes (watcher.log mtime, turn-summary ts, turn-state ts) and deliberately
+// excludes .status.json's ts, which the shared daemon rewrites for every registered project
+// every ~200ms and which therefore marks the entire fleet permanently active.
+//
+// Added here on top of it: the three-way idle-vs-dead classification. Real dispatch ages span
+// 143s (actively dispatching) to 173,718s (abandoned ~2 days), and an agent idle between turns
+// is healthy -- collapsing idle and abandoned into one boolean is what made stuckProjects'
+// highest-severity signal meaningless.
+const PROJECT_LIVE_WINDOW_MS = parseInt(process.env.GM_PROJECT_LIVE_WINDOW_MS, 10) || 5 * 60 * 1000;
+const PROJECT_ABANDONED_MS = parseInt(process.env.GM_PROJECT_ABANDONED_MS, 10) || 6 * 3600 * 1000;
+
+// Marker/summary reads are ~5ms per project each across 161 projects; both are memoized on the
+// same short TTL so a single request pays for each project at most once.
+function markersOf(cwd) { return cachedPerProject('markers', cwd, () => readProjectMarkers(cwd)); }
+function turnSummaryOf(cwd) { return cachedPerProject('turnsummary', cwd, () => readTurnSummary(cwd)); }
+function turnStateOf(cwd) { return cachedPerProject('turnstate', cwd, () => readTurnState(cwd)); }
+function phaseStateOf(cwd) { return cachedPerProject('phasestate', cwd, () => readLivePhaseState(cwd)); }
+function tierOf(cwd, key) { return cachedPerProject(`tier|${key}`, cwd, () => resolveInstructionTier(cwd, key)); }
+function gatesOf(cwd, opts) {
+  return cachedPerProject(`gates|${opts.phase}|${opts.prd_pending}|${opts.mut_unknown}`, cwd, () => readFsmGates(cwd, opts));
+}
+
+function readProjectLiveness(cwd) {
+  return cachedPerProject('liveness', cwd, () => {
+    const base = registryProjectLiveness(cwd);
+    const markers = markersOf(cwd);
+    const now = Date.now();
+    const dispatchAge = markers && markers.last_dispatch_ts
+      ? Math.max(0, now - markers.last_dispatch_ts)
+      : base.last_activity_age_ms;
+    const activity = dispatchAge === null ? 'unknown'
+      : dispatchAge <= PROJECT_LIVE_WINDOW_MS ? 'dispatching'
+      : dispatchAge <= PROJECT_ABANDONED_MS ? 'idle'
+      : 'abandoned';
+    return {
+      ...base,
+      alive: base.active,
+      activity,
+      dispatch_age_ms: dispatchAge,
+      live_window_ms: PROJECT_LIVE_WINDOW_MS,
+      abandoned_after_ms: PROJECT_ABANDONED_MS,
+      last_dispatch_ts: markers ? markers.last_dispatch_ts : null,
+      last_instruction_ts: markers ? markers.last_instruction_ts : null,
+    };
+  });
+}
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const GUI_DIR = path.join(__dirname, '..', 'gui');
 const OWN_ROOT = path.resolve(__dirname, '..');
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json' };
 const MAX_LIFECYCLE_BODY = 65536;
 
+// -- Replay source selection + window bound --
+// Measured this session: ~/.claude/gm-log holds 1,131,698 events across 71 day dirs whose
+// newest is 2026-07-23, while the live per-project spool holds ~26,866. replayAll only falls
+// back to the spool when gm-log is absent or empty, so the default load ingested 42x its own
+// weight in dead history and every headline number (/api/snapshot totals, /api/throughput
+// rates, /api/days, health-summary deviation rates, stuckProjects severity) was computed
+// mostly over events days stale -- with no symptom a user could see.
+//
+// Default is therefore LIVE SPOOL ONLY. gm-log is reachable only via explicit opt-in
+// (GM_INCLUDE_ARCHIVE=1, or ?source=archive|all on the routes that accept it) and is never
+// silently blended. Every aggregate route carries provenance so a client renders
+// "live spool, N events, window X" rather than an unlabelled total.
+const REPLAY_WINDOW_MS = (() => {
+  const raw = process.env.GM_REPLAY_WINDOW_MS;
+  if (raw === 'all' || raw === '0') return null; // explicit widen-to-everything
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : 7 * 86400000;
+})();
+const INCLUDE_ARCHIVE = process.env.GM_INCLUDE_ARCHIVE === '1';
+// A selected source whose newest event is older than this is reported as a first-class warning
+// rather than being allowed to look like a normal quiet period.
+const SOURCE_STALE_MS = parseInt(process.env.GM_SOURCE_STALE_MS, 10) || 6 * 3600000;
+// Inter-event gap for the same cwd that marks a daemon-boot boundary. Real watcher.log spawn
+// banners cluster restarts seconds apart within a run; a 10-minute quiet gap is a new run.
+const RUN_GAP_MS = parseInt(process.env.GM_RUN_GAP_MS, 10) || 10 * 60 * 1000;
+
+// -- SSE liveness + replay --
+// Frames are id-stamped and retained so a reconnecting client replays its gap via Last-Event-ID.
+// The heartbeat is a comment frame (":hb ..."), which is valid SSE, is ignored by EventSource's
+// message dispatch, and keeps proxies/browsers from silently reaping an idle stream.
+const SSE_RING_SIZE = parseInt(process.env.GM_SSE_RING, 10) || 500;
+const SSE_HEARTBEAT_MS = parseInt(process.env.GM_SSE_HEARTBEAT_MS, 10) || 15000;
+// Output-append frames coalesce briefly so a burst of watcher.log lines becomes one frame per
+// cwd instead of one frame per event.
+const OUTPUT_COALESCE_MS = parseInt(process.env.GM_SSE_OUTPUT_COALESCE_MS, 10) || 250;
+// Output-feed depth. The old hardcoded 30 was applied silently with no payload, no duration and
+// no indication that anything sat above it; the cap is now explicit in every response.
+const RECENT_EVENTS_LIMIT = parseInt(process.env.GM_RECENT_EVENTS_LIMIT, 10) || 200;
+// The list view needs enough output to show what an agent is doing, not its whole history.
+const LIST_EVENTS_LIMIT = parseInt(process.env.GM_LIST_EVENTS_LIMIT, 10) || 25;
+const INSTRUCTION_PREVIEW_CHARS = parseInt(process.env.GM_INSTRUCTION_PREVIEW_CHARS, 10) || 240;
+
+function hashText(s) {
+  if (typeof s !== 'string' || !s) return null;
+  return crypto.createHash('sha1').update(s).digest('hex').slice(0, 16);
+}
+
+// Per-project filesystem reads are now O(63+ projects) on every request to live-state,
+// health-summary, projects, stuck-projects, instruction-tiers and watcher-versions -- measured
+// at 1.4MB/4.1s for a single live-state call. These readers are pure functions of on-disk
+// state, so a short TTL cache collapses the repeated fan-out within and across requests while
+// still reflecting real changes within one poll interval.
+// TTL must exceed a single sweep's own duration (measured ~2s of registry reads across 174
+// projects), or consecutive requests never hit the cache at all. 5s still reflects a real change
+// within one SSE poll interval, and the SSE output-append path means a client no longer depends
+// on refetching this route to see new activity.
+const PROJECT_CACHE_TTL_MS = parseInt(process.env.GM_PROJECT_CACHE_TTL_MS, 10) || 5000;
+const _projectCache = new Map(); // `${fn}|${cwd}` -> {at, value}
+
+// discoverProjects walks 161+ project directories doing real synchronous stat/read work --
+// measured at 2.18s per call, and it is invoked by nearly every route (often more than once per
+// request). Its result is a pure function of on-disk state, so one short-TTL memo per event-count
+// generation collapses the whole fan-out.
+let _discoverCache = { at: 0, len: -1, value: null };
+function discoverProjectsCached(events) {
+  const now = Date.now();
+  if (_discoverCache.value && (now - _discoverCache.at) < PROJECT_CACHE_TTL_MS) return _discoverCache.value;
+  const value = discoverProjects(events);
+  _discoverCache = { at: now, len: events.length, value };
+  return value;
+}
+
+function cachedPerProject(tag, cwd, fn) {
+  const key = `${tag}|${cwd}`;
+  const now = Date.now();
+  const hit = _projectCache.get(key);
+  if (hit && (now - hit.at) < PROJECT_CACHE_TTL_MS) return hit.value;
+  const value = fn();
+  _projectCache.set(key, { at: now, value });
+  if (_projectCache.size > 4000) {
+    for (const [k, v] of _projectCache) if ((now - v.at) >= PROJECT_CACHE_TTL_MS) _projectCache.delete(k);
+  }
+  return value;
+}
+
+function sseFrame({ id, kind, data }) {
+  return `id: ${id}\nevent: ${kind}\ndata: ${JSON.stringify(data)}\n\n`;
+}
+
+// Re-plan edges are LEGAL and gate-free (EXECUTE->PLAN, EMIT->PLAN, VERIFY->PLAN). A linear
+// PHASES.indexOf comparison treats every forward re-walk after a re-plan as a skipped phase and
+// emits a false `phase-skipped` gap; it also loses the re-plan itself from the walk.
+function isReplanEdge(from, to) {
+  return to === 'PLAN' && from !== null && from !== 'PLAN';
+}
+
+// Single per-event node classifier, shared by _processTreeFromEvents (whole-walk reconstruction)
+// and _emitOutputAppend (incremental SSE frames) so the node shape can never drift between the
+// initial live-state fetch and the frames a client appends to it.
+function classifyOutputNode(e) {
+  if (!e || typeof e.event !== 'string') return null;
+  const base = { ts: e.ts, cwd: e.cwd || null, run: e._run || null };
+  if (e.event.startsWith('deviation.')) {
+    return { ...base, kind: 'deviation', deviation: e.event, detail: e.detail ?? e.reason ?? null, source: e.source ?? null, sub: e._sub ?? null };
+  }
+  if (e._sub !== 'plugkit') return null;
+  switch (e.event) {
+    // instruction.served really carries prd_pending_count/mutables_pending_count -- the
+    // prd_pending/mutables_pending names read before were undefined on every live event.
+    case 'instruction.served':
+      return { ...base, kind: 'instruction', phase: e.phase ?? null,
+        prd_pending_count: e.prd_pending_count ?? null, mutables_pending_count: e.mutables_pending_count ?? null };
+    case 'phase.transitioned':
+      return { ...base, kind: 'transition', phase: e.phase ?? null, from: e.from ?? null, replan: isReplanEdge(e.from ?? null, e.phase ?? null) };
+    case 'dispatch.end':
+      return { ...base, kind: 'dispatch', verb: e.verb ?? null, ms: e.ms ?? null };
+    case 'prd.added': return { ...base, kind: 'prd-add', id: e.id ?? null, rescoped: e.rescoped ?? null };
+    case 'prd.resolved': return { ...base, kind: 'prd-resolve', id: e.id ?? null };
+    case 'mutable.added': return { ...base, kind: 'mutable-add', id: e.id ?? null };
+    case 'mutable.resolved': return { ...base, kind: 'mutable-resolve', id: e.id ?? null };
+    case 'memorize.fired':
+    case 'memorize_fired': return { ...base, kind: 'memorize', key: e.key ?? null };
+    default: return null;
+  }
+}
+
 class Store {
-  constructor(logDir) {
+  // explicitLogDir: the caller named a specific tree (createServer({logDir}) or GM_LOG_DIR).
+  // That request must win over automatic spool discovery -- see load().
+  constructor(logDir, { explicitLogDir = false } = {}) {
     this.logDir = logDir;
+    this.explicitLogDir = explicitLogDir;
     this.events = [];
     this.sseClients = new Set();
     this.watcher = null;
@@ -347,6 +830,34 @@ class Store {
     this.watchedProjects = [];
     this._evictedCount = 0; // cumulative evicted events since boot
     this._evictedBatches = 0; // number of eviction passes
+    this._sseSeq = 0;
+    this._sseRing = [];
+    this._outputPending = new Map();
+    this._outputFlushTimer = null;
+    this._heartbeatTimer = null;
+    this._openDispatch = new Map(); // `${cwd}|${verb}|${task}` -> {ts, body_bytes}
+    this._lastLiveTs = new Map(); // cwd -> last live event ts (ms), for _run continuity
+    this._liveRun = new Map(); // cwd -> current daemon-boot epoch id
+    this.source = { selected: 'none', include_archive: false, window_ms: REPLAY_WINDOW_MS, live_total: 0 };
+  }
+
+  // Single live-ingest path for both watchers: assigns the daemon-boot epoch the same way
+  // _tagRunEpochs does for replayed history (so a live event's _run matches the run its replayed
+  // siblings carry), stores it, broadcasts the raw frame, and queues the incremental
+  // output-append frame that lets a client grow its feed without refetching.
+  _ingestLive(ev) {
+    if (ev && ev.cwd) {
+      const t = ev.ts ? Date.parse(ev.ts) : 0;
+      const prev = this._lastLiveTs.get(ev.cwd);
+      if (t) {
+        if (prev === undefined || (t - prev) > RUN_GAP_MS) this._liveRun.set(ev.cwd, ev.ts);
+        this._lastLiveTs.set(ev.cwd, t);
+      }
+      ev._run = this._liveRun.get(ev.cwd) || null;
+    }
+    this._pushWithBound(ev);
+    this._broadcast('event', ev);
+    this._emitOutputAppend(ev);
   }
 
   // Enforces the MAX_EVENTS resource bound (formal spec Module 5). Called on every event
@@ -363,8 +874,96 @@ class Store {
     }
   }
 
-  load() {
-    this.events = replayAll(this.logDir);
+  // Live spool is the ONLY default source. `includeArchive` blends the legacy gm-log tree in,
+  // and is off unless explicitly requested. `windowMs` bounds how far back the replay reaches
+  // (watcher.log reaches 6.1MB/81k lines per project, so an unbounded boot read is real cost);
+  // null means no bound. Both are recorded on this.source so every route can report provenance.
+  // Source selection is delegated entirely to replayAllAudited, which already encodes the rule
+  // that an EXPLICITLY-REQUESTED source wins over automatic discovery: opts.spool pins one
+  // project, an explicit GM_LOG_DIR (or archive:true) selects the archive, and only an
+  // unqualified call falls through to fleet-wide spool discovery. Reimplementing selection here
+  // is what broke the explicit-logDir contract -- a server scoped to a temp dir silently loaded
+  // the whole machine's fleet instead, taking test isolation with it.
+  load({ includeArchive = INCLUDE_ARCHIVE, windowMs = REPLAY_WINDOW_MS, spool } = {}) {
+    const opts = {};
+    if (spool !== undefined) opts.spool = spool;
+    else if (this.explicitLogDir) opts.archive = true;
+    else if (includeArchive) opts.archive = true;
+    const audited = replayAllAudited(this.logDir, opts);
+
+    const cutoffIso = windowMs ? new Date(Date.now() - windowMs).toISOString() : null;
+    const kept = cutoffIso ? audited.events.filter(e => !e.ts || e.ts >= cutoffIso) : audited.events;
+    this.events = kept;
+    this._tagRunEpochs();
+    this.source = {
+      selected: audited.source,
+      archive_used: audited.archive_used,
+      explicit_log_dir: !!this.explicitLogDir,
+      log_dir: this.logDir,
+      include_archive: !!(opts.archive),
+      window_ms: windowMs,
+      window_start: cutoffIso,
+      total_before_window: audited.events.length,
+      total_in_window: kept.length,
+      sources: audited.sources,
+      warnings: audited.warnings || [],
+      // Which population the counts describe, so a client never has to guess why one surface
+      // reports a different project total than another.
+      population: opts.spool ? 'single explicitly-scoped project'
+        : audited.archive_used ? 'legacy gm-log archive tree'
+        : 'every project with a discoverable .gm/exec-spool/.watcher.log',
+      project_count: (audited.projects || []).length,
+      loaded_at: new Date().toISOString(),
+    };
+    this._snapshotCache = null;
+  }
+
+  // Assigns each event a daemon-boot epoch (`_run`), the correlation identity correlation.js
+  // ranks third and the only one covering 100% of live events. watcher.log carries real
+  // "--- watcher|daemon|supervisor spawn <iso> ---" banners, but those lines are not events, so
+  // the epoch is reconstructed per-cwd from inter-event gaps: a jump larger than
+  // RUN_GAP_MS between consecutive events for the same project is a boot boundary. The run id
+  // is the ISO ts of that run's first event, which is stable across reloads.
+  _tagRunEpochs() {
+    const lastTsByCwd = new Map();
+    const runByCwd = new Map();
+    for (const e of this.events) {
+      if (!e.cwd) continue;
+      const t = e.ts ? Date.parse(e.ts) : 0;
+      if (!t) { e._run = runByCwd.get(e.cwd) || null; continue; }
+      const prev = lastTsByCwd.get(e.cwd);
+      if (prev === undefined || (t - prev) > RUN_GAP_MS) runByCwd.set(e.cwd, e.ts);
+      lastTsByCwd.set(e.cwd, t);
+      e._run = runByCwd.get(e.cwd);
+    }
+    // Hand the epoch state to the live path so the first event after boot continues the run its
+    // replayed predecessors belong to instead of opening a spurious new one.
+    this._lastLiveTs = lastTsByCwd;
+    this._liveRun = runByCwd;
+  }
+
+  // How stale the selected source is, as a first-class warning rather than a silent zero.
+  sourceHealth() {
+    let newest = 0;
+    for (let i = this.events.length - 1; i >= 0 && i > this.events.length - 500; i--) {
+      const t = this.events[i].ts ? Date.parse(this.events[i].ts) : 0;
+      if (t > newest) newest = t;
+    }
+    const age = newest ? Date.now() - newest : null;
+    const stale = age === null || age > SOURCE_STALE_MS;
+    return {
+      ...this.source,
+      event_count: this.events.length,
+      newest_event_ts: newest ? new Date(newest).toISOString() : null,
+      newest_age_ms: age,
+      stale,
+      stale_threshold_ms: SOURCE_STALE_MS,
+      warning: stale
+        ? (this.events.length === 0
+          ? 'selected source produced ZERO events — the live spool may be undiscovered'
+          : `selected source's newest event is ${age === null ? 'undated' : Math.round(age / 3600000) + 'h'} old`)
+        : null,
+    };
   }
 
   // Live coverage is two concurrent sources merged into the same broadcast/events array,
@@ -377,18 +976,23 @@ class Store {
   // its events, and dynamic project appearance/disappearance (fanout side) needs no restart.
   startLive() {
     if (this.watcher || this.fanout) return;
-    this.watcher = new GmLogWatcher(this.logDir);
-    this.watcher.on('event', ev => {
-      this._pushWithBound(ev);
-      this._broadcast('event', ev);
-    });
-    this.watcher.on('error', e => this._broadcast('error', { msg: String(e?.message || e) }));
-    this.watcher.start();
+    // The legacy central log is only tailed when the archive source was explicitly opted into;
+    // otherwise a live gm-log write would reintroduce exactly the stale blending load() avoids.
+    if (this.source.include_archive || this.explicitLogDir) {
+      this.watcher = new GmLogWatcher(this.logDir);
+      this.watcher.on('event', ev => {
+        this._ingestLive(ev);
+      });
+      this.watcher.on('error', e => this._broadcast('error', { msg: String(e?.message || e) }));
+      this.watcher.start();
+    }
 
+    // Fleet-wide spool fanout is the DEFAULT, not an override: a server explicitly scoped to one
+    // log tree stays scoped to it, so a temp-dir-scoped server (every test) observes only its own
+    // events rather than the whole machine's 260k-event fleet.
     this.fanout = new MultiProjectWatcher();
     this.fanout.on('event', ev => {
-      this._pushWithBound(ev);
-      this._broadcast('event', ev);
+      this._ingestLive(ev);
     });
     this.fanout.on('error', e => this._broadcast('error', { msg: String(e?.message || e), cwd: e?.cwd }));
     this.fanout.on('project.added', p => { this.watchedProjects = this.fanout.projects(); this._broadcast('project.added', p); });
@@ -413,11 +1017,21 @@ class Store {
     // getting starved under a populated multi-project log even with the GUI closed.
     this._phasePollTimer = setInterval(() => {
       if (this.sseClients.size === 0) return;
-      for (const cwd of discoverProjects(this.events).map(p => p.cwd)) {
+      for (const cwd of discoverProjectsCached(this.events).map(p => p.cwd)) {
         this._maybeBroadcastPhaseChange(cwd);
       }
     }, 2500);
     this._phasePollTimer.unref?.();
+
+    // Heartbeat: an SSE comment frame on a fixed interval. Without it an idle stream is
+    // indistinguishable from a dead one to both the client and any intermediary, and a silently
+    // reaped connection produced no reconnect and no visible error.
+    this._heartbeatTimer = setInterval(() => {
+      if (this.sseClients.size === 0) return;
+      const hb = `: hb ${Date.now()} seq=${this._sseSeq}\n\n`;
+      for (const res of this.sseClients) { try { res.write(hb); } catch {} }
+    }, SSE_HEARTBEAT_MS);
+    this._heartbeatTimer.unref?.();
   }
 
   // async: both watcher.stop() and fanout.stop() now return Promises that resolve only
@@ -426,6 +1040,8 @@ class Store {
   // UV_HANDLE_CLOSING race that an immediate exit after a synchronous stop() could hit.
   async stop() {
     if (this._phasePollTimer) { clearInterval(this._phasePollTimer); this._phasePollTimer = null; }
+    if (this._heartbeatTimer) { clearInterval(this._heartbeatTimer); this._heartbeatTimer = null; }
+    if (this._outputFlushTimer) { clearTimeout(this._outputFlushTimer); this._outputFlushTimer = null; }
     if (this.watcher) await this.watcher.stop();
     if (this.fanout) await this.fanout.stop();
     this.watcher = null;
@@ -435,9 +1051,60 @@ class Store {
     this.sseClients.clear();
   }
 
+  // Every broadcast frame carries a monotonic id and is retained in a bounded ring buffer, so a
+  // client reconnecting with Last-Event-ID replays exactly the frames it missed instead of
+  // silently losing the gap. Frames are emitted with SSE's own `id:` field, which browsers echo
+  // back automatically in the Last-Event-ID request header.
   _broadcast(kind, data) {
-    const payload = `event: ${kind}\ndata: ${JSON.stringify(data)}\n\n`;
+    const id = ++this._sseSeq;
+    const frame = { id, kind, data };
+    this._sseRing.push(frame);
+    if (this._sseRing.length > SSE_RING_SIZE) this._sseRing.splice(0, this._sseRing.length - SSE_RING_SIZE);
+    const payload = sseFrame(frame);
     for (const res of this.sseClients) { try { res.write(payload); } catch {} }
+    return id;
+  }
+
+  // Frames strictly newer than lastId, or null when the requested id has already been evicted
+  // from the ring (the client must do a full refetch -- reported honestly rather than served a
+  // partial replay that would look complete).
+  replaySince(lastId) {
+    if (!Number.isFinite(lastId)) return { frames: [], gap: false, from: null, to: this._sseSeq };
+    const oldest = this._sseRing.length ? this._sseRing[0].id : this._sseSeq + 1;
+    if (lastId + 1 < oldest) return { frames: [], gap: true, from: lastId, to: this._sseSeq };
+    return { frames: this._sseRing.filter(f => f.id > lastId), gap: false, from: lastId, to: this._sseSeq };
+  }
+
+  // -- incremental per-agent output --
+  // Every SSE frame previously forced the client to refetch the whole of
+  // /api/projects/live-state to learn what an agent had produced. This emits the newly-appended
+  // output nodes for one cwd, already classified into the same node shape live-state's
+  // recent_events uses, so a client APPENDS instead of refetching. Per-cwd high-water mark is
+  // the node's ts, so a reconnect + replay never double-appends.
+  _emitOutputAppend(ev) {
+    if (!ev || !ev.cwd) return;
+    const node = classifyOutputNode(ev);
+    if (!node) return;
+    const cwd = ev.cwd;
+    let buf = this._outputPending.get(cwd);
+    if (!buf) { buf = []; this._outputPending.set(cwd, buf); }
+    buf.push(node);
+    if (this._outputFlushTimer) return;
+    this._outputFlushTimer = setTimeout(() => {
+      this._outputFlushTimer = null;
+      for (const [c, nodes] of this._outputPending) {
+        if (!nodes.length) continue;
+        this._broadcast('agent.output', {
+          cwd: c,
+          run: nodes[nodes.length - 1].run || null,
+          nodes,
+          since_ts: nodes[0].ts || null,
+          until_ts: nodes[nodes.length - 1].ts || null,
+        });
+      }
+      this._outputPending.clear();
+    }, OUTPUT_COALESCE_MS);
+    this._outputFlushTimer.unref?.();
   }
 
   // Re-reads a project's live phase state (mtime-gated, so this is a cheap statSync in the
@@ -481,7 +1148,22 @@ class Store {
       if (e.pid) pids.add(e.pid);
       if (e.ok === false || e.err) errors++;
     }
-    const value = { total: this.events.length, bySub, byEvent, byDay, pids: pids.size, errors, subsystems: SUBSYSTEMS, observedSubsystems: this.observedSubsystems(), evictedCount: this._evictedCount, evictedBatches: this._evictedBatches, maxEvents: MAX_EVENTS, schemaVersion: EVENT_SCHEMA_VERSION };
+    const observed = this.observedSubsystems();
+    const value = {
+      total: this.events.length, bySub, byEvent, byDay, pids: pids.size, errors,
+      // Advertise what real data actually carries. The hardcoded seed named `bootstrap` and
+      // `rs_learn`, both with zero events in this window, so a client rendering `subsystems`
+      // showed tags that could never populate. The seed is still reported, separately labelled,
+      // so a genuinely-new-but-empty tag is not invisible either.
+      subsystems: observed,
+      seededSubsystems: SUBSYSTEMS,
+      observedSubsystems: observed,
+      evictedCount: this._evictedCount, evictedBatches: this._evictedBatches, maxEvents: MAX_EVENTS,
+      // Provenance + window bound: a total is meaningless without which source produced it and
+      // how far back it reaches.
+      source: this.sourceHealth(),
+      schemaVersion: EVENT_SCHEMA_VERSION,
+    };
     this._snapshotCache = { len: this.events.length, value };
     return value;
   }
@@ -529,8 +1211,12 @@ class Store {
     return Object.values(map).sort((a, b) => b.last.localeCompare(a.last));
   }
 
+  // Recall telemetry lives under BOTH subsystem tags in real data: 666 events tagged `rs_learn`
+  // (every pre-cutover recall in log history) and 88 tagged `memory` (recall.rs, the current
+  // tag). Filtering on `memory` alone returned all zeros while 753 real recall events sat in the
+  // store. The tag is what drifted; the event class did not.
   recallStats() {
-    const evs = this.events.filter(e => e._sub === 'memory' && e.event === 'recall');
+    const evs = this.events.filter(e => isMemorySub(e._sub) && e.event === 'recall');
     const hits = evs.filter(e => e.hit).length;
     const misses = evs.filter(e => !e.hit).length;
     const avgDur = evs.length ? Math.round(evs.reduce((s, e) => s + (e.dur_ms || 0), 0) / evs.length) : 0;
@@ -558,46 +1244,59 @@ class Store {
     return { total: evs.length, byEvent, recent };
   }
 
-  deviations({ limit = 200, sess, sessionId } = {}) {
+  deviations({ limit = 200, sess, sessionId, cwd } = {}) {
     const sessFilter = sess || sessionId;
     let arr = this.events.filter(e => typeof e.event === 'string' && e.event.startsWith('deviation.'));
-    if (sessFilter) arr = arr.filter(e => e.sess === sessFilter);
+    if (sessFilter) arr = arr.filter(e => correlationOf(e).key === sessFilter);
+    if (cwd) {
+      const norm = String(cwd).replace(/\\/g, '/').toLowerCase();
+      arr = arr.filter(e => !!e.cwd && String(e.cwd).replace(/\\/g, '/').toLowerCase() === norm);
+    }
     const byKind = {};
-    for (const e of arr) byKind[e.event] = (byKind[e.event] || 0) + 1;
-    const bySession = {};
+    const bySession = {}; // keyed on the real correlation key, not the absent `sess` field
+    const byCwd = {};
     for (const e of arr) {
-      const k = e.sess || '(no-session)';
-      bySession[k] = (bySession[k] || 0) + 1;
+      byKind[e.event] = (byKind[e.event] || 0) + 1;
+      bySession[correlationOf(e).key] = (bySession[correlationOf(e).key] || 0) + 1;
+      if (e.cwd) byCwd[e.cwd] = (byCwd[e.cwd] || 0) + 1;
     }
     return {
       total: arr.length,
       byKind,
       bySession,
+      byCwd,
+      correlation: correlationCoverage(arr),
       recent: arr.slice(-limit).reverse(),
     };
   }
 
+  // Grouped by the real correlation identity (see _buildCwdActivityIndex). Every row reports
+  // `correlation_kind` so the caller can label the grouping honestly -- on live data every row
+  // is kind 'run' (cwd + daemon-boot epoch), not a true agent session.
   sessions({ limit = 100 } = {}) {
     const map = new Map();
     for (const e of this.events) {
-      const key = e.sess || '(no-session)';
+      const c = correlationOf(e);
+      const key = c.key;
       let entry = map.get(key);
       if (!entry) {
         entry = {
           sess: key,
+          correlation_kind: c.kind,
+          run: c.run || null,
           first_ts: e.ts || '',
           last_ts: e.ts || '',
           events: 0,
           phases: new Set(),
           phase_walk: [],
+          replans: 0,
           prd_adds: 0,
           prd_resolves: 0,
           mutable_adds: 0,
           mutable_resolves: 0,
           deviations: 0,
-          residual_fires: 0,
-          residual_skips: 0,
           dispatches: 0,
+          dispatch_ms_total: 0,
           last_dispatch_verbs: [],
           cwds: new Set(),
           pids: new Set(),
@@ -611,29 +1310,38 @@ class Store {
       if (e._sub === 'plugkit') {
         if (e.event === 'phase.transitioned' && e.phase) {
           entry.phases.add(e.phase);
-          entry.phase_walk.push({ ts: e.ts, phase: e.phase });
+          const from = e.from ?? (entry.phase_walk.length ? entry.phase_walk[entry.phase_walk.length - 1].phase : null);
+          const replan = isReplanEdge(from, e.phase);
+          if (replan) entry.replans++;
+          entry.phase_walk.push({ ts: e.ts, phase: e.phase, from, replan });
         }
         if (e.event === 'instruction.served' && e.phase) entry.phases.add(e.phase);
         if (e.event === 'prd.added') entry.prd_adds++;
         if (e.event === 'prd.resolved') entry.prd_resolves++;
         if (e.event === 'mutable.added') entry.mutable_adds++;
         if (e.event === 'mutable.resolved') entry.mutable_resolves++;
-        if (e.event === 'residual.fired') entry.residual_fires++;
-        if (e.event === 'residual.skipped') entry.residual_skips++;
         if (e.event === 'dispatch.end') {
           entry.dispatches++;
-          if (e.verb) entry.last_dispatch_verbs.push(e.verb);
+          if (Number.isFinite(e.ms)) entry.dispatch_ms_total += e.ms;
+          if (e.verb) entry.last_dispatch_verbs.push({ verb: e.verb, ms: e.ms ?? null, ts: e.ts });
           if (entry.last_dispatch_verbs.length > 20) entry.last_dispatch_verbs.shift();
         }
       }
       if (typeof e.event === 'string' && e.event.startsWith('deviation.')) entry.deviations++;
     }
-    const PHASES = ['PLAN','EXECUTE','EMIT','VERIFY','CONSOLIDATE','COMPLETE'];
     const arr = [];
     for (const v of map.values()) {
+      // Authoritative visited SET, not index math: a re-planned walk genuinely revisits phases,
+      // and an index-based "furthest reached" understates it (a session that re-planned shows 2
+      // reached where index math gives 1).
       const reached = PHASES.map(p => v.phases.has(p));
       arr.push({
         sess: v.sess,
+        correlation_kind: v.correlation_kind,
+        run: v.run,
+        phases_visited: [...v.phases],
+        replans: v.replans,
+        dispatch_ms_total: v.dispatch_ms_total,
         first_ts: v.first_ts,
         last_ts: v.last_ts,
         events: v.events,
@@ -644,8 +1352,6 @@ class Store {
         prd_resolves: v.prd_resolves,
         mutable_adds: v.mutable_adds,
         mutable_resolves: v.mutable_resolves,
-        residual_fires: v.residual_fires,
-        residual_skips: v.residual_skips,
         deviations: v.deviations,
         last_verbs: v.last_dispatch_verbs,
         cwds: [...v.cwds],
@@ -656,12 +1362,21 @@ class Store {
     return { total: arr.length, rows: arr.slice(0, limit) };
   }
 
+  // Accepts a correlation key (what sessions() now returns) or a raw cwd -- a caller holding a
+  // project path should not have to know the epoch to see that project's walk.
   processTree(sess, sessionId) {
-    sess = sess || sessionId;
-    if (!sess) return { sess: null, nodes: [], gaps: [] };
-    const match = sess === '(no-session)' ? '' : sess;
-    const evs = this.events.filter(e => (e.sess || '') === match).slice().sort((a,b)=>(a.ts||'').localeCompare(b.ts||''));
-    return this._processTreeFromEvents(sess, evs);
+    const key = sess || sessionId;
+    if (!key) return { sess: null, nodes: [], gaps: [], phase_walk: [], phase_reached: PHASES.map(() => false) };
+    const normKey = String(key).replace(/\\/g, '/').toLowerCase();
+    const evs = this.events
+      .filter(e => {
+        const c = correlationOf(e);
+        if (c.key === key) return true;
+        // cwd-only match: every run of that project.
+        return !!e.cwd && String(e.cwd).replace(/\\/g, '/').toLowerCase() === normKey;
+      })
+      .slice().sort((a, b) => (a.ts || '').localeCompare(b.ts || ''));
+    return this._processTreeFromEvents(key, evs);
   }
 
   // Node-classification core shared by processTree (filters this.events fresh, for the
@@ -671,45 +1386,38 @@ class Store {
   // deviation node shape, never two copies to keep in sync. `evs` must already be this
   // session's events in chronological order.
   _processTreeFromEvents(sess, evs) {
-    const PHASES = ['PLAN','EXECUTE','EMIT','VERIFY','CONSOLIDATE','COMPLETE'];
     const nodes = [];
     const gaps = [];
+    const phaseWalk = [];
     let currentPhase = null;
     let firstInstructionSeen = false;
     let firstWrite = null;
     for (const e of evs) {
-      if (e._sub === 'plugkit') {
-        if (e.event === 'instruction.served') {
-          if (!firstInstructionSeen) firstInstructionSeen = true;
-          if (e.phase && e.phase !== currentPhase) currentPhase = e.phase;
-          nodes.push({ ts: e.ts, kind: 'instruction', phase: e.phase, prd_pending: e.prd_pending, mutables_pending: e.mutables_pending });
-        } else if (e.event === 'phase.transitioned') {
-          if (e.phase && currentPhase) {
-            const fromIdx = PHASES.indexOf(currentPhase);
-            const toIdx = PHASES.indexOf(e.phase);
-            if (fromIdx !== -1 && toIdx !== -1 && toIdx > fromIdx + 1) {
-              gaps.push({ ts: e.ts, kind: 'phase-skipped', from: currentPhase, to: e.phase });
+      const node = classifyOutputNode(e);
+      if (node) {
+        if (node.kind === 'transition') {
+          // `from` is emitted by plugkit on every real phase.transitioned event; trusting it
+          // instead of a stateful currentPhase is what makes a re-plan visible at all.
+          const from = node.from ?? currentPhase;
+          if (node.replan || isReplanEdge(from, node.phase)) {
+            phaseWalk.push({ ts: e.ts, phase: node.phase, from, replan: true });
+          } else {
+            const fromIdx = PHASES.indexOf(from);
+            const toIdx = PHASES.indexOf(node.phase);
+            // A forward jump is only a real skip when it is not a re-walk after a re-plan --
+            // after PLAN, every forward step is legal regardless of how far the prior walk got.
+            if (from && fromIdx !== -1 && toIdx !== -1 && toIdx > fromIdx + 1) {
+              gaps.push({ ts: e.ts, kind: 'phase-skipped', from, to: node.phase });
             }
+            phaseWalk.push({ ts: e.ts, phase: node.phase, from, replan: false });
           }
-          currentPhase = e.phase;
-          nodes.push({ ts: e.ts, kind: 'transition', phase: e.phase });
-        } else if (e.event === 'prd.added') {
-          nodes.push({ ts: e.ts, kind: 'prd-add', id: e.id, phase: currentPhase });
-        } else if (e.event === 'prd.resolved') {
-          nodes.push({ ts: e.ts, kind: 'prd-resolve', id: e.id, phase: currentPhase });
-        } else if (e.event === 'mutable.added') {
-          nodes.push({ ts: e.ts, kind: 'mutable-add', id: e.id, phase: currentPhase });
-        } else if (e.event === 'mutable.resolved') {
-          nodes.push({ ts: e.ts, kind: 'mutable-resolve', id: e.id, phase: currentPhase });
-        } else if (e.event === 'residual.fired' || e.event === 'residual.skipped') {
-          nodes.push({ ts: e.ts, kind: e.event, reason: e.reason, phase: currentPhase });
-        } else if (e.event === 'memorize.fired') {
-          nodes.push({ ts: e.ts, kind: 'memorize', key: e.key, phase: currentPhase });
+          currentPhase = node.phase;
+        } else if (node.kind === 'instruction') {
+          firstInstructionSeen = true;
+          if (node.phase && node.phase !== currentPhase) currentPhase = node.phase;
         }
-      }
-      if (typeof e.event === 'string' && e.event.startsWith('deviation.')) {
-        nodes.push({ ts: e.ts, kind: 'deviation', deviation: e.event, reason: e.reason, residuals: e.residuals, phase: currentPhase });
-        gaps.push({ ts: e.ts, kind: 'deviation', deviation: e.event });
+        if (node.kind === 'deviation') gaps.push({ ts: e.ts, kind: 'deviation', deviation: node.deviation, detail: node.detail });
+        nodes.push(node.kind === 'transition' || node.kind === 'instruction' ? node : { ...node, phase: node.phase ?? currentPhase });
       }
       if ((e.event === 'dispatch.start' || e.event === 'spawn') && !firstInstructionSeen && !firstWrite) {
         firstWrite = { ts: e.ts, event: e.event, verb: e.verb };
@@ -718,7 +1426,14 @@ class Store {
     if (firstWrite && !firstInstructionSeen) {
       gaps.unshift({ ts: firstWrite.ts, kind: 'no-instruction-dispatched', detail: firstWrite });
     }
-    return { sess, nodes, gaps, phase_reached: PHASES.map(p => evs.some(e => (e._sub === 'plugkit' && (e.event === 'phase.transitioned' || e.event === 'instruction.served') && e.phase === p))) };
+    const reachedSet = new Set(phaseWalk.map(w => w.phase));
+    for (const e of evs) if (e._sub === 'plugkit' && e.event === 'instruction.served' && e.phase) reachedSet.add(e.phase);
+    return {
+      sess, nodes, gaps,
+      phase_walk: phaseWalk,
+      replans: phaseWalk.filter(w => w.replan).length,
+      phase_reached: PHASES.map(p => reachedSet.has(p)),
+    };
   }
 
   // Builds { cwdKey -> latestSess, sess -> events[] } in ONE pass over this.events, for
@@ -729,20 +1444,27 @@ class Store {
   // single-threaded event loop long enough to starve every other connection (SSE clients
   // included) for the duration -- live-witnessed as the local GUI server going fully
   // unresponsive under a real browser tab + the 2.5s phase-poll timer during this session.
+  // Keyed on the real correlation identity, NOT on `sess`. Live watcher.log events carry no
+  // `sess` field at all (zero occurrences across every discovered project), so the prior
+  // `if (!e.sess) continue` short-circuited on 100% of live events and left recent_events empty
+  // for every real project. correlationOf ranks sess > session_id > cwd#run > cwd and reports
+  // which one it used, so a consumer knows whether it is grouped by agent session or by daemon
+  // run rather than being told a fidelity the data does not have.
   _buildCwdActivityIndex() {
-    const latestSessByCwd = new Map(); // normalized cwd -> {sess, ts}
-    const eventsBySess = new Map(); // sess -> events[] (insertion order == events array order)
+    const latestByCwd = new Map(); // normalized cwd -> {key, kind, ts}
+    const eventsByKey = new Map(); // correlation key -> events[] (chronological)
     for (const e of this.events) {
-      if (!e.sess) continue;
-      let arr = eventsBySess.get(e.sess);
-      if (!arr) { arr = []; eventsBySess.set(e.sess, arr); }
+      const c = correlationOf(e);
+      if (c.key === '(none)') continue;
+      let arr = eventsByKey.get(c.key);
+      if (!arr) { arr = []; eventsByKey.set(c.key, arr); }
       arr.push(e);
       if (!e.cwd) continue;
       const norm = String(e.cwd).replace(/\\/g, '/').toLowerCase();
-      const cur = latestSessByCwd.get(norm);
-      if (!cur || (e.ts && e.ts > cur.ts)) latestSessByCwd.set(norm, { sess: e.sess, ts: e.ts || '' });
+      const cur = latestByCwd.get(norm);
+      if (!cur || (e.ts && e.ts > cur.ts)) latestByCwd.set(norm, { key: c.key, kind: c.kind, run: c.run, ts: e.ts || '' });
     }
-    return { latestSessByCwd, eventsBySess };
+    return { latestByCwd, eventsByKey };
   }
 
   // Recent activity for one project's most-recently-active session, for the Skill Layout
@@ -751,14 +1473,28 @@ class Store {
   // deviation) via processTreeFromEvents below, scoped to whichever session last touched this
   // cwd per the shared index, capped to the most recent `limit` nodes (newest first). Callers
   // build the index once (_buildCwdActivityIndex) and pass it in -- never re-scans this.events.
-  recentEventsForCwd(cwd, index, limit = 20) {
-    if (!cwd) return { sess: null, nodes: [] };
+  recentEventsForCwd(cwd, index, limit = RECENT_EVENTS_LIMIT) {
+    const empty = { sess: null, correlation_key: null, correlation_kind: null, run: null, nodes: [], total: 0, limit, truncated: false, more_above: 0 };
+    if (!cwd) return empty;
     const norm = String(cwd).replace(/\\/g, '/').toLowerCase();
-    const best = index.latestSessByCwd.get(norm);
-    if (!best) return { sess: null, nodes: [] };
-    const evs = index.eventsBySess.get(best.sess) || [];
-    const { nodes } = this._processTreeFromEvents(best.sess, evs);
-    return { sess: best.sess, nodes: nodes.slice(-limit).reverse() };
+    const best = index.latestByCwd.get(norm);
+    if (!best) return empty;
+    const evs = index.eventsByKey.get(best.key) || [];
+    const { nodes } = this._processTreeFromEvents(best.key, evs);
+    const shown = nodes.slice(-limit).reverse();
+    return {
+      // `sess` retains its historical name for existing consumers, but it now carries the real
+      // correlation key -- correlation_kind says what that key actually is.
+      sess: best.key,
+      correlation_key: best.key,
+      correlation_kind: best.kind,
+      run: best.run || null,
+      nodes: shown,
+      total: nodes.length,
+      limit,
+      truncated: nodes.length > shown.length,
+      more_above: Math.max(0, nodes.length - shown.length),
+    };
   }
 
   search(q, { sub, limit = 100 } = {}) {
@@ -965,7 +1701,7 @@ function resolveScopedCwd(store, cwdParam) {
   if (typeof cwd !== 'string' || cwd.includes('..')) {
     return { ok: false, error: 'invalid cwd' };
   }
-  const projects = discoverProjects(store.events);
+  const projects = discoverProjectsCached(store.events);
   const allowed = [OWN_ROOT, ...projects.map(p => p.cwd)];
   if (!isAllowedProjectCwd(cwd, allowed)) {
     return { ok: false, error: 'cwd not in discovered project registry' };
@@ -987,7 +1723,7 @@ function sanitizeProjectName(cwd) {
 // to the last HEALTH_WINDOW_MS, readWatcherStatus (same alive-flag /api/projects surfaces),
 // and each project's own last-seen event ts for stale-heartbeat detection.
 function healthSummary(store) {
-  const projects = discoverProjects(store.events);
+  const projects = discoverProjectsCached(store.events);
   const now = Date.now();
   // Single O(events) pass building a per-cwd {lastTs, devCountInWindow} accumulator, instead
   // of the prior O(events * projects) shape (store.events.filter(e => e.cwd === cwd) run once
@@ -1001,7 +1737,9 @@ function healthSummary(store) {
   for (const e of store.events) {
     const acc = byCwd.get(e.cwd);
     if (!acc) continue;
-    const t = typeof e.ts === 'number' ? e.ts : (e.ts ? Date.parse(e.ts) : 0);
+    // ts is always an ISO string after normalizeTs -- the numeric branch this used to carry was
+    // unreachable.
+    const t = e.ts ? Date.parse(e.ts) : 0;
     if (!t) continue;
     if (t > acc.lastTs) acc.lastTs = t;
     if (typeof e.event === 'string' && e.event.startsWith('deviation.') && (now - t) <= HEALTH_WINDOW_MS) {
@@ -1014,14 +1752,20 @@ function healthSummary(store) {
     const cwd = proj.cwd;
     const acc = byCwd.get(cwd);
     const deviationRate = acc.devCountInWindow / windowMinutes;
-    const status = readWatcherStatus(cwd);
-    const watcherAlive = !!(status && status.alive);
+    // watcherAlive was the shared-daemon pid check, identical for every project on the machine.
+    // Real per-project liveness replaces it; the daemon pid remains available, clearly labelled.
+    const liveness = readProjectLiveness(cwd);
     const staleSeconds = acc.lastTs ? Math.max(0, Math.floor((now - acc.lastTs) / 1000)) : null;
     out.push({
       cwd,
       name: path.basename(cwd),
       deviationRate,
-      watcherAlive,
+      watcherAlive: liveness.alive,
+      activity: liveness.activity,
+      idleMs: liveness.idle_ms,
+      dispatchAgeMs: liveness.dispatch_age_ms,
+      daemonPidAlive: liveness.daemon_pid_alive,
+      daemonShared: liveness.daemon_shared,
       staleSeconds,
     });
   }
@@ -1034,10 +1778,10 @@ function healthSummary(store) {
 // with a composite severity score so an operator can triage at a glance.
 const STUCK_PHASE_MINUTES = parseInt(process.env.GM_STUCK_PHASE_MINUTES, 10) || 15;
 const STUCK_PRD_PENDING_THRESHOLD = parseInt(process.env.GM_STUCK_PRD_THRESHOLD, 10) || 10;
-const STUCK_DEVIATION_RATE_THRESHOLD = parseFloat(process.env.GM_STUCK_DEVIATION_RATE, 10) || 5.0;
+const STUCK_DEVIATION_RATE_THRESHOLD = parseFloat(process.env.GM_STUCK_DEVIATION_RATE) || 5.0;
 
 function stuckProjects(store) {
-  const projects = discoverProjects(store.events);
+  const projects = discoverProjectsCached(store.events);
   const now = Date.now();
   const health = healthSummary(store);
   const healthByCwd = new Map(health.map(h => [h.cwd, h]));
@@ -1048,10 +1792,31 @@ function stuckProjects(store) {
     const hr = healthByCwd.get(proj.cwd);
     const phaseState = readLivePhaseState(proj.cwd);
 
-    // Dead watcher: process not alive (severity 3)
-    if (!proj.alive && phaseState.present) {
-      issues.push({ kind: 'dead-watcher', detail: 'watcher process not alive but project has next-step.md' });
+    // Abandoned agent (severity 3). This was previously `!proj.alive`, driven by the shared
+    // daemon pid -- so it fired for every project on the machine at once or for none, which made
+    // the highest-weighted signal in this ranking pure noise. Now driven by this project's own
+    // dispatch age, and only 'abandoned' (not merely 'idle') counts: an agent idle between turns
+    // is healthy.
+    const liveness = readProjectLiveness(proj.cwd);
+    if (liveness.activity === 'abandoned' && phaseState.present && phaseState.phase !== 'COMPLETE') {
+      issues.push({
+        kind: 'abandoned-agent',
+        detail: `no dispatch for ${Math.round((liveness.dispatch_age_ms || 0) / 3600000)}h while phase is ${phaseState.phase}`,
+        activity: liveness.activity,
+        dispatchAgeMs: liveness.dispatch_age_ms,
+      });
       severity += 3;
+    }
+
+    // Gate blockers: an agent whose only outgoing edges are all gate-blocked cannot advance.
+    const gateState = readFsmGates(proj.cwd, { prd_pending: proj.prd_pending ?? null, mut_unknown: proj.mut_unknown ?? null, phase: phaseState.phase });
+    if (gateState.blocked) {
+      issues.push({
+        kind: 'gate-blocked',
+        detail: `every outgoing edge from ${gateState.phase} is gate-blocked`,
+        blocked_edges: gateState.blocked_edges,
+      });
+      severity += 2;
     }
 
     // Stale phase: phase hasn't changed in > STUCK_PHASE_MINUTES (severity 2)
@@ -1116,7 +1881,7 @@ function throughputMetrics(store) {
   for (const key of Object.keys(windows)) { counts[key] = 0; bySub[key] = {}; }
   let total = 0;
   for (const e of store.events) {
-    const t = typeof e.ts === 'number' ? e.ts : (e.ts ? Date.parse(e.ts) : 0);
+    const t = e.ts ? Date.parse(e.ts) : 0; // ts is ISO after normalizeTs
     if (!t) continue;
     total++;
     for (const [key, ms] of Object.entries(windows)) {
@@ -1135,36 +1900,75 @@ function throughputMetrics(store) {
 }
 
 // -- Memory store health (formal spec Module 8, item 3) --
-// Reads .gm/memories/ and .gm/rs-learn.db for each discovered project, returning file count,
-// total size, and growth rate proxy (no mtime-based rate since we only sample once).
+// .gm/gm.db is the REAL store and it is large: measured 174.9MB (gm), 28.6MB (spoint), 19.8MB
+// (casey), 18.8MB (gmsniff). .gm/rs-learn.db, which this used to stat, exists only in C:/dev/gm
+// as a 434KB fossil and nowhere else -- so this route reported null for every current project
+// while the actual multi-hundred-megabyte store went unwatched. Both are reported now, with
+// rs_learn_db_size explicitly labelled as the legacy fossil.
+//
+// out/ retention pressure is measured in the same sweep: the spool sweeper only removes entries
+// older than an hour, and real backlogs are substantial (3,845 files / 19.9MB in gm).
 function memoryStoreHealth(store) {
-  const projects = discoverProjects(store.events);
+  const projects = discoverProjectsCached(store.events);
   const out = [];
   for (const proj of projects) {
     const memoriesDir = path.join(proj.cwd, '.gm', 'memories');
-    const dbPath = path.join(proj.cwd, '.gm', 'rs-learn.db');
-    let memoriesCount = 0, memoriesSize = 0, dbSize = null;
+    let memoriesCount = 0, memoriesSize = 0;
     try {
       for (const f of fs.readdirSync(memoriesDir)) {
         if (!f.endsWith('.md')) continue;
         try { const s = fs.statSync(path.join(memoriesDir, f)); memoriesCount++; memoriesSize += s.size; } catch (_) {}
       }
     } catch (_) {}
-    try { dbSize = fs.statSync(dbPath).size; } catch (_) {}
-    const totalSize = memoriesSize + (dbSize || 0);
-    if (memoriesCount || dbSize !== null) {
-      out.push({ cwd: proj.cwd, name: path.basename(proj.cwd), memoriesCount, memoriesSize, dbSize, totalSize });
+    const sizeOf = fp => { try { return fs.statSync(fp).size; } catch (_) { return null; } };
+    const dbSize = sizeOf(path.join(proj.cwd, '.gm', 'gm.db'));
+    const legacyDbSize = sizeOf(path.join(proj.cwd, '.gm', 'rs-learn.db'));
+    const outDir = outDirPressure(proj.cwd);
+    const totalSize = memoriesSize + (dbSize || 0) + (legacyDbSize || 0);
+    if (memoriesCount || dbSize !== null || legacyDbSize !== null || outDir.files) {
+      out.push({
+        cwd: proj.cwd, name: path.basename(proj.cwd),
+        memoriesCount, memoriesSize,
+        dbSize, dbPath: '.gm/gm.db',
+        rs_learn_db_size: legacyDbSize, // legacy fossil, present only where it was never cleaned up
+        out_dir: outDir,
+        totalSize,
+      });
     }
   }
   out.sort((a, b) => b.totalSize - a.totalSize);
   return { projects: out, schemaVersion: EVENT_SCHEMA_VERSION };
 }
 
+// Spool out/ backlog: the sweeper only removes entries older than an hour, so a busy project
+// accumulates thousands of response files. Reported per-project so the pressure is visible.
+function outDirPressure(cwd) {
+  const dir = path.join(cwd, '.gm', 'exec-spool', 'out');
+  let files = 0, bytes = 0, oldest = null, newest = null;
+  try {
+    for (const f of fs.readdirSync(dir)) {
+      try {
+        const s = fs.statSync(path.join(dir, f));
+        if (!s.isFile()) continue;
+        files++; bytes += s.size;
+        if (oldest === null || s.mtimeMs < oldest) oldest = s.mtimeMs;
+        if (newest === null || s.mtimeMs > newest) newest = s.mtimeMs;
+      } catch (_) {}
+    }
+  } catch (_) { return { files: 0, bytes: 0, oldest_ms: null, newest_ms: null, oldest_age_ms: null }; }
+  return {
+    files, bytes,
+    oldest_ms: oldest === null ? null : Math.round(oldest),
+    newest_ms: newest === null ? null : Math.round(newest),
+    oldest_age_ms: oldest === null ? null : Math.round(Date.now() - oldest),
+  };
+}
+
 // -- CodeInsight age (formal spec Module 8, item 4) --
 // Reads .codeinsight mtime for each discovered project, returning staleness (seconds since
 // last update) and a ranked list. A stale codeinsight means the index is out of date.
 function codeInsightAge(store) {
-  const projects = discoverProjects(store.events);
+  const projects = discoverProjectsCached(store.events);
   const now = Date.now();
   const out = [];
   for (const proj of projects) {
@@ -1178,8 +1982,9 @@ function codeInsightAge(store) {
       const parsed = parseCodeInsight(text);
       if (parsed.accepted) summary = parsed.value.summary;
     } catch (_) {}
-    if (mtimeMs !== null) {
-      out.push({ cwd: proj.cwd, name: path.basename(proj.cwd), mtimeMs, ageSeconds, summary });
+    const digest = readCodeInsightDigest(proj.cwd);
+    if (mtimeMs !== null || digest) {
+      out.push({ cwd: proj.cwd, name: path.basename(proj.cwd), mtimeMs, ageSeconds, summary, digest });
     }
   }
   out.sort((a, b) => b.ageSeconds - a.ageSeconds);
@@ -1225,8 +2030,14 @@ const API_ROUTES = [
   { path: '/api/codesearch', method: 'POST', params: ['body: {cwd, query}'], response: '{ok, cwd, query, hits, raw} | 504 on dispatch timeout' },
   { path: '/api/browser-sessions', method: 'GET', params: ['cwd'], response: '{cwd, sessions, ports, sessionsFileFound, portsFileFound}' },
   { path: '/api/lifecycle/response', method: 'GET', params: ['cwd', 'verb', 'file'], response: '{ok, cwd, verb, file, response} | 404 if not yet written' },
-  { path: '/api/stream', method: 'GET', params: [], response: 'text/event-stream SSE: event/data frames of kind "event"|"error"|"hello"|"project.added"|"project.removed"|"project.phase-changed"' },
-  { path: '/api/projects/live-state', method: 'GET', params: [], response: '{projects: [{cwd, alive, phase, skill, instruction_key, instruction_heading, instruction_excerpt, instruction_tier, instruction_source_file, instruction_auto_provisioned, updated_ts, stale, recent_sess, recent_events}]}. instruction_tier is one of "vendored" (a real per-project override -- content diverges from what ensureInstructionsBundle last auto-provisioned, or the file is fsm-vendor-sourced with no auto-sync ambiguity at all), "source-synced", or "default". instruction_auto_provisioned is true only when tier="default" but a file is nonetheless present on disk, byte-identical to gm-plugkit\'s own last-known-shipped hash for it (materialized by the bootstrap sync, not baked into the wasm guest, and NOT a real customization -- distinguish this from a genuine "no file at all" default when displaying).' },
+  { path: '/api/stream', method: 'GET', params: ['Last-Event-ID header (or ?last_event_id=)'], response: 'text/event-stream. EVERY frame carries "id: <n>" (monotonic) so a reconnect resumes exactly where it left off. Frame kinds: "hello" {server_seq, heartbeat_ms, ring_size, replayed, gap, resumed_from, source} sent first on every connection (gap:true means the requested Last-Event-ID fell out of the ring and the client MUST refetch /api/projects/live-state); "event" (raw normalized event); "agent.output" {cwd, run, nodes[], since_ts, until_ts} — INCREMENTAL per-agent output the client APPENDS instead of refetching, node shape identical to live-state recent_events; "project.added"; "project.removed"; "project.phase-changed"; "error". Heartbeat is an SSE comment line ": hb <ms> seq=<n>" every GM_SSE_HEARTBEAT_MS (default 15000), ignored by EventSource message dispatch.' },
+  { path: '/api/projects/instruction', method: 'GET', params: ['cwd'], response: '{cwd, present, phase, skill, instruction_key, instruction_heading, instruction_excerpt (FULL body), instruction_hash, instruction_tier, instruction_source_file, instruction_source_repo, instruction_auto_provisioned, updated_ts, stale, unparseable, last_prompt}. The drilldown source — live-state list mode deliberately omits the multi-KB body.' },
+  { path: '/api/source', method: 'GET', params: [], response: '{selected, archive_used, explicit_log_dir, log_dir, window_ms, window_start, total_in_window, sources, warnings, population, project_count, event_count, newest_event_ts, newest_age_ms, stale, warning, daemon}. Provenance + window bound for every aggregate number.' },
+  { path: '/api/daemon', method: 'GET', params: [], response: '{present, pid, pid_alive, ts, active_projects, age_ms, stale, stale_threshold_ms, alert}. Machine-global shared-daemon heartbeat (~/.gm-tools/daemon-status.json); its ts is observed days stale while dispatches fire, hence the explicit alert.' },
+  { path: '/api/gates', method: 'GET', params: ['cwd?'], response: 'with cwd: {cwd, gates: [{gate, state: "pass"|"fail"|"unknown", detail, ts}], blockers, phase, fsm_graph, outgoing_edges: [{from, to, gates, blocked, blockers}], blocked, open_edges, blocked_edges, last_gate_fired: {key, ts, age_ms, is_current_block:false}, gate_deviation_repeats, gate_deviation_repeat_count}. Without cwd: {projects: [...]}. All 8 FSM gates; "unknown" is an honest verdict, never collapsed into "fail". last_gate_fired is the last-EVER firing, not a current block — always carries age_ms.' },
+  { path: '/api/embed-health', method: 'GET', params: ['cwd?'], response: '{cwd, degraded, severity: "ok"|"partial"|"silent-degradation", byEvent, query_failures, vector_failures, last_failure_ts, recent, explanation}. Catches the returns-success-while-broken case where embed_query_failed cascades into rssearch_vector_hits_failed and codesearch silently answers from bm25 only.' },
+  { path: '/api/fsm-graph', method: 'GET', params: ['cwd'], response: '{cwd, present, source, phases, states, edges: [{from, to, gates}], gatesByEdge}. The project\'s own .gm/instructions/fsm/graph.json where one exists (real override live on this machine); present:false means the default six-phase walk applies.' },
+  { path: '/api/projects/live-state', method: 'GET', params: ['full=1 (opt into full instruction bodies)', 'limit (recent_events cap)'], response: '{projects: [...], mode: "list"|"full", instruction_body_count, instruction_bodies (full mode only: {hash: body} deduped), recent_limit, correlation, source, daemon}. Per project: {cwd, alive, activity: "dispatching"|"idle"|"abandoned"|"unknown", liveness, is_live_agent, phase, phase_authoritative (turn-state.json, AUTHORITATIVE), phase_served (next-step.md), phase_divergence, skill, in_phase_ms, last_event_ms, instruction_served_ms, instruction_key, instruction_heading, instruction_preview, instruction_truncated, instruction_length, instruction_hash, instruction_excerpt (FULL MODE ONLY), instruction_tier, instruction_source_file, instruction_source_repo, instruction_auto_provisioned, updated_ts, stale, present, unparseable, turn_state, turn_summary, last_prompt, last_dispatch_ts, last_instruction_ts, served_version, codeinsight_digest, gates, prd_pending, prd_total, mut_unknown, mut_total, recent_sess, recent_correlation_kind, recent_run, recent_events, recent_total, recent_limit, recent_truncated, recent_more_above}. DEFAULT IS THE LIGHT LIST PAYLOAD -- the full form is measured at 1.4MB/174 projects, so the multi-KB instruction body is served only via ?full=1 or /api/projects/instruction. `alive`/`activity` are PER-PROJECT (watcher.log mtime / turn-summary / turn-state / last-dispatch age), never the machine-wide shared daemon pid. recent_events node kinds: instruction {phase, prd_pending_count, mutables_pending_count} | transition {phase, from, replan} | dispatch {verb, ms} | prd-add {id, rescoped} | prd-resolve {id} | mutable-add {id} | mutable-resolve {id} | memorize {key} | deviation {deviation, detail, source, sub}; every node also carries {ts, cwd, run}. instruction_tier is one of "vendored" (a real per-project override -- content diverges from what ensureInstructionsBundle last auto-provisioned, or the file is fsm-vendor-sourced with no auto-sync ambiguity at all), "source-synced", or "default". instruction_auto_provisioned is true only when tier="default" but a file is nonetheless present on disk, byte-identical to gm-plugkit\'s own last-known-shipped hash for it (materialized by the bootstrap sync, not baked into the wasm guest, and NOT a real customization -- distinguish this from a genuine "no file at all" default when displaying).' },
   { path: '/api/spool-queue', method: 'GET', params: [], response: '{queues: [{cwd, name, totalPending, byVerb}], schemaVersion}' },
   { path: '/api/watcher-versions', method: 'GET', params: [], response: '{projects: [{cwd, name, alive, pid, runtime, shared, version}], schemaVersion}' },
   { path: '/api/instruction-tiers', method: 'GET', params: [], response: '{byTier: {vendored, source-synced, default, auto_provisioned}, details: [{cwd, name, tier, source_file, source_repo, auto_provisioned?}], schemaVersion}. auto_provisioned is a sub-count of default (real defaults materialized to disk by the bootstrap sync, not a fourth tier) -- byTier.default already includes every auto-provisioned project.' },
@@ -1239,8 +2050,12 @@ const API_ROUTES = [
 
 export { parseCodeInsight };
 
-export function createServer({ logDir = DEFAULT_LOG_DIR, port = 0, host = '127.0.0.1' } = {}) {
-  const store = new Store(logDir);
+export function createServer({ logDir, port = 0, host = '127.0.0.1' } = {}) {
+  // A caller-supplied logDir is an explicit source request and is honored end-to-end: the store
+  // loads from it and the live watcher tails it, instead of being overridden by fleet-wide
+  // spool discovery.
+  const explicitLogDir = logDir !== undefined || !!process.env.GM_LOG_DIR;
+  const store = new Store(logDir || DEFAULT_LOG_DIR, { explicitLogDir });
   store.load();
   store.startLive();
 
@@ -1291,32 +2106,152 @@ export function createServer({ logDir = DEFAULT_LOG_DIR, port = 0, host = '127.0
       }
       if (p === '/api/projects') {
         const watchedKeys = new Set((store.watchedProjects || []).map(w => path.resolve(w.cwd).replace(/\\/g, '/').toLowerCase()));
-        const projects = discoverProjects(store.events).map(proj => ({
-          ...proj,
-          watching: watchedKeys.has(path.resolve(proj.cwd).replace(/\\/g, '/').toLowerCase()),
-        }));
-        return send(res, 200, { projects });
+        const projects = discoverProjectsCached(store.events).map(proj => {
+          const liveness = readProjectLiveness(proj.cwd);
+          return {
+            ...proj,
+            // Overrides discoverProjects' shared-daemon-pid boolean, which reported every
+            // project on the machine alive/dead together.
+            alive: liveness.alive,
+            activity: liveness.activity,
+            liveness,
+            version: readServedVersion(proj.cwd).version,
+            watching: watchedKeys.has(path.resolve(proj.cwd).replace(/\\/g, '/').toLowerCase()),
+          };
+        });
+        return send(res, 200, { projects, source: store.sourceHealth() });
+      }
+      // Full instruction body for ONE project -- the drilldown's source. Split out of
+      // live-state so the list view never pays for 63 multi-KB instruction bodies.
+      if (p === '/api/projects/instruction') {
+        const scope = resolveScopedCwd(store, q.cwd);
+        if (!scope.ok) return send(res, 403, { error: scope.error });
+        const ps = readLivePhaseState(scope.cwd);
+        const key = ps.instruction_heading ? ps.instruction_heading.toLowerCase().replace('update-docs', 'update_docs') : null;
+        const tier = ps.present ? resolveInstructionTier(scope.cwd, key) : { tier: 'default', file_path: null, source_repo: null };
+        return send(res, 200, {
+          cwd: scope.cwd, present: ps.present, phase: ps.phase, skill: ps.skill,
+          instruction_key: key, instruction_heading: ps.instruction_heading,
+          instruction_excerpt: ps.instruction_excerpt,
+          instruction_hash: hashText(ps.instruction_excerpt),
+          instruction_tier: tier.tier, instruction_source_file: tier.file_path, instruction_source_repo: tier.source_repo,
+          instruction_auto_provisioned: !!tier.auto_provisioned,
+          updated_ts: ps.updated_ts, stale: ps.stale, unparseable: !!ps.unparseable,
+          last_prompt: readTextFile(path.join(scope.cwd, '.gm', 'last-prompt.txt'), 8192),
+        }, 'application/json', p);
       }
       if (p === '/api/projects/live-state') {
-        const base = discoverProjects(store.events);
+        // Default is the LIGHT list payload: no full instruction bodies. Measured at real scale
+        // (174 discovered projects) the full form is 1.4MB/4.1s per request, and the client
+        // refetched it on every SSE frame. ?full=1 keeps the old shape for callers that
+        // genuinely want everything; the drilldown uses /api/projects/instruction instead.
+        const full = q.full === '1' || q.full === 'true';
+        const base = discoverProjectsCached(store.events);
         const activityIndex = store._buildCwdActivityIndex();
+        const limit = Number.isFinite(q.limit) ? q.limit : (full ? RECENT_EVENTS_LIMIT : LIST_EVENTS_LIMIT);
+        // Identical instruction bodies are common (every COMPLETE project serves byte-identical
+        // UPDATE-DOCS prose). Send each distinct body once, keyed by hash, and reference it.
+        const bodies = {};
         const projects = base.map(proj => {
-          const phaseState = readLivePhaseState(proj.cwd);
+          const phaseState = phaseStateOf(proj.cwd);
           const key = phaseState.instruction_heading ? phaseState.instruction_heading.toLowerCase().replace('update-docs', 'update_docs') : null;
-          const tier = phaseState.present ? resolveInstructionTier(proj.cwd, key) : { tier: 'default', file_path: null, source_repo: null };
-          const recent = store.recentEventsForCwd(proj.cwd, activityIndex, 20);
+          const tier = phaseState.present ? tierOf(proj.cwd, key) : { tier: 'default', file_path: null, source_repo: null };
+          const recent = store.recentEventsForCwd(proj.cwd, activityIndex, limit);
+          const turnState = turnStateOf(proj.cwd);
+          const turnSummary = turnSummaryOf(proj.cwd);
+          const liveness = readProjectLiveness(proj.cwd);
+          const markers = markersOf(proj.cwd);
+          const phase = phaseState.phase || (turnState && turnState.phase) || null;
+          const gates = gatesOf(proj.cwd, { prd_pending: proj.prd_pending ?? null, mut_unknown: proj.mut_unknown ?? null, phase });
+          const body = phaseState.instruction_excerpt || null;
+          const bodyHash = hashText(body);
+          if (bodyHash && !(bodyHash in bodies)) bodies[bodyHash] = body;
           return {
-            cwd: proj.cwd, alive: proj.alive,
-            phase: phaseState.phase, skill: phaseState.skill,
+            cwd: proj.cwd,
+            // A discovered directory with no readable gm state is NOT a live agent. Labelled
+            // explicitly rather than surfaced as an unknown phase, so discovery breadth does not
+            // become noise in the list.
+            is_live_agent: !!phaseState.present && phase !== null && phase !== '?',
+            instruction_hash: bodyHash,
+            // Two genuinely different ages an observer needs side by side: how long this agent
+            // has sat in its current phase, vs how long since it emitted ANY event. A long
+            // in-phase age with a fresh last-event age is a working agent; both long is stuck.
+            in_phase_ms: turnState && turnState.updated_at_ms ? Date.now() - turnState.updated_at_ms : null,
+            last_event_ms: liveness.last_activity_age_ms,
+            instruction_served_ms: phaseState.updated_ts ? Date.now() - phaseState.updated_ts : null,
+            // next-step.md (the served prose) can genuinely lag turn-state.json (the authoritative
+            // FSM state) -- observed live on C:/dev/spoint with next-step on PLAN while turn-state
+            // had moved to EXECUTE. Neither source is silently preferred: turn-state is reported
+            // as authoritative, next-step as instruction provenance, and the divergence is flagged.
+            phase_authoritative: turnState ? turnState.phase : null,
+            phase_served: phaseState.phase,
+            phase_divergence: !!(turnState && turnState.phase && phaseState.phase && turnState.phase !== phaseState.phase),
+            // Per-project liveness from this project's OWN signals; the shared-daemon pid is
+            // reported separately and never conflated with it.
+            alive: liveness.alive, activity: liveness.activity,
+            phase, skill: phaseState.skill,
             instruction_key: key, instruction_heading: phaseState.instruction_heading,
-            instruction_excerpt: phaseState.instruction_excerpt,
+            // Light mode carries a bounded preview plus the hash; the full body is in `bodies`
+            // (deduped) and via /api/projects/instruction.
+            instruction_preview: body ? body.slice(0, INSTRUCTION_PREVIEW_CHARS) : null,
+            instruction_truncated: !!body && body.length > INSTRUCTION_PREVIEW_CHARS,
+            instruction_length: body ? body.length : 0,
+            ...(full ? { instruction_excerpt: body } : {}),
             instruction_tier: tier.tier, instruction_source_file: tier.file_path, instruction_source_repo: tier.source_repo,
             instruction_auto_provisioned: !!tier.auto_provisioned,
             updated_ts: phaseState.updated_ts, stale: phaseState.stale, present: phaseState.present, unparseable: !!phaseState.unparseable,
-            recent_sess: recent.sess, recent_events: recent.nodes,
+            ...(full ? { turn_state: turnState, turn_summary: turnSummary, liveness } : {}),
+            // The raw user prompt driving this agent -- the single most useful missing context
+            // for an observer, and previously unread.
+            last_prompt: markers && markers.last_prompt ? markers.last_prompt.slice(0, full ? 4096 : 400) : null,
+            last_dispatch_ts: markers ? markers.last_dispatch_ts : null,
+            last_instruction_ts: markers ? markers.last_instruction_ts : null,
+            served_version: readServedVersion(proj.cwd).version,
+            codeinsight_digest: markers ? markers.codeinsight_digest : null,
+            // List mode carries only the verdict an observer scans for; the full per-gate
+            // evidence is a drilldown concern (/api/gates?cwd=).
+            ...(full ? { gates } : {
+              gates_blocked: gates.blocked,
+              gates_blocked_edges: gates.blocked_edges,
+              gates_failing: gates.blockers.map(g => g.gate),
+            }),
+            prd_pending: proj.prd_pending ?? null, prd_total: proj.prd_total ?? null,
+            mut_unknown: proj.mut_unknown ?? null, mut_total: proj.mut_total ?? null,
+            recent_sess: recent.sess,
+            recent_correlation_kind: recent.correlation_kind,
+            recent_run: recent.run,
+            recent_events: recent.nodes,
+            recent_total: recent.total, recent_limit: recent.limit,
+            recent_truncated: recent.truncated, recent_more_above: recent.more_above,
           };
         });
-        return send(res, 200, { projects });
+        // Idle-hiding is the correct default at this scale: 678 discovered projects, a handful
+        // working. ?activity=dispatching,idle (or ?all=1) selects the population explicitly, and
+        // the hidden count is always reported so nothing disappears silently.
+        const all = q.all === '1' || q.all === 'true';
+        const wanted = typeof q.activity === 'string' && q.activity
+          ? new Set(q.activity.split(',').map(s => s.trim()).filter(Boolean))
+          : (all ? null : new Set(['dispatching', 'idle']));
+        const shown = wanted ? projects.filter(x => wanted.has(x.activity)) : projects;
+        return send(res, 200, {
+          projects: shown,
+          discovered: projects.length,
+          shown: shown.length,
+          hidden: projects.length - shown.length,
+          filter: wanted ? [...wanted] : 'all',
+          byActivity: projects.reduce((m, x) => { m[x.activity] = (m[x.activity] || 0) + 1; return m; }, {}),
+          // hash -> distinct instruction body, sent once each. In light mode this is omitted
+          // entirely; the client resolves a hash via /api/projects/instruction on drilldown.
+          ...(full ? { instruction_bodies: bodies } : {}),
+          instruction_body_count: Object.keys(bodies).length,
+          mode: full ? 'full' : 'list',
+          recent_limit: limit,
+          // Lets the client label the grouping honestly ("grouped by daemon run, not agent
+          // session") instead of implying a session fidelity the data does not have.
+          correlation: correlationCoverage(store.events),
+          source: store.sourceHealth(),
+          daemon: readDaemonStatusGlobal(),
+        });
       }
       if (p === '/api/health-summary') {
         return send(res, 200, healthSummary(store));
@@ -1550,8 +2485,32 @@ export function createServer({ logDir = DEFAULT_LOG_DIR, port = 0, host = '127.0
         if (store.sseClients.size >= MAX_SSE_CLIENTS) {
           return send(res, 503, { error: 'too many SSE clients', max: MAX_SSE_CLIENTS }, 'application/json', p);
         }
-        res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive', 'Access-Control-Allow-Origin': '*' });
-        res.write('event: hello\ndata: {}\n\n');
+        res.writeHead(200, {
+          'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive', 'Access-Control-Allow-Origin': '*',
+          'X-Accel-Buffering': 'no',
+        });
+        // Last-Event-ID (browser EventSource sets it automatically; ?last_event_id= for manual
+        // clients) drives a bounded replay of exactly the frames missed while disconnected.
+        const rawLast = req.headers['last-event-id'] ?? q.last_event_id;
+        const lastId = rawLast === undefined ? NaN : parseInt(rawLast, 10);
+        const replay = store.replaySince(lastId);
+        res.write(sseFrame({
+          id: store._sseSeq,
+          kind: 'hello',
+          data: {
+            server_seq: store._sseSeq,
+            heartbeat_ms: SSE_HEARTBEAT_MS,
+            ring_size: SSE_RING_SIZE,
+            replayed: replay.frames.length,
+            // gap:true means the requested id fell out of the ring -- the client MUST refetch
+            // /api/projects/live-state rather than assume its feed is continuous.
+            gap: replay.gap,
+            resumed_from: Number.isFinite(lastId) ? lastId : null,
+            source: store.sourceHealth(),
+          },
+        }));
+        for (const f of replay.frames) { try { res.write(sseFrame(f)); } catch {} }
         store.sseClients.add(res);
         req.on('close', () => store.sseClients.delete(res));
         return;
@@ -1559,7 +2518,7 @@ export function createServer({ logDir = DEFAULT_LOG_DIR, port = 0, host = '127.0
       // -- Missing monitoring surface (formal spec Module 8) --
       // Spool queue depth: count of pending dispatch files per verb across all projects.
       if (p === '/api/spool-queue') {
-        const projects = discoverProjects(store.events);
+        const projects = discoverProjectsCached(store.events);
         const queues = [];
         for (const proj of projects) {
           const inDir = path.join(proj.cwd, '.gm', 'exec-spool', 'in');
@@ -1584,7 +2543,7 @@ export function createServer({ logDir = DEFAULT_LOG_DIR, port = 0, host = '127.0
       // that carries an update_available field, or the server's own knowledge from the most
       // recent instruction response).
       if (p === '/api/watcher-versions') {
-        const projects = discoverProjects(store.events);
+        const projects = discoverProjectsCached(store.events);
         const rows = [];
         for (const proj of projects) {
           const status = readWatcherStatus(proj.cwd);
@@ -1602,7 +2561,7 @@ export function createServer({ logDir = DEFAULT_LOG_DIR, port = 0, host = '127.0
       // Instruction tier distribution: across all discovered projects, count how many are
       // served by vendored overrides, source-synced cache, or compiled defaults.
       if (p === '/api/instruction-tiers') {
-        const projects = discoverProjects(store.events);
+        const projects = discoverProjectsCached(store.events);
         // auto_provisioned is a sub-count of `default` (a real default, just materialized to disk
         // by ensureInstructionsBundle rather than compiled into the wasm guest), not a fourth tier
         // -- byTier.default already includes every auto-provisioned project, so a consumer summing
@@ -1639,7 +2598,7 @@ export function createServer({ logDir = DEFAULT_LOG_DIR, port = 0, host = '127.0
           if (!scoped.ok) return send(res, 400, { error: scoped.error });
           return send(res, 200, { cwd: scoped.cwd, ...discoverVendoredSettings(scoped.cwd), schemaVersion: EVENT_SCHEMA_VERSION }, 'application/json', p);
         }
-        const projects = discoverProjects(store.events);
+        const projects = discoverProjectsCached(store.events);
         const rows = projects
           .map((proj) => ({ cwd: proj.cwd, name: path.basename(proj.cwd), ...discoverVendoredSettings(proj.cwd) }))
           .filter((r) => r.vendored);
@@ -1664,6 +2623,60 @@ export function createServer({ logDir = DEFAULT_LOG_DIR, port = 0, host = '127.0
       // -- CodeInsight age: staleness of .codeinsight across projects --
       if (p === '/api/codeinsight-age') {
         return send(res, 200, codeInsightAge(store), 'application/json', p);
+      }
+
+      // -- Replay-source provenance + staleness warning --
+      // Every aggregate route's numbers are only meaningful alongside which source produced them
+      // and how far back it reaches. Exposed as its own route so a client can render
+      // "live spool, 26,866 events, 7d window" instead of an unlabelled total.
+      if (p === '/api/source') {
+        return send(res, 200, { ...store.sourceHealth(), daemon: readDaemonStatusGlobal() }, 'application/json', p);
+      }
+
+      // -- Machine-global shared daemon heartbeat --
+      if (p === '/api/daemon') {
+        return send(res, 200, readDaemonStatusGlobal(), 'application/json', p);
+      }
+
+      // -- Per-project FSM gate pass/fail: WHY is a transition blocked? --
+      if (p === '/api/gates') {
+        if (q.cwd) {
+          const scope = resolveScopedCwd(store, q.cwd);
+          if (!scope.ok) return send(res, 403, { error: scope.error });
+          const ps = readLivePhaseState(scope.cwd);
+          const ts = readTurnState(scope.cwd);
+          const pm = discoverProjectsCached(store.events).find(x => x.cwd === scope.cwd) || {};
+          return send(res, 200, {
+            cwd: scope.cwd,
+            ...readFsmGates(scope.cwd, { prd_pending: pm.prd_pending ?? null, mut_unknown: pm.mut_unknown ?? null, phase: ps.phase || (ts && ts.phase) || null }),
+            schemaVersion: EVENT_SCHEMA_VERSION,
+          }, 'application/json', p);
+        }
+        const rows = discoverProjectsCached(store.events).map(proj => {
+          const ps = readLivePhaseState(proj.cwd);
+          const ts = readTurnState(proj.cwd);
+          const g = readFsmGates(proj.cwd, { prd_pending: proj.prd_pending ?? null, mut_unknown: proj.mut_unknown ?? null, phase: ps.phase || (ts && ts.phase) || null });
+          return { cwd: proj.cwd, name: path.basename(proj.cwd), phase: g.phase, blocked: g.blocked, blocked_edges: g.blocked_edges, open_edges: g.open_edges, gates: g.gates, last_gate_fired: g.last_gate_fired, fsm_graph: g.fsm_graph };
+        });
+        return send(res, 200, { projects: rows, schemaVersion: EVENT_SCHEMA_VERSION }, 'application/json', p);
+      }
+
+      // -- Silent semantic-search degradation (returns-success-while-broken) --
+      if (p === '/api/embed-health') {
+        let cwd = null;
+        if (q.cwd) {
+          const scope = resolveScopedCwd(store, q.cwd);
+          if (!scope.ok) return send(res, 403, { error: scope.error });
+          cwd = scope.cwd;
+        }
+        return send(res, 200, { cwd, ...embedDegradation(store.events, cwd), schemaVersion: EVENT_SCHEMA_VERSION }, 'application/json', p);
+      }
+
+      // -- Per-project FSM phase graph (the real override where one exists) --
+      if (p === '/api/fsm-graph') {
+        const scope = resolveScopedCwd(store, q.cwd);
+        if (!scope.ok) return send(res, 403, { error: scope.error });
+        return send(res, 200, { cwd: scope.cwd, ...readFsmGraph(scope.cwd), schemaVersion: EVENT_SCHEMA_VERSION }, 'application/json', p);
       }
 
       send(res, 404, { error: 'not found' });

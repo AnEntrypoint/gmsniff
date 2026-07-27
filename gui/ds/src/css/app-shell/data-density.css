@@ -1,0 +1,158 @@
+/* ============================================================
+   Data density — dense observability/dashboard primitives (ported from the
+   gmsniff GUI). Components: PhaseWalk, TreeNode, BarRow, StatTile/StatsGrid,
+   SubGrid, SessionRow, DevRow, LiveLog/LiveLogEntry. src/components/data-density.js.
+   All colors derive from colors_and_type.css tokens — see lint-tokens.mjs.
+   ============================================================ */
+
+/* --danger-surface: semantic surface for a deviation/error callout background
+   (gmsniff's #3a1a1a dark-red-tinted panel). Derived from --warn so it always
+   reads as "danger" against the active theme instead of a baked literal. */
+:root {
+  --danger-surface: color-mix(in oklab, var(--warn) 14%, var(--bg));
+}
+
+/* PhaseWalk */
+.ds-phasewalk { display: inline-flex; gap: 2px; vertical-align: middle; }
+.ds-phasewalk-seg {
+  width: 18px; height: 10px; border-radius: var(--r-hair);
+  background: var(--bg-3); position: relative;
+}
+.ds-phasewalk-seg.is-reached { background: var(--success); }
+.ds-phasewalk-seg.is-gap { background: var(--warn); }
+/* Standalone PhaseWalk reserves headroom for the labels instead of letting
+   them escape upward and overlap the element above. */
+.ds-phasewalk { padding-top: 15px; }
+.ds-phasewalk-lbl {
+  position: absolute; top: -15px; left: 0;
+  font-size: var(--fs-micro); color: var(--fg-3); white-space: nowrap;
+}
+/* Inline in a single-line SessionRow the labels would overlap the row above —
+   segments already carry title tooltips. */
+.ds-session-row .ds-phasewalk { padding-top: 0; }
+.ds-session-row .ds-phasewalk-lbl { display: none; }
+
+/* SessionCard's optional lifecycle strip: the card's meta column is already
+   tight, so the per-segment labels are suppressed exactly as in SessionRow and
+   the reached phase is spelled out once, in words, beside the strip. */
+.ds-dash-phase { display: inline-flex; align-items: center; gap: var(--space-2); min-width: 0; }
+.ds-dash-phase .ds-phasewalk { padding-top: 0; }
+.ds-dash-phase .ds-phasewalk-lbl { display: none; }
+.ds-dash-phase-name {
+  font-size: var(--fs-micro); color: var(--fg-3);
+  letter-spacing: 0.04em; white-space: nowrap;
+}
+
+/* TreeNode */
+.ds-tree-node {
+  padding: 5px 10px; border-left: var(--bw-rule) solid var(--bg-3);
+  margin: 2px 0 2px 16px; font-size: var(--fs-tiny);
+  min-width: 0; overflow-wrap: anywhere;
+}
+@media (max-width: 400px) {
+  .ds-tree-node { margin-left: 8px; padding-left: 8px; }
+}
+.ds-tree-node.is-phase { border-color: var(--accent); background: var(--bg-3); font-weight: 600; }
+.ds-tree-node.is-deviation { border-color: var(--warn); background: var(--danger-surface); color: var(--warn); }
+.ds-tree-node.is-mutable-resolve { border-color: var(--success); }
+.ds-tree-node.is-prd-add { border-color: var(--amber); }
+.ds-tree-node-ts { margin-right: 8px; color: var(--fg-3); }
+.ds-tree-node-pills { margin-left: 6px; }
+.ds-tree-node-reason { margin-top: 2px; color: var(--fg-2); }
+.ds-tree-node-deviation { margin-top: 2px; }
+.ds-tree-node-residuals { margin-top: 2px; color: var(--fg-3); }
+
+/* BarRow */
+.ds-bar-row { display: flex; align-items: center; gap: 8px; margin: 3px 0; font-size: var(--fs-tiny); }
+.ds-bar-row-label { width: 100px; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ds-bar-bg { flex: 1; min-width: 60px; background: var(--bg-3); border-radius: var(--r-hair); height: 6px; overflow: hidden; }
+.ds-bar-fill { background: var(--fg-3); height: 100%; border-radius: var(--r-hair); }
+.ds-bar-fill.is-active { background: var(--accent); }
+.ds-bar-row-value { flex-shrink: 0; color: var(--fg-2); max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 400px) {
+  .ds-bar-row-label { width: 72px; }
+}
+
+/* StatTile / StatsGrid */
+/* min(140px, 100%) keeps the grid from collapsing to 1 column early inside
+   padded panels; the wrapper div stretches its tile to equal row height. */
+.ds-stats-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(140px, 100%), 1fr)); gap: var(--space-2); }
+.ds-stats-grid > div { display: grid; }
+@media (max-width: 360px) {
+  .ds-stats-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-1); }
+}
+.ds-stats-grid-empty { padding: var(--space-3); color: var(--fg-3); font-size: var(--fs-tiny); }
+.ds-stat { min-width: 0; background: var(--bg-3); border-radius: var(--r-0); padding: 10px 12px; }
+.ds-stat-val { font-size: clamp(18px, 5cqi, 22px); font-weight: 700; color: var(--accent-ink); overflow-wrap: anywhere; }
+.ds-stat-val.rate-big { font-size: clamp(24px, 7cqi, 32px); color: var(--success); }
+.ds-stat-val.err-rate { font-size: clamp(24px, 7cqi, 32px); color: var(--warn); }
+.ds-stat-lbl { font-size: var(--fs-micro); color: var(--fg-3); margin-top: 2px; }
+
+/* Inline row — flex row with centered items and a small gap, for demo/kit
+   markup that needs to lay siblings out horizontally without an inline style. */
+.ds-inline-row { display: flex; align-items: center; gap: var(--space-2, 8px); }
+
+/* SubGrid */
+.ds-sub-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 6px; margin-top: 8px; }
+.ds-sub-grid-empty { padding: var(--space-3); color: var(--fg-3); font-size: var(--fs-tiny); }
+.ds-sub-btn {
+  padding: 6px 10px; background: var(--bg-3); border: var(--bw-hair) solid var(--bg-3);
+  border-radius: var(--r-0); font-size: var(--fs-tiny); cursor: pointer; color: var(--fg);
+  text-align: left; font-family: var(--ff-body);
+}
+.ds-sub-btn:hover { border-color: var(--accent); color: var(--accent-ink); }
+.ds-sub-btn span { display: block; font-size: 18px; font-weight: 700; color: var(--accent-ink); }
+
+/* SessionRow — base .ds-session-row (layout, hover/focus/active states,
+   rail-tone indicators) is canonically defined in chat.css alongside the
+   rest of the chat session-list component; this file only carries the
+   dev/admin-row sub-parts (id/counts/devcnt/span) that decorate it. */
+.ds-session-row-id {
+  font-family: var(--ff-mono); font-size: var(--fs-micro); color: var(--accent-ink);
+  flex: 0 1 160px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ds-session-row-counts {
+  font-size: var(--fs-micro); color: var(--fg-3);
+  flex: 1 1 200px; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+@media (max-width: 640px) {
+  .ds-session-row-span { flex-basis: 100%; }
+}
+.ds-session-row-devcnt { color: var(--warn); font-weight: 600; }
+.ds-session-row-span { font-size: var(--fs-micro); color: var(--fg-3); }
+
+/* DevRow */
+.ds-dev-row {
+  background: var(--danger-surface); border-left: var(--bw-chunk) solid var(--warn);
+  padding: 8px 12px; margin: 4px 0; border-radius: var(--r-hair); font-size: var(--fs-tiny);
+}
+.ds-dev-row strong { color: var(--warn); }
+
+/* LiveLog — natural height with a viewport-tracking cap (dvh follows mobile
+   URL-bar chrome; min-height keeps short-landscape from going near-zero). */
+.ds-live-log {
+  height: auto;
+  max-height: calc(100vh - 200px);
+  max-height: calc(100dvh - 200px);
+  min-height: 160px;
+  overflow-y: auto; overflow-x: hidden;
+  font-family: var(--ff-mono); font-size: var(--fs-micro); line-height: 1.5;
+}
+/* Embedded in a WM window the viewport calc is meaningless — fill the container. */
+.fd-root .ds-live-log { height: 100%; max-height: none; min-height: 0; flex: 1 1 auto; }
+.ds-live-log-empty { height: auto; min-height: 0; padding: var(--space-3); color: var(--fg-3); }
+.ds-live-log-entry { padding: 2px 8px; border-bottom: var(--bw-hair) solid var(--bg-3); overflow-wrap: anywhere; }
+.ds-live-log-entry:hover { background: var(--bg-3); }
+.ds-live-log-ts { margin-right: 6px; color: var(--fg-3); }
+.ds-live-log-subtag { margin-right: 6px; padding: 0 5px; border-radius: var(--r-hair); font-size: var(--fs-micro); }
+.ds-live-log-preview { margin-left: 6px; color: var(--fg-3); word-break: break-word; }
+
+/* Touch floors for the dense controls (not covered by the mobile width blocks). */
+@media (pointer: coarse) {
+  .ds-sub-btn { min-height: 44px; }
+  .ds-session-row { min-height: 44px; }
+  .ds-live-log-entry { padding-block: 6px; }
+}
+
+

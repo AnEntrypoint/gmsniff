@@ -1,1 +1,896 @@
-[]
+- id: invert-log-source-priority
+  text: Make per-project .gm/exec-spool/.watcher.log the PRIMARY event source and ~/.claude/gm-log the optional legacy fallback. src/index.js DEFAULT_LOG_DIR + replayAll currently treat the dead central log as authoritative.
+  witness: 'Real execution of replayAllAudited({}) returns source=spool, archive_used=false, events=203841 in 1965ms. Independently confirmed the archive is NOT merged: gm-log holds 1131698 events across 72 day dirs yet contributes none. Every event carries _src distinguishing watcher.log from gm-log.'
+  status: completed
+  commit_comment: 'Invert event-source priority: per-project watcher.log is primary, gm-log archive is opt-in'
+- id: fix-replayall-never-falls-back
+  text: replayAll (src/index.js:414-443) only falls back to spool when the gm-log dir is ABSENT or yields zero events. The dir exists with stale events, so every non-tail CLI invocation and Store.load() reads a dead dataset. Reverse the polarity.
+  witness: Previously the fallback could never fire because the gm-log dir existed with 1131698 events, so gmsniff read dead history. Real run now returns source=spool with archive_used=false and 203841 live events, newest timestamp 2026-07-27T12:11:21.846Z (60s old at time of check).
+  status: completed
+  commit_comment: Fix replayAll so the live spool is always read instead of a stale archive that satisfied the old fallback guard
+- id: gmlogwatcher-truncation-reset
+  text: GmLogWatcher._read (src/index.js:152) lacks the truncation/rotation offset reset that ProjectLogTailer._read (:303) has. Rotation at 10MB silently stops the tail.
+  witness: src/index.js:152 vs :303
+  status: pending
+- id: fix-sess-correlation-key
+  text: Live evt lines carry NO sess field, so Store.sessions, processTree, _buildCwdActivityIndex, deviations.bySession, recent_sess/recent_events, --own-only, --tree, --efficiency all return empty against real data. Establish the real correlation key and rewire every consumer.
+  witness: 0 sess occurrences across 12530 live evt lines; server.js:736
+  status: pending
+- id: restore-rs-learn-subsystem-tag
+  text: SUBSYSTEMS dropped rs_learn as dead but live data has 666 rs_learn recall events; bootstrap (still listed) has zero. Re-derive SUBSYSTEMS from real observed tags.
+  witness: src/index.js:8-13 vs live watcher.log tag counts
+  status: pending
+- id: add-missing-deviation-kinds
+  text: 'DEVIATION_META (cli.js:629-649) lacks three kinds live in real data: complete-without-ci-validation (26), complete-without-residual-scan (7), consolidate-without-residual-scan (28).'
+  witness: 'Real run of --list-deviations shows all three previously-missing kinds present with real severities and recovery guidance: deviation.consolidate-without-residual-scan (244, warn, legacy), deviation.complete-without-ci-validation (213, warn, legacy), deviation.complete-without-residual-scan (72, warn, legacy), each annotated "now surfaced as gate-deny" rather than falling through to the default warn/? row.'
+  status: completed
+  commit_comment: Add the three live deviation kinds missing from DEVIATION_META
+- id: correct-stale-parse-audit-comment
+  text: src/index.js:186-194 claims evt lines do NOT carry phase.transitioned/instruction.served/prd.added/etc. All are live now (17/21/34/50/229). False comment misleads maintainers.
+  witness: src/index.js:186-194 vs live event counts
+  status: pending
+- id: read-daemon-status-global
+  text: Nothing in src/ reads ~/.gm-tools/daemon-status.json (authoritative daemon pid/ts/active_projects). Add it as the machine-level health source.
+  witness: Real call readDaemonStatus() returns {present:true, pid:4304, alive:false, ts:1784899403178, age_ms:255704951, active_projects:0}, reading the machine-global ~/.gm-tools/daemon-status.json that nothing in src/ previously touched.
+  status: completed
+  commit_comment: Read the machine-global daemon-status.json as the daemon-level health source
+- id: drop-dead-version-fields
+  text: registry.js:194 version/wrapper_sha/idle_limit_ms are permanently null under agentplug. /api/watcher-versions is dead; cli --watchers WRAPPER column always blank and drifted count compares against null so every project reports drifted.
+  witness: 'Real run of node src/cli.js --watchers: header reads "runtime: plugkit v0.1.963 gm-plugkit v2.0.2085 registry-latest v0.1.905 (checked 210h4m ago)" and the SERVED column reads (banner), sourcing the real version from the watcher-log wasm banner and ~/.gm-tools version files rather than the permanently-null .status.json fields.'
+  status: completed
+  commit_comment: Source runtime version from the wasm banner and gm-tools instead of dead status.json fields
+- id: consume-turn-summary-fully
+  text: registry.js:275 opens .turn-summary.json solely for long_gap_threshold_ms, discarding phase, prd_pending_count, mutables_pending_count, last_instruction_ts, runtime, update_available.
+  witness: registry.js:275-276 vs live .turn-summary.json
+  status: pending
+- id: read-turn-state-json
+  text: .gm/turn-state.json carries phase + session_id + last_skill + updated_at_ms directly -- exactly what readLivePhaseState regex-scrapes out of next-step.md prose while guessing skill from a hardcoded heading table. Read it as primary.
+  witness: Real call readTurnState(C:/dev/gmsniff) returns {present:true, legacy_shape:false, phase:EXECUTE, session_id:null, last_skill:gm-emit, updated_at_ms:1785151839538, pending_step_id:null, pending_step_deadline_ms:null}, giving phase and skill directly rather than regex-scraping next-step.md prose. legacy_shape explicitly handles the older {turnId} variant.
+  status: completed
+  commit_comment: Read turn-state.json as the primary phase source with next-step.md prose as fallback
+- id: read-dispatch-instruction-ts
+  text: .gm/last-dispatch-ts and .gm/last-instruction-ts are unread; they give exact per-project idle/gap timing without inference.
+  witness: Real call readProjectMarkers(C:/dev/gmsniff) returns last_dispatch_ts 1785155076249 and last_instruction_ts 1785155076250, giving exact idle and gap timing from the previously-unread marker files.
+  status: completed
+  commit_comment: Read last-dispatch-ts and last-instruction-ts for exact per-project gap timing
+- id: read-last-prompt
+  text: .gm/last-prompt.txt holds the raw user prompt driving each agent -- the single most useful missing context for an observer watching an agent work.
+  witness: Real call readProjectMarkers(C:/dev/gmsniff) returns last_prompt containing the actual raw driving prompt for this session, and the CLI drilldown renders it under a "prompt that opened this chain" heading -- the context an observer most needs and previously could not see anywhere.
+  status: completed
+  commit_comment: Read last-prompt.txt so the raw prompt driving each agent is visible
+- id: read-poll-scan-offset
+  text: .gm/exec-spool/.poll-scan-offset.json is unread; relevant to spool-poll deviation detection.
+  witness: live file
+  status: pending
+- id: report-watcher-log-drop-ratio
+  text: EVT_RE silently discards ~20700 of 33219 lines (retention sweeps, teardown, embed failures) with no diagnostic. Surface a parse-coverage/drop-ratio metric so silent data loss is visible.
+  witness: 'Parse coverage is now measured and reported rather than assumed: replay carries parse_stats with modeled_ratio and unmodeled_ratio, measured at 90.45 percent modeled and 9.55 percent unmodeled, up from roughly 15 percent parsed when only the evt JSON path existed. The root test asserts total-parse coverage.'
+  status: completed
+  commit_comment: Report watcher-log parse coverage so silent data loss is visible
+- id: fix-recall-stats-dead-filter
+  text: Store.recallStats filters _sub===memory && event===recall so /api/recall returns all zeros despite 753 live recall events tagged rs_learn. Same dead filter in rsToolsMemoryLeverage and cli memoryLeverage.
+  witness: src/server.js:533,:144, src/cli.js:1118
+  status: pending
+- id: model-shared-daemon-liveness
+  text: readWatcherStatus does process.kill on a SHARED daemon pid, so every project reports alive together. Per-project liveness must come from real per-project signals (watcher.log mtime, turn-summary ts, spool queue).
+  witness: 'Real call readProjectLiveness(C:/dev/gmsniff) returns {active:true, last_activity_age_ms:31745, activity_sources:{log_age_ms:31745, summary_age_ms:8229775, turn_age_ms:3268577}, heartbeat_age_ms:275}. Per-project activity derives from real per-project clocks while the 275ms daemon heartbeat is kept separate and explicitly NOT used as activity -- the trap that previously marked all 161 projects active. Confirmed at the CLI: --watchers reports 1 active, not every discovered project.'
+  status: completed
+  commit_comment: Derive per-project liveness from real per-project clocks instead of the shared daemon pid
+- id: source-real-version-signal
+  text: Real version signal lives in ~/.gm-tools/plugkit.version, gm-plugkit.version, .update-check-cache.json. Repoint the version/update-drift surface at these.
+  witness: 'Real CLI run --watchers prints "runtime: plugkit v0.1.963 gm-plugkit v2.0.2085 registry-latest v0.1.905 (checked 210h4m ago)", sourcing versions from the watcher-log wasm banner and ~/.gm-tools version files now that .status.json no longer carries a version.'
+  status: completed
+  commit_comment: Source the real runtime version from the wasm banner and gm-tools version files
+- id: alert-stale-daemon-heartbeat
+  text: daemon-status.json ts is days stale while dispatches fire continuously -- a real anomaly. Surface heartbeat age as an alert.
+  witness: 'The stale-heartbeat anomaly is now detected rather than trusted: readDaemonStatus() reports alive:false with age_ms 255704951 (roughly 3 days) for pid 4304, exactly the condition originally flagged as a real anomaly while dispatches were firing continuously.'
+  status: completed
+  commit_comment: Detect and surface a stale daemon heartbeat instead of trusting the recorded pid
+- id: prune-phantom-deviation-kinds
+  text: DEVIATION_META carries 11 kinds with zero live occurrences. Re-derive the table from current ../gm Rust source rather than memory.
+  witness: 'Real run shows the table now re-derived from current ../gm source: every listed kind has a real nonzero count against live data (long-gap-no-instruction 1086, gate-deny 718, push-dirty 144, prd-anti-shape 99, push-non-main-branch 80, prd-add-no-id 72, stuck-loop-escalation 50, push-rebase-conflict 36, push-remote-outpaces 21, long-gap-retry-without-instruction 9, complete-chain-poll 3, client-edit-no-witness 2), with severity buckets critical:230 warn:1898 info:721.'
+  status: completed
+  commit_comment: Re-derive the deviation table from current gm source so every kind has a real emitter
+- id: unify-watcher-log-parser
+  text: 'Two separate watcher.log parsers exist: EVT_RE at src/index.js:183 and line-oriented readWatcherLogEmbedFails at src/cli.js:957-987. Collapse to one parser module used by both.'
+  witness: src/watcher-log.js is now the single parser and ships in the published package (12.3kB in npm pack). It exports parseLine, classifyLine, parseDispatchLine, parseSpawnLine, parseVersionLine, newParseStats, newParseContext, parseCoverage, replayWatcherLogWithStats, readTail, EVT_RE, LINE_CLASSES and DEFAULT_REPLAY_BYTES, and the root test asserts against it.
+  status: completed
+  commit_comment: Collapse watcher-log parsing into a single shared module
+- id: read-gate-fired-markers
+  text: .gm/exec-spool/.last-gate-fired.json {key,ts} and .gate-deviation-repeats.json are unread; they directly serve stuck-project detection and stuck-loop-escalation surfacing.
+  witness: live files; grep in src/ = 0 hits
+  status: pending
+- id: read-codeinsight-digest
+  text: parseCodeInsight/codeInsightAge read repo-root .codeinsight and never .gm/exec-spool/.codeinsight-digest (v3 content-hashed).
+  witness: server.js:1171,1448 vs live .codeinsight-digest
+  status: pending
+- id: read-claim-audit-residual-markers
+  text: .gm/claim-audit-fired and .gm/residual-check-fired marker files are unread while the event-stream residual.fired/skipped counters they replaced are permanently zero.
+  witness: live markers; server.js:621-622,704-708
+  status: pending
+- id: fix-instruction-served-count-fields
+  text: instruction.served emits prd_pending_count/mutables_pending_count; server.js:685 reads prd_pending/mutables_pending, always undefined.
+  witness: live evt line vs src/server.js:685
+  status: pending
+- id: reconcile-runtime-key-collision
+  text: .status.json says runtime:agentplug while .turn-summary.json says runtime:native -- same key, two meanings, nothing reconciles them.
+  witness: both live files
+  status: pending
+- id: discovery-from-daemon-registry
+  text: daemon-registry.txt in ~/.gm-tools is an authoritative list of every cwd the daemon serves, including 4-level-deep worktree paths. Use it as a discovery source instead of/alongside one-level readdir.
+  witness: daemon-registry.txt lists spoint/.claude/worktrees/wf_* paths gmsniff cannot see
+  status: pending
+- id: fix-phasestate-cache-key
+  text: phaseStateCache keys on next-step.md mtime only but its value depends on turn-summary.json long_gap_threshold_ms, so threshold changes are invisible.
+  witness: registry.js:247,256-257,275-276
+  status: pending
+- id: fix-cwdset-cache-key
+  text: cwdSetCache is keyed on events.length alone, so a new project on disk is invisible until the event count changes; and it never evicts.
+  witness: registry.js:472-475,505
+  status: pending
+- id: use-transition-from-field
+  text: phase.transitioned carries a from field which the code ignores in favour of its own stateful currentPhase.
+  witness: server.js:688 vs live event
+  status: pending
+- id: support-fsm-graph-override
+  text: A project can redefine the phase graph via .gm/instructions/fsm/graph.json. Hardcoded 6-phase assumptions break silently on override.
+  witness: fsm.rs:239-257
+  status: pending
+- id: model-policy-knobs
+  text: The Policy block exposes 15 configurable knobs including prd_closed_statuses and mutables_resolved_statuses; registry.js hardcodes done/complete/completed and unknown. Read policy instead.
+  witness: fsm.rs:41-122 vs registry.js:225,231
+  status: pending
+- id: surface-submodule-check
+  text: The submodule-check verb and submodules-clean gate on both CONSOLIDATE and COMPLETE edges are unmodeled.
+  witness: submodule_drift.rs
+  status: pending
+- id: surface-lifecycle-liveness
+  text: The health verb returns lifecycle_liveness with last_event_age_ms, last_event and stale -- the runtime self-monitors for exactly the failure gmsniff exists to catch. Consume it.
+  witness: verbs.rs:676-700
+  status: pending
+- id: client-consume-verb-allowlist
+  text: panels.js:1063-1067 hardcodes 27 verbs while the server already publishes the authoritative list at /api/capabilities. The client must consume it.
+  witness: panels.js:1063 vs server.js:1255
+  status: pending
+- id: incremental-output-append
+  text: Every SSE frame triggers a full renderBody, a full live-state refetch and a full shell re-diff. Output does not stream. Append incrementally instead of re-polling.
+  witness: app.js:434-443
+  status: pending
+- id: debounce-sse-rerender
+  text: No debounce or coalescing on SSE-driven re-renders; several concurrently-active agents produce a request storm.
+  witness: app.js:433-443
+  status: pending
+- id: render-instruction-markdown
+  text: The instruction is served as markdown but rendered as a raw pre block. Vendor markdown.js, highlight.js and gm-prose.css from upstream.
+  witness: panels.js:669; upstream markdown.js and gm-prose.css
+  status: pending
+- id: deepen-output-feed
+  text: recent_events is capped at 30 server-side and rendered as one terse line each with no payload expansion, no autoscroll, no more-above indicator and no per-event duration. Compare LiveStream which holds 2000 with pause and filter.
+  witness: server.js:557, panels.js:599-607
+  status: pending
+- id: demote-tier-metadata
+  text: skillLayoutRow spends a line on instruction_tier provenance and the drilldown puts an entire vendoredSettingsSection, with its own extra HTTP request, ABOVE the instruction/output split -- pushing the goal-critical content below the fold.
+  witness: panels.js:699,629-639,657-660,576
+  status: pending
+- id: show-gate-blockers-in-ui
+  text: When an agent is stuck at a transition, show which gate denied and how many repeats, from .last-gate-fired.json and .gate-deviation-repeats.json.
+  witness: live marker files
+  status: pending
+- id: bound-registry-caches
+  text: prdMutStateCache, cwdSetCache, manifestCache are module-level Maps with no eviction, growing unboundedly in a long-lived GUI process.
+  witness: registry.js:206,472,316
+  status: pending
+- id: dedupe-phases-constant
+  text: 'PHASES is duplicated 5 times: server.js:631, server.js:674, cli.js:8, panels.js:456, panels.js:786, plus the ds DEFAULT_PHASES. Collapse to one shared source.'
+  witness: five literal copies
+  status: pending
+- id: surface-claim-audit
+  text: 'The claim-audit verb and claim-audit-clean gate are new and unmodeled: they scan docs for shipped-claims carrying commit hashes and verify each resolves.'
+  witness: claim_audit.rs, fsm.rs:220-226
+  status: pending
+- id: update-verb-allowlist
+  text: 'VERB_ALLOWLIST is stale: it retains the retired learn and wait/sleep verbs, and lacks the new runner-level verbs plugin-refresh and background-convert.'
+  witness: registry.js:560,564; daemon.rs:474-520; verbs.rs:1579,1560
+  status: pending
+- id: drilldown-live-updates
+  text: SkillDrilldownDialog captures a snapshot of the project row at open time and never refreshes, so the one panel you open to watch an agent is the one place that stops updating. Re-read by cwd from the latest fetch.
+  witness: panels.js:570-586,644
+  status: pending
+- id: display-instruction-heading
+  text: The server returns instruction_heading and the client never displays it.
+  witness: server.js:1300 vs panels.js:684-710
+  status: pending
+- id: surface-last-prompt-in-ui
+  text: The raw driving prompt in .gm/last-prompt.txt is the single most useful missing context for an observer and appears nowhere in the UI.
+  witness: live file unread
+  status: pending
+- id: model-replan-edges
+  text: EXECUTE, EMIT and VERIFY to PLAN are legal gate-free re-plan edges. _processTreeFromEvents uses linear PHASES.indexOf and emits FALSE phase-skipped gaps on any forward re-walk after a re-plan, and loses the re-plan itself from phase_reached and phase_walk.
+  witness: server.js:687-693; live phase.transitioned from EXECUTE to PLAN
+  status: pending
+- id: surface-fsm-gates
+  text: Only 1 of 8 gates is modeled. Add a gate inventory (residual-scan-fired, prd-all-closed, mutables-all-resolved, worktree-clean, ci-validated-fresh, browser-witness-coverage, claim-audit-clean, submodules-clean) with per-project pass/fail so an observer sees WHY a transition is blocked.
+  witness: fsm.rs:177-234; only long-gap-no-instruction present on disk
+  status: pending
+- id: show-elapsed-time
+  text: updated_ts and stale come from the server but no row shows age. An observer cannot tell if an agent has been in EXECUTE for 4 seconds or 4 hours.
+  witness: panels.js:684-710; upstream sessions.js fmtAgo/fmtDuration unvendored
+  status: pending
+- id: multi-agent-per-project
+  text: Everything is keyed by cwd so two agents running in one project collapse into one row.
+  witness: panels.js:691
+  status: pending
+- id: surface-embed-subsystem-failure
+  text: Live data shows embed_query_failed cascading into rssearch_vector_hits_failed on every dispatch -- codesearch silently degrades to bm25 while returning success. Exactly the returns-success-while-broken class an observability tool must catch.
+  witness: live watcher.log embed_query_failed with wasm backtrace
+  status: pending
+- id: surface-nextskill
+  text: transition returns nextSkill (the target phase skill) which gmsniff never surfaces despite it answering what runs next.
+  witness: transitions.rs:291-296
+  status: pending
+- id: per-agent-controls
+  text: 'SkillLayout is read-only but the goal is a MANAGER: no stop, no re-dispatch, no jump-to-session per agent. Controls live in separate panels keyed off a topbar select instead of the agent row in front of you.'
+  witness: app.js nav Control group; upstream SessionDashboard onStop/onOpen/onView
+  status: pending
+- id: scoped-panel-rerender
+  text: renderBody stashes a vnode then calls renderShell, so every panel update re-diffs the entire app chrome. Scope re-render to the panel body.
+  witness: app.js:299,323-350
+  status: pending
+- id: sse-subscription-registry
+  text: SSE frames route to panels via a hardcoded if-ladder on ui.panel inside the event listener. Replace with a subscription registry so a panel declares the frames it wants.
+  witness: app.js:433-443
+  status: pending
+- id: sse-replay-on-reconnect
+  text: Reconnect creates a fresh EventSource with no Last-Event-ID and no replay, so every event during a backoff gap is permanently lost with no UI indication.
+  witness: app.js:447-452; server assigns no SSE ids
+  status: pending
+- id: sse-heartbeat
+  text: The server sends no keepalive frame, so a silently dead connection is indistinguishable from an idle one until the next event.
+  witness: server.js:1549-1560
+  status: pending
+- id: merge-allevents-subsystem-panel
+  text: AllEvents and SubsystemPanel are the same panel with a different endpoint and state key; roughly 45 lines duplicated. Collapse into one parameterized PagedEventTable.
+  witness: panels.js:343-365 vs :393-414
+  status: pending
+- id: merge-conversationhistory-into-tree
+  text: ConversationHistory is a strict subset of ProcessTree over the same endpoint, filtered to a hardcoded 6-of-27 dispatch kinds so any new kind is silently dropped.
+  witness: panels.js:1127-1140 vs :820-902
+  status: pending
+- id: fix-process-tree-param-drift
+  text: SessionDetailDialog fetches /api/process-tree with sessionId while ProcessTree and ConversationHistory use sess -- two param names against one route, at most one correct.
+  witness: panels.js:475 vs :831,:1132
+  status: pending
+- id: use-ds-pager
+  text: The pager block is byte-identical between AllEvents and SubsystemPanel while ds already exports a Pager with page/pageCount/onPage/total/numbered.
+  witness: panels.js:361-364,410-413 vs editor-primitives.js:698
+  status: pending
+- id: use-ds-splitpanel
+  text: gui-extra.css hand-rolls a fixed 50/50 non-resizable gm-split-pane while ds exports SplitPanel with drag-resize, min/max and orientation.
+  witness: gui-extra.css:8-12 vs editor-primitives.js:381
+  status: pending
+- id: dedupe-devrow-mapper
+  text: Deviations and SessionDetailDialog build an identical DevRow mapper.
+  witness: panels.js:447-450 vs :518-521
+  status: pending
+- id: dedupe-dialog-state-machines
+  text: openSessionDetail and openSkillDrilldown implement the same open/loading/fetch/stale-guard/close pattern, with the stale guard commented as copied from the other.
+  witness: panels.js:465-500 vs :570-594
+  status: pending
+- id: dedupe-glance-cap
+  text: Dashboard GLANCE_MAX and SkillLayout SKILL_LAYOUT_GLANCE_MAX implement the same alive-first, fill-to-cap, report-hidden algorithm with different constants.
+  witness: panels.js:84-87 vs :718,731-734
+  status: pending
+- id: remove-unused-ds-imports
+  text: Glyph, TreeNode, StatTile and SubGrid are imported and never called.
+  witness: panels.js:8-9, grep count 1 each
+  status: pending
+- id: finish-inline-style-sweep
+  text: 'The inline-style-to-CSS sweep did not finish: panels.js still carries roughly 25 inline style strings, and six declared utility classes have no consumer.'
+  witness: gui-extra.css:78-86 header vs panels.js:603-607,614-618,630,636-638,657-660,669,673,699-708,744
+  status: pending
+- id: vendor-sessions-component
+  text: Upstream sessions.js ships SessionDashboard, SessionCard, SessionMeta, fmtAgo and fmtDuration -- almost exactly the in-process manager UI, with per-card stop/open/view and bulk selection. Not vendored.
+  witness: anentrypoint-design/src/components/sessions.js, 32KB
+  status: pending
+- id: vendor-markdown-renderer
+  text: Upstream markdown.js, markdown-cache.js, highlight.js and gm-prose.css are unvendored; gm-prose.css is literally named for gm instruction prose.
+  witness: anentrypoint-design src/markdown.js, gm-prose.css
+  status: pending
+- id: vendor-virtual-scroll
+  text: Upstream virtual-scroll.js is precisely what the LiveStream 500-row render cap is a workaround for.
+  witness: anentrypoint-design virtual-scroll.js 5.4KB
+  status: pending
+- id: trim-vendored-dead-weight
+  text: gmsniff calls 26 of roughly 116 exported ds components; content.js ships 44KB of marketing components (Hero, Marquee, Manifesto, WorksList) and 13 of 14 overlay primitives are unused. With no bundler all of it parses on boot.
+  witness: 'gui/ds audit: 97KB CSS + ~230KB JS for 26 used components'
+  status: pending
+- id: handle-ignored-sse-frames
+  text: The client silently ignores the error, project.added and project.removed frames the server emits, so a watcher dying or a new agent starting produces no UI reaction.
+  witness: server.js:385,393,394,395 vs app.js:429-446
+  status: pending
+- id: dead-connstate-closed
+  text: LiveStream toneMap styles a closed connState that is never set anywhere -- a dead branch.
+  witness: panels.js:216 vs app.js
+  status: pending
+- id: merge-search-into-allevents
+  text: 'Search and AllEvents overlap: AllEvents already has a q filter against /api/events while Search hits /api/search.'
+  witness: panels.js:368-390 vs :343-365
+  status: pending
+- id: use-ds-toolbar
+  text: panels.js defines a local Toolbar whose comment claims ds has no Toolbar component; ds exports both Toolbar and ToolbarRow with the identical rest-arg signature.
+  witness: panels.js:23-25 vs editor-primitives.js:13,30
+  status: pending
+- id: dedupe-propertygrid-editors
+  text: PrdEditor and MutablesEditor share the same per-row PropertyGrid shape and error-state lookup; roughly 40 lines collapse into one rowEditor helper.
+  witness: panels.js:955-973 vs :982-996
+  status: pending
+- id: dedupe-session-select
+  text: ProcessTree and ConversationHistory build near-identical session dropdowns.
+  witness: panels.js:821-825 vs :1128-1130
+  status: pending
+- id: seed-sublist-from-server
+  text: SUB_LIST is a hardcoded seed merged from observedSubsystems only inside Dashboard, so landing on skill-layout leaves the Subsystems nav and every filter dropdown stale until Dashboard is visited once. The server already sends subsystems in /api/snapshot and the client ignores it.
+  witness: panels.js:37,73-75 vs server.js:484
+  status: pending
+- id: vendor-context-pane
+  text: Upstream context-pane.js provides exactly the per-agent sidebar the SkillLayout drilldown reimplements by hand.
+  witness: anentrypoint-design context-pane.js 7KB
+  status: pending
+- id: fix-upstream-default-phases
+  text: ds DEFAULT_PHASES is missing CONSOLIDATE. The fix must land upstream in anentrypoint-design first or the next sync:ds reverts it.
+  witness: anentrypoint-design/src/components/data-density.js:19
+  status: pending
+- id: fold-dashboard-into-skilllayout
+  text: Dashboard Projects now duplicates SkillLayout as a second weaker live view, with a different glance cap (15 vs 20) and different basename logic, re-rendering on every SSE event.
+  witness: panels.js:88-109 vs :684-749
+  status: pending
+- id: use-ds-table
+  text: gm-table CSS hand-rolls what ds Table already provides with sortable, striped, compact and onSort built in.
+  witness: gui-extra.css:22-29 vs content.js Table
+  status: pending
+- id: remove-dead-phase-tone
+  text: PHASE_TONE is declared and never referenced; skillLayoutRow uses TIER_TONE instead.
+  witness: panels.js:542-545
+  status: pending
+- id: vendor-interaction-primitives
+  text: Upstream interaction-primitives.js provides useKeyboardShortcut, ShortcutHelpDialog and usePointerDrag, replacing the hand-rolled Ctrl+K binding with no discoverability and the bespoke pointer handling in mountForceGraph.
+  witness: anentrypoint-design interaction-primitives.js 19KB
+  status: pending
+- id: scoped-panel-empty-guidance
+  text: Eight scoped panels render a bare Empty when no project is selected in the topbar, with nothing telling the user that selecting a project is the prerequisite.
+  witness: panels.js scoped:true panels
+  status: pending
+- id: vendor-agent-chat-streaming
+  text: Upstream agent-chat.js and chat.js ship a capped auto-scrolling streaming transcript with explicit streaming/incomplete states and makeThreadAutoScroll -- the closest prior art to output progress as it happens.
+  witness: anentrypoint-design agent-chat.js 33KB, chat.js makeThreadAutoScroll
+  status: pending
+- id: dedupe-basename-helper
+  text: cwd-to-basename is computed four different ways across panels.js and app.js, three of them the same expression retyped.
+  witness: panels.js:190-193,90,676,689; app.js:212
+  status: pending
+- id: panel-state-registry
+  text: Every panel keeps module-level mutable globals in panels.js (20+ separate state objects), making panels un-instantiable singletons. Introduce a per-panel state registry.
+  witness: panels.js:166-189,342,367,392,419,463,567,819,908,1027,1068,1216,1270,252,329
+  status: pending
+- id: fix-ctx-flag-noop
+  text: 'applyContext is passed indices over the already-filtered array and re-filters them, so the index set is always complete and --ctx can never widen beyond matched rows: the flag is a no-op.'
+  witness: cli.js:1301
+  status: pending
+- id: fix-devorigin-always-foreign
+  text: With no sess field and a real absolute cwd, devOrigin classifies every deviation as foreign, so --own-only always prints nothing and the OWN-session-deviations-are-real-defects warning never fires.
+  witness: 'Real run of node src/cli.js --list-deviations: reports "total deviations: 2849 (own:770 foreign:2079)" with an explicit "own = cwd c:/dev/gmsniff (override with GMSNIFF_OWN_CWD)" line. Own/foreign classification now partitions real data instead of classifying every deviation as foreign, so --own-only is functional.'
+  status: completed
+  commit_comment: Fix own/foreign deviation classification, which previously marked every deviation foreign
+- id: correct-cli-source-help
+  text: CLI help documents ~/.gm/gm-log as the default source (wrong path, actual is ~/.claude/gm-log) and describes the spool as a fallback for when gm-log is empty -- both the path and the polarity are wrong.
+  witness: cli.js:205-208
+  status: pending
+- id: validate-dispatch-verb-cli
+  text: The --dispatch subcommand checks verb shape but not VERB_ALLOWLIST, unlike the HTTP route.
+  witness: cli.js:565-580 vs server.js:1414
+  status: pending
+- id: cli-live-manager-view
+  text: 'The CLI has no equivalent of the live-agent view: add a watch mode showing every running agent phase, current instruction heading and recent output, so the terminal surface matches the GUI goal.'
+  witness: 'Real run of node src/cli.js --agents: rendered "AGENTS 12:14:52 - 2 shown / 66 discovered" with a per-agent table carrying phase (EXECUTE), IN-PHASE elapsed (44m12s), LAST-EVT age (1m39s), pending counts (prd:0 mut:0), served instruction with its own age (PLAN served 2h6m ago), and a live streaming output feed beneath each agent showing real events as they occurred (12:13:11 prd.added sourcestaleness-requires-events-arg, dispatch.end prd-add) -- those were this sessions own dispatches appearing in real time. Idle agents correctly hidden with an explicit count (+64 idle/abandoned/COMPLETE hidden -- pass --idle to show). Single-agent drilldown (--agents --agent spoint) additionally renders daemon state, last gate fired with age, the raw driving prompt from .gm/last-prompt.txt, and the FULL served instruction text.'
+  status: completed
+  commit_comment: 'Add CLI live manager view (--agents): per-agent phase, elapsed, instruction and streaming output'
+- id: fix-watchers-drift-false-positive
+  text: The --watchers drifted count compares update.latest against a version that is always null, so every project with an update marker reports drifted.
+  witness: Real run of --watchers shows "# 1 watchers (ACTIVE only -- pass --all for idle)" and "# 1 active", listing a single ACTIVE project with LAST-ACT 11s and QUEUE 11, rather than reporting every discovered project as alive-and-drifted. Drift is no longer computed against a null version.
+  status: completed
+  commit_comment: Stop reporting every project as drifted by comparing against a null version
+- id: remove-dead-ts-branches
+  text: Two places re-check typeof e.ts === number, unreachable after normalizeTs converts at parse time, while four others do plain string comparison -- dual-path dead code.
+  witness: server.js:1004,1119 vs :527,608,743,1045
+  status: pending
+- id: verify-sync-ds-zero-drift
+  text: After any upstream design-system change, run sync:ds then sync:ds:check to confirm zero drift before committing, per the vendoring rule.
+  witness: AGENTS.md gui/ds vendoring rule
+  status: pending
+- id: changelog-entry
+  text: One CHANGELOG entry per commit landed this session with a one-sentence why.
+  witness: CHANGELOG.md convention
+  status: pending
+- id: update-readme
+  text: README documents the current public surface including the gm-log default; refresh to the watcher.log-primary model.
+  witness: README.md
+  status: pending
+- id: extend-test-real-watcher-log
+  text: test.js asserts live-state only against an injected synthetic sess field, which is why the sess-absence bug passed unnoticed. Extend the single root test.js to assert against real watcher.log-shaped lines with no sess.
+  witness: 'The root test now carries real watcher-log coverage: the passing run reports "watcher-log-total-parse+source-priority+correlation+project-state verified" alongside the pre-existing suites, so parsing, source priority, correlation and project-state are asserted against real data rather than only against injected synthetic fields.'
+  status: completed
+  commit_comment: Extend the single root test to cover watcher-log parsing, source priority, correlation and project state
+- id: edge-clock-skew-timestamps
+  text: Events carry ISO ts from one writer and epoch-ms from another; confirm normalizeTs handles both and that age calculations do not go negative under skew.
+  witness: index.js:177-181
+  status: pending
+- id: edge-unicode-and-long-instruction
+  text: A very long or unicode-heavy instruction body must not break the drilldown layout, the preview truncation or the SSE frame size.
+  witness: registry.js instruction_excerpt full-body; panels.js:669
+  status: pending
+- id: dedupe-flag-defs
+  text: Four flags are registered twice, once as an alias and once as their own FLAG_DEFS row.
+  witness: cli.js:25-28,45-46,51-52,66-67
+  status: pending
+- id: edge-sse-client-cap
+  text: MAX_SSE_CLIENTS defaults to 50 and returns 503. Confirm the client surfaces that rejection rather than silently retrying forever.
+  witness: server.js:1549; app.js:447-452
+  status: pending
+- id: edge-concurrent-prd-write
+  text: PRD/mutables edit uses an mtime since guard. Confirm the 409 path actually fires against a real concurrent writer rather than silently clobbering.
+  witness: server.js:1363-1404
+  status: pending
+- id: edge-log-rotation-midtail
+  text: watcher.log rotates at 10MB. Confirm the tailer resumes correctly rather than reading garbage from a stale offset.
+  witness: prose/entry.md:70 rotation; index.js:303 reset
+  status: pending
+- id: correct-cli-embed-help
+  text: Help text still describes rs-learn embed_text step failures for a retired crate.
+  witness: cli.js:181
+  status: pending
+- id: exercise-gate-residual-tiers
+  text: 'The gate and residual half of resolveInstructionTier, the entire reason matchesAutoProvisionedDefault exists, is never exercised by any route: /api/instruction-tiers only resolves the current phase heading.'
+  witness: server.js:1604-1626 vs registry.js:376-385
+  status: pending
+- id: fix-rewriterow-boundary-reshape
+  text: 'rewriteRow always re-emits the boundary as - id: even for a legacy - title: row that parseYamlRows was explicitly extended to support, silently reshaping it and contradicting the byte-preservation promise in its own docstring.'
+  witness: registry.js:147,152
+  status: pending
+- id: add-missing-info-label
+  text: /api/vendored-settings is implemented and listed in API_ROUTES but absent from INFO_LABELS, so it ships no X-Info-Label unlike every other route.
+  witness: server.js:32-73 vs :1233,:1636
+  status: pending
+- id: update-agents-md
+  text: AGENTS.md documents the old gm-log-primary model, the removed subsystem list and panels that this rework changes. Rewrite present-tense to the new architecture.
+  witness: AGENTS.md information-tiering and SUBSYSTEMS sections
+  status: pending
+- id: edge-path-traversal-guards
+  text: Re-verify the cwd allowlist and the lifecycle/response file-name validation against traversal, given discovery is about to widen to daemon-registry paths.
+  witness: registry.js:573; server.js:1524-1548
+  status: pending
+- id: edge-many-projects-scale
+  text: The daemon registry lists dozens of projects. Confirm discovery, live-state and SSE fanout hold up at that scale without an O(projects x events) blowup.
+  witness: daemon-registry.txt entry count; server.js:732-746 index
+  status: pending
+- id: edge-missing-next-step
+  text: A project with no next-step.md, an unparseable one, or one whose Phase heading is unknown must degrade to an honest unknown rather than a wrong phase.
+  witness: registry.js:252-316 present/unparseable flags
+  status: pending
+- id: edge-empty-watcher-log
+  text: 'Degenerate case: a project whose .watcher.log exists but is empty or contains only non-evt lines. Confirm discovery, live-state and the UI render an honest empty rather than a crash or a false alive.'
+  witness: index.js:195-214 EVT_RE path
+  status: pending
+- id: fix-memorystore-health-rs-learn
+  text: memoryStoreHealth stats .gm/rs-learn.db as half of totalSize; that file no longer exists for agentplug projects, which have .gm/gm.db instead, unread by anything.
+  witness: server.js:1140-1161,:1145
+  status: pending
+- id: test-write-routes
+  text: 'No write route is covered: prd/edit, mutables/edit, lifecycle, codesearch, the cwd allowlist rejection path and the lifecycle/response path-escape validation are all untested.'
+  witness: test.js coverage gap
+  status: pending
+- id: edge-spool-dispatch-timeout
+  text: The codesearch route polls for 10s then 504s. Confirm behaviour against a genuinely busy watcher and that a late response does not leak.
+  witness: server.js:1461-1505
+  status: pending
+- id: drop-retired-verbs-from-allowlist
+  text: learn and wait/sleep remain in VERB_ALLOWLIST with comments noting they always error, so /api/lifecycle will happily spool a dispatch guaranteed to fail downstream.
+  witness: Real call isRetiredVerb returns true for learn and wait and false for codesearch, so retired verbs are identified rather than being spoolable dispatches guaranteed to fail downstream.
+  status: completed
+  commit_comment: Identify retired verbs so they cannot be dispatched as if usable
+- id: edge-event-eviction
+  text: The event array evicts 5000 at a time at 1M. Confirm eviction does not corrupt the snapshot cache or the cwd activity index mid-request.
+  witness: server.js:356-364
+  status: pending
+- id: edge-corrupt-json-line
+  text: A truncated or corrupt evt JSON line mid-file must not abort the tail or poison the ring buffer.
+  witness: index.js:167-174 parse path
+  status: pending
+- id: fix-parsefloat-radix
+  text: parseFloat is called with a radix argument it does not accept.
+  witness: server.js:1037
+  status: pending
+- id: parse-dispatch-start-lines
+  text: 'HIGHEST-VALUE MISSING SIGNAL. The non-evt watcher.log lines gmsniff discards contain the dispatch-start stream: lines of form "[dispatch] -> verb=<v> task=<n> body=<n>b" (34358 in C:/dev/spoint alone). This is literally what an agent is doing RIGHT NOW and it pairs with the existing dispatch.end {ms,verb} evt record to give real in-flight verb tracking with duration. The live-manager goal cannot be met without it. Add a structured non-JSON line parser alongside EVT_RE.'
+  witness: 'real classification of C:/dev/spoint/.gm/exec-spool/.watcher.log: 34358 lines matching [dispatch] -> verb=... task=... body=...b, all currently dropped'
+  status: pending
+- id: parse-instruction-handle-lines
+  text: Non-evt line "[plugkit-wasm:warn] instruction::handle start body_len=N" (15048 in spoint) marks instruction dispatch entry, giving the true start boundary of each turn. Currently dropped.
+  witness: real line classification of spoint watcher.log
+  status: pending
+- id: parse-wasm-version-banner
+  text: Non-evt line "[plugkit-wasm] plugkit v0.1.417 (wasm)" (11922 in gmsniff) carries the REAL per-project served wasm version -- exactly the signal that went null when .status.json dropped its version field. Repoint the version/drift surface at this line rather than returning null.
+  witness: real line classification; 11922 occurrences vs registry.js:194 version always null
+  status: pending
+- id: parse-wrapper-drift-errors
+  text: 'Non-evt line "[wrapper-drift-check] error: ENOENT ... plugkit-wasm-wrapper.js" (7 in spoint) is a real installation-integrity failure currently invisible.'
+  witness: real line classification of spoint watcher.log
+  status: pending
+- id: filter-daemon-registry-by-existence
+  text: 'daemon-registry.txt is append-only and never self-prunes: 9 of its 12 entries do not exist on disk (8 spoint worktree paths plus C:/dev/test). Union it with filesystem discovery but filter every candidate by real existence and watcher.log mtime -- never trust it as a liveness list.'
+  witness: 'real stat of all 12 registry paths: only casey, spoint, gmsniff have a .watcher.log'
+  status: pending
+- id: model-daemon-boot-epochs
+  text: With sess confirmed absent, segment each project stream into daemon-boot epochs using the daemon spawn line, so an observer can distinguish this run from prior runs and gmsniff can bound replay to the current epoch instead of reading years of history.
+  witness: daemon spawn lines present 4703 times in gmsniff watcher.log
+  status: pending
+- id: parse-daemon-spawn-lineage
+  text: Non-evt line "--- daemon spawn <ISO> parent=<pid> ---" (4703 in gmsniff) carries real process lineage and a per-boot boundary -- a genuine correlation anchor now that sess is confirmed absent. Use it to segment the event stream into daemon-boot epochs.
+  witness: real line classification of gmsniff watcher.log; 4703 occurrences
+  status: pending
+- id: parse-retention-sweeps
+  text: Non-evt line "[retention] swept N out/ files older than 1h" (275 gmsniff, 5071 spoint) quantifies spool churn and would make out/ growth observable.
+  witness: real line classification
+  status: pending
+- id: bound-replay-window
+  text: watcher.log reaches 6.1MB (spoint) and 81144 lines; replayAll currently has no window bound. Reading full history on every CLI invocation and GUI boot is wasteful and will worsen. Bound replay by epoch or time window with an explicit flag to widen it.
+  witness: 'real file sizes: spoint 6172998 bytes, gmsniff 3405968, casey 1493606'
+  status: pending
+- id: correct-drop-ratio-severity
+  text: 'The parse-coverage gap is far worse than the original audit estimated: real measurement is 26836 evt of 132387 lines = 20% overall (gmsniff 42%, spoint 12%, casey 17%). Four fifths of the telemetry stream is discarded, and it is the half containing dispatch starts and version banners.'
+  witness: real measurement across 3 live projects
+  status: pending
+- id: parse-stale-lock-takeover
+  text: Non-evt line "[plugkit-wasm] stale lock (holder pid=N dead, age=Nms); taking over" (16157 in spoint) is a real contention/recovery signal an observability tool must surface -- it indicates a watcher died holding a lock.
+  witness: real line classification of spoint watcher.log
+  status: pending
+- id: purge-or-archive-stale-gmlog
+  text: 'The dead ~/.claude/gm-log holds 959386 events across 71 day dirs (2026-05-11 to 2026-07-23) and is what gmsniff currently reads. Beyond inverting priority, decide the honest disposition: ignore it by default, expose it only behind an explicit historical/archive flag, and never silently blend it with live data. Blending would make live rates and counts wrong in a way no user could detect.'
+  witness: 'real measurement: 959386 stale events vs 26866 live'
+  status: pending
+- id: warn-on-stale-source-selection
+  text: If a user explicitly points gmsniff at a log source whose newest event is far older than now, say so loudly in both CLI and GUI rather than rendering stale numbers as current. The current failure mode is silent.
+  witness: gm-log newest day dir 2026-07-23, four days stale, rendered today as if current
+  status: pending
+- id: no-external-cdn-in-gui
+  text: 'gmsniff GUI is a LOCAL observability tool that must work with no network. Upstream highlight.js:9 sets DEFAULT_PRISM_BASE to cdn.jsdelivr.net and fetches Prism at runtime. Any vendored markdown/highlight path must be offline-clean: either vendor Prism locally, repoint the base at a local path, or ship markdown without syntax highlighting. Assert this as a standing constraint for gui/ds.'
+  witness: anentrypoint-design/src/highlight.js:9 DEFAULT_PRISM_BASE cdn.jsdelivr.net
+  status: pending
+- id: audit-gui-offline-cleanliness
+  text: Beyond Prism, sweep the whole served GUI (gui/** including vendored ds) for any runtime fetch to an external origin -- fonts, CDNs, telemetry -- and remove or localize each. An observability tool that degrades when the network is down fails exactly when it is most needed.
+  witness: discovered via highlight.js CDN base; whole-surface audit not yet performed
+  status: pending
+- id: confirm-session-id-null-at-source
+  text: turn-state.json carries a session_id field but it is null on every LIVE project (gmsniff, spoint, casey) and only non-null on the idle C:/dev/gm (claude-loop-iter17). This confirms sess-absence originates at the runtime, not in gmsniffs parsing. Any UI or API field named session must render this honestly as absent rather than showing an empty string or a fabricated id.
+  witness: 'real read of 4 projects turn-state.json: 3 live have session_id:null, only stale gm has a value'
+  status: pending
+- id: surface-fsm-graph-override-live
+  text: C:/dev/gm is the only project carrying .gm/instructions/fsm/graph.json (5464 bytes) -- a REAL live phase-graph override, so the hardcoded six-phase assumption is already wrong for a real project on this machine. Parse the override and drive PhaseWalk and gate display from it per-project.
+  witness: 'real stat: graph.json present only in C:/dev/gm at 5464 bytes'
+  status: pending
+- id: surface-out-dir-retention-pressure
+  text: 'exec-spool/out/ accumulates: gm 3845 files/19.9MB, spoint 1260 files/15.4MB, gmsniff 660 files/926KB. The retention sweeper only removes files older than 1h, so a busy project holds thousands. Surface out/ file count and bytes as a real per-project pressure metric.'
+  witness: real count of out/ dirs across 4 projects
+  status: pending
+- id: gm-db-size-monitoring
+  text: '.gm/gm.db is the live store and is large and growing: gm 174.9MB, spoint 28.6MB, casey 19.8MB, gmsniff 18.8MB. memoryStoreHealth currently stats the nonexistent rs-learn.db instead. Repoint at gm.db and surface growth.'
+  witness: 'real stat: gm.db present in all 4 projects, rs-learn.db only in C:/dev/gm at 434176 bytes'
+  status: pending
+- id: gate-deviation-repeats-empty-object
+  text: .gm/exec-spool/.gate-deviation-repeats.json is 2 bytes ({}) on every project, so the stuck-loop repeat counter is currently empty everywhere. Surfacing it must handle the empty-object case as the normal state, not as missing data.
+  witness: 'real stat: 2 bytes on all 4 projects'
+  status: pending
+- id: residual-check-fired-is-empty
+  text: .gm/residual-check-fired is 0 bytes on every project -- it is a presence marker, not a content file. Code reading it for a value gets an empty string; only existence and mtime are meaningful.
+  witness: 'real stat: 0B on all 4 projects'
+  status: pending
+- id: empty-spool-queue-is-normal
+  text: All four live projects show a pending in/ queue depth of zero, so /api/spool-queue only ever returning nonzero queues means the panel is empty in the normal case. Confirm the surface communicates healthy-and-empty rather than looking broken.
+  witness: 'real count: 0 pending across gmsniff, spoint, casey, gm'
+  status: pending
+- id: bound-prd-parse-cost
+  text: spoint .gm/prd.yml is 2.1MB and gm mutables.yml is 260KB; readPrd/readMutables parse the full file and /api/prd returns every row. Bound, paginate or stream these rather than parsing megabytes per request, and confirm the mtime cache actually prevents repeat parses under SSE-driven refresh.
+  witness: 'real file sizes: spoint prd.yml 2101747B, gm mutables.yml 260477B'
+  status: pending
+- id: last-gate-fired-is-stale-not-current
+  text: last-gate-fired.json on C:/dev/gmsniff points at a gate fired at 1784888665055, days before the current session, while spoint has one from minutes ago. The marker is last-ever, NOT currently-blocking, so the UI must show its age and never imply a live block from a stale marker.
+  witness: 'real read: gmsniff gate ts 1784888665055 vs spoint 1785148812981'
+  status: pending
+- id: handle-missing-prd-yml
+  text: C:/dev/gm has NO .gm/prd.yml at all while carrying a 260KB mutables.yml, so any surface assuming both files exist must degrade honestly. Also prd.yml sizes vary enormously (spoint 2.1MB, casey 138KB, gmsniff 38KB) -- a 2MB YAML parsed per request is a real cost.
+  witness: 'real stat across 4 projects: gm prd.yml absent, spoint prd.yml 2101747 bytes'
+  status: pending
+- id: idle-vs-dead-agent-distinction
+  text: Real dispatch ages span 143s (gmsniff, active), 213s (spoint, active), 8016s (casey, idle ~2h), 173718s (gm, idle ~2 days). A live manager must visibly distinguish actively-dispatching, idle-but-alive, and abandoned, using last-dispatch-ts age rather than the shared daemon pid which reports all four identically.
+  witness: real last-dispatch-ts ages across 4 projects
+  status: pending
+- id: rs-learn-db-only-in-gm
+  text: .gm/rs-learn.db exists ONLY in C:/dev/gm (434176 bytes) and nowhere else, confirming it as a fossil of the retired crate rather than a live surface. Any code stating it is universally present is wrong.
+  witness: real stat across 4 projects
+  status: pending
+- id: verb-duration-distribution
+  text: dispatch.end carries ms for every verb (903 records measured in the sample). Surface per-verb duration distribution so an observer can see which verbs are slow and spot a regression, rather than only raw counts.
+  witness: dispatch.end field set {event,ms,ts,verb}
+  status: pending
+- id: in-flight-dispatch-indicator
+  text: With dispatch-start now parsed, a dispatch whose start has no matching end is IN FLIGHT. That is the single clearest live signal of what an agent is doing this second. Show the running verb and its elapsed time per agent, and mark long-running dispatches.
+  witness: dispatch start lines 34358 in spoint pair with dispatch.end {ms,verb}
+  status: pending
+- id: honest-empty-and-degraded-states
+  text: Across every panel, distinguish genuinely-empty from not-yet-loaded from source-is-broken. Today a dead filter, a stale source and a truly quiet agent all render as the same silent zero -- the exact failure this rework exists to end.
+  witness: recallStats returns zeros over 753 live events; live-state recent_events empty for every real project
+  status: pending
+- id: perf-many-concurrent-agents
+  text: 'Verify the live-manager path holds at real scale: 4 concurrent projects today, with the registry listing 12 and worktree fan-out able to push it higher. Measure the cost of a live-state request and an SSE burst at that scale.'
+  witness: 4 live projects measured, 12 registry entries
+  status: pending
+- id: phase-duration-tracking
+  text: phase.transitioned carries from and ts, so time-in-phase is directly computable. Show how long each agent has spent in its current phase and historically per phase -- the core question an observer asks about a running agent.
+  witness: phase.transitioned {event,from,phase,ts} n=43 measured
+  status: pending
+- id: prd-burndown-per-agent
+  text: instruction.served carries prd_pending_count over time, giving a real burndown curve per agent. Show whether an agent is converging or accumulating work -- the best single predictor of whether it will finish.
+  witness: instruction.served {prd_pending_count,mutables_pending_count} n=101 measured
+  status: pending
+- id: edge-clock-skew-negative-age
+  text: Ages are computed from Date.now() minus a file-written ts. Guard against negative or absurd values from clock skew or a future-dated file rather than rendering a negative duration.
+  witness: last-dispatch-ts age arithmetic
+  status: pending
+- id: edge-epoch-boundary-events
+  text: Events straddling a daemon-spawn boundary must attribute to the correct epoch, and an agent restarting mid-observation must not merge two runs into one apparent session.
+  witness: daemon spawn lines 4703 in gmsniff watcher.log
+  status: pending
+- id: edge-watcher-log-concurrent-write
+  text: watcher.log is appended by a live daemon while gmsniff tails it. Confirm a partial final line mid-append is buffered rather than parsed as corrupt, and that the structured non-JSON line parser has the same partial-line safety as the evt parser.
+  witness: new structured-line parser in src/watcher-log.js
+  status: pending
+- id: notify-on-state-change
+  text: An observer cannot watch continuously. Provide an opt-in signal (visual pulse, title-bar count, optional sound) for phase transitions, deviations and gate denials so the manager is useful while unattended.
+  witness: no notification surface exists in gui/app.js today
+  status: pending
+- id: cross-agent-timeline
+  text: The machine runs several gm agents concurrently (4 live projects measured). A single unified timeline across ALL agents -- who transitioned, who deviated, who is dispatching -- is the manager view that no per-project panel provides.
+  witness: 4 concurrent live projects with independent phases measured
+  status: pending
+- id: edge-dispatch-without-end
+  text: A dispatch whose end never arrives (crash, kill, watcher death) must not leak an in-flight entry forever. Age it out and report it as abandoned rather than perpetually running.
+  witness: in-flight tracking derived from unmatched dispatch starts
+  status: pending
+- id: deep-link-agent-state
+  text: The hash carries panel plus tree/conv session but not the selected agent, its filter or an open drilldown -- so an observer cannot share look at this agent right now. Add agent identity to the deep link.
+  witness: app.js:40-89 parseHash/hashForState
+  status: pending
+- id: agent-attention-ranking
+  text: A manager view should rank agents by who NEEDS ATTENTION (stuck at a gate, deviation spike, long idle mid-chain, in-flight dispatch far over its verb median) rather than sorting alphabetically or by liveness. Make the default ordering answer where do I look first.
+  witness: measured ages 143s to 173718s with no ranking surface today
+  status: pending
+- id: deviation-rate-trend
+  text: Deviations are currently shown as flat counts. A rising deviation rate within a single agent run is the actionable signal; show it as a trend against dispatch volume, not an absolute count.
+  witness: 14 live deviation kinds measured with ts on every record
+  status: pending
+- id: edge-project-disappears-midwatch
+  text: A project directory can be deleted or its worktree removed while gmsniff watches it. Confirm graceful removal from discovery, live-state and SSE without throwing, matching the 9-of-12 missing registry paths already observed.
+  witness: 9 of 12 daemon-registry paths already nonexistent
+  status: pending
+- id: split-content-js-marketing
+  text: 'content.js is 44KB of which most is marketing components (Hero, Marquee, Manifesto, WorksList, HomeView, ProjectView) gmsniff never uses but parses on every boot. A split was deliberately deferred: the components are load-bearing across upstream components.js, index.js HeroFromPageData, freddie.js, test.js, dist/, gen-exports.mjs, generate-component-docs.mjs and site YAML, and the verification tooling that would catch a mistake (build, full lint) cannot run because node_modules is not installed upstream. Gate this row on npm install upstream so build/lint can verify the split.'
+  witness: design-system agent read every consumer and declined the split with the safety net down
+  status: pending
+- id: upstream-lint-tokens-json-artifact
+  text: Upstream anentrypoint-design lint-tokens-json reports a shadow mismatch that appears to be a CRLF/whitespace comparison artifact -- the two strings render identically. Fix the comparison to normalize line endings so the lint is not permanently red for a non-issue.
+  witness: design-system agent diagnosed it as CRLF artifact reproducing on pristine tree
+  status: pending
+- id: offline-cleanliness-regression-guard
+  text: 'The served gui/ tree currently has ZERO external-origin runtime fetches (verified by sweep). Since that is already-clean rather than broken, the durable work is a regression guard: assert in the single root test.js that no served asset references an external origin, so a future vendoring cannot silently reintroduce a CDN dependency.'
+  witness: design-system agent swept gui/ and found 0 external fetches; upstream markdown/highlight carry 3 CDN URLs that were deliberately not vendored
+  status: pending
+- id: browser-verify-newly-live-css
+  text: The design-system agent verified vnode rendering by executing trees in Node, not a browser. With app-shell CSS parts now vendored and LIVE for the first time, the actual DOM/visual result is unverified -- previously-unstyled components will suddenly pick up rules. Requires a real browser pass to confirm nothing regresses visually.
+  witness: design-system agent explicitly flagged rendering verified in Node only
+  status: pending
+- id: vendored-css-import-manifest-guard
+  text: gui/ds/app-shell.css is only a 17-line @import manifest pointing at src/css/app-shell/*.css, and NONE of those parts were vendored -- all 17 resolved 404, so every rule in it was dead in production for the entire life of the vendoring, including the data-density CSS styling the already-vendored PhaseWalk/StatTile/LiveLog. Now fixed by vendoring the parts, but add a guard asserting every @import target in vendored CSS actually exists so this cannot regress invisibly.
+  witness: design-system agent verified all 17 @import targets returned 404 before the fix
+  status: pending
+- id: adopt-sessioncard-phase-strip
+  text: Upstream SessionCard gained an optional lifecycle strip driven by session.phases/phase/phasesSeen/phaseGaps via PhaseWalk, with phasesSeen as an authoritative VISITED SET rather than index math -- correctly modeling gm re-plan edges where EXECUTE->PLAN must not render as a regression. gmsniff must feed phasesSeen from real transition history rather than a current-phase index.
+  witness: 'design-system agent proved it: a re-planned session shows 2 reached where index math gives 1'
+  status: pending
+- id: fix-preexisting-test-sse-failure
+  text: test.js has a pre-existing failing assertion (did not deliver appended jsonl line within 5s) that reproduces on a pristine tree, unrelated to this sessions changes. It is a real failure in the single root test and must be triaged, not left red.
+  witness: Real run of node test.js exits 0 and the previously-failing SSE assertion passes. Two agents had independently reported this as pre-existing and reproducing on a pristine tree; it was in fact caused by the explicit-logdir regression introduced during the source inversion.
+  status: completed
+  commit_comment: Fix the failing SSE assertion in the single root test
+- id: verify-published-package-completeness
+  text: package.json files is ["src/","gui/"], so the newly vendored gui/ds/src/css/app-shell/*.css parts and every new src/ module must actually land in the published tarball. Verify with a real npm pack that the shipped artifact contains the complete GUI including the css parts whose absence made app-shell.css dead -- a partial publish would recreate that exact 404 bug for every installed user.
+  witness: 'Real npm pack --dry-run: 71 files, 357.3 kB packed. Confirmed present are all 17 gui/ds/src/css/app-shell/*.css parts (base, topbar, primitives, panel-row, hero-content, responsive, chat-basic, files, catalog-theme, chat-polish, sidebar-misc, states-interactions, loading-alerts, responsive2-workspace, row-print, data-density, kits-appended), both new modules src/correlation.js and src/watcher-log.js, the new gui/live-agents.js and gui/honest-state.js, and gui/ds/src/components/sessions.js. Import-closure check: app-shell.css declares 17 imports, all 17 ship, zero missing, so the dead-CSS 404 cannot recur for installed users.'
+  status: completed
+  commit_comment: Verify the published tarball ships the complete GUI including every vendored CSS part
+- id: protect-zero-dependency-property
+  text: gmsniff has ZERO dependencies and zero devDependencies -- a real strength for an observability tool that must run anywhere and work offline. Make this an explicit, guarded invariant so a future change cannot casually add one.
+  witness: package.json deps {} devDeps {}
+  status: pending
+- id: document-new-architecture-in-readme
+  text: 'README is 82 lines describing the old gm-log-primary model. It must describe the real current architecture: watcher.log as the live source, the agentplug shared daemon, per-project state files, and the live-agent manager as the primary use case.'
+  witness: README.md 82 lines predating the source inversion
+  status: pending
+- id: node-engine-floor-check
+  text: engines says node >=18 but the code uses modern syntax and the test run here is on Node 24. Verify the floor is real by exercising the actual entry points, or raise it honestly rather than claiming support that is untested.
+  witness: package.json engines node >=18; local runtime Node v24.15.0
+  status: pending
+- id: cli-help-matches-new-surface
+  text: printHelp and --schema must match the reworked CLI surface exactly, preserving the deliberate QUICK START / DAILY / INVESTIGATION / DIAGNOSTICS / AGENT-FACING tiering and the schema tier field that test.js asserts.
+  witness: AGENTS.md information-tiering rule; test.js asserts help ordering and schema tier strings
+  status: pending
+- id: changelog-is-nearly-empty
+  text: CHANGELOG.md is 9 lines despite the documented convention of one entry per commit landed. The history AGENTS.md deliberately refuses to carry is not actually being carried anywhere. Restore it for this sessions commits and note the gap.
+  witness: wc -l CHANGELOG.md = 9 vs one-entry-per-commit convention
+  status: pending
+- id: agents-md-rewrite-for-new-model
+  text: AGENTS.md still documents gm-log defaults, the removed subsystem list, the SUBSYSTEMS seed rationale, and the panel/nav tiering that this rework changes. Every rule in it is meant to be present-tense truth about the code as it is now, so it needs a real rewrite rather than an append.
+  witness: AGENTS.md information-tiering, SUBSYSTEMS and GM_LOG_DIR sections
+  status: pending
+- id: ship-readme-in-package
+  text: package.json files lists only src/ and gui/, so README.md is not explicitly included. Confirm what npm actually ships and that the package presents correctly on the registry.
+  witness: package.json files ["src/","gui/"]
+  status: pending
+- id: publish-workflow-guards
+  text: Pushing to main auto-bumps the patch version and publishes to npm. With this much changing at once, confirm the workflow still passes and that a broken build cannot publish -- ideally the single root test must gate the publish.
+  witness: .github/workflows/publish-npm.yml auto-bump-and-publish on push to main
+  status: pending
+- id: live-state-payload-too-large
+  text: 'Measured on the real server: /api/projects/live-state now returns 412408 bytes across 63 discovered projects because it embeds the FULL instruction text per project (up to 11851 chars each). The client currently refetches this whole payload on every SSE frame. At 63 projects with several agents dispatching concurrently this is a multi-hundred-KB round trip per event. Split the route: a light per-project summary for the list view, with full instruction text fetched only for the drilldown actually open.'
+  witness: 'real curl measurement: 412408 bytes, 0.09-0.26s per request, 63 projects'
+  status: pending
+- id: most-projects-are-idle-noise
+  text: Of 63 discovered projects the vast majority are COMPLETE or long-idle; only a few are actively dispatching. A live manager must foreground the actively-working minority and fold the idle majority away by default, or the signal is buried. This is the concrete form of the no-noise requirement.
+  witness: 'real live-state sample: acptoapi/agentdb/diagen COMPLETE, aloop EXECUTE, casey CONSOLIDATE, agentplug-libsql/ccsniff PLAN'
+  status: pending
+- id: glance-cap-at-63-projects
+  text: SkillLayout caps at 20 rows and Dashboard at 15, both designed when discovery found a handful of projects. With 63 discovered -- most COMPLETE or idle -- the cap now hides the majority and the default ordering decides what an observer ever sees. This makes agent-attention-ranking load-bearing rather than a nicety.
+  witness: 'real live-state: 63 projects vs SKILL_LAYOUT_GLANCE_MAX 20'
+  status: pending
+- id: discovery-scale-jumped-to-63
+  text: Discovery went from roughly 4 projects to 63 once daemon-registry and deeper scanning landed. Every per-project surface (live-state, health-summary, projects, stuck-projects, instruction-tiers, watcher-versions) now does 63x the filesystem work per request. health-summary already measures 0.31s. Audit each for per-request filesystem cost and add caching or bounding where it is now O(projects) on every call.
+  witness: 'real measurement: 63 projects; health-summary 0.311s, live-state 0.087-0.261s'
+  status: pending
+- id: identical-instruction-text-dedup
+  text: Multiple COMPLETE projects return byte-identical instruction_excerpt (several at exactly 5941 chars -- the shared UPDATE-DOCS prose). Transferring the same 6KB body once per project wastes most of the 412KB payload. Dedupe identical instruction bodies by hash in the response.
+  witness: 'real live-state: acptoapi, agentdb, diagen all instr=5941ch COMPLETE'
+  status: pending
+- id: unparseable-phase-projects
+  text: At least one discovered project (esp-idf-link) returns phase=? with instruction length 0, meaning discovery finds directories whose gm state is absent or unreadable. Decide honestly whether these belong in the project list at all, and if shown, label them as not-a-live-agent rather than an unknown phase.
+  witness: 'real live-state: esp-idf-link phase=? instr=0ch'
+  status: pending
+- id: model-unmodeled-9pct
+  text: Parse coverage reached 90.5% modeled with 9.6% still matching no known shape (worst project 247420 at 24.6% unmodeled). Run one classification pass over the residual to decide what is genuinely unmodeled upstream format versus legitimately-ignorable runtime chatter.
+  witness: 'data-layer agent measurement: 90.5% modeled, 9.6% unmodeled'
+  status: pending
+- id: adopt-shared-parser-in-cli
+  text: src/watcher-log.js is now the single unified parser and exports parseLine with the same semantics as cli.js readWatcherLogEmbedFails (cli.js:957-987). Replace the duplicate CLI-local parser with the shared export.
+  witness: data-layer agent exported parseLine specifically for this; cli.js still carries its own
+  status: pending
+- id: stale-worktree-pruning
+  text: 174 projects are now discovered, 99 of them worktree-hosted, while only 2 are genuinely active. Listing all 174 is unusable. Prune or age-filter stale worktree projects by default, since a deleted worktree leaves a discoverable but dead directory.
+  witness: 'data-layer agent: 174 discovered, 99 worktree-hosted, 2 active'
+  status: pending
+- id: surface-correlation-coverage-in-ui
+  text: correlationCoverage() reports has_true_session so a surface can honestly say grouped by daemon run, not agent session. Both the GUI and CLI must display which correlation kind is in use rather than implying a session grouping that does not exist for most records.
+  witness: 'data-layer agent: 3134 events carry real sess, C:/dev/gm carries real session_id, everything else falls back'
+  status: pending
+- id: status-json-ts-not-a-heartbeat
+  text: The daemon rewrites EVERY project .status.json ts roughly every 200ms, so that timestamp is a daemon-wide heartbeat and is useless as a per-project activity signal -- using it marked all 161 projects active. Per-project activity must derive only from watcher.log mtime, turn-summary ts or turn-state ts. Guard this so it cannot be reintroduced.
+  witness: data-layer agent found this only by running it; first implementation marked all 161 projects active
+  status: pending
+- id: turn-state-legacy-shape-migration
+  text: C:/dev/test carries a legacy turn-state.json shaped {turnId,...} with no phase field. Confirm against ../gm whether that shape is still written by any current code path, and handle or ignore it explicitly rather than treating it as a malformed current-shape file.
+  witness: data-layer agent found the legacy shape on C:/dev/test
+  status: pending
+- id: prd-status-vocabulary-untested
+  text: 'All 123 gmsniff PRD rows read status: pending and no row uses done/complete/completed, so closed-status detection has never been exercised against a real closed row. Verify the policy-driven closed-status logic against genuinely closed rows, from another project or by closing one here.'
+  witness: 'data-layer agent: 100% of gmsniff prd.yml rows are status pending'
+  status: pending
+- id: document-liveness-semantics-change
+  text: discoverProjects().alive changed meaning from daemon-responds (174 of 174) to this-project-is-active (2 of 174), and new fields daemon_alive, last_activity_age_ms, queue_depth, phase, last_skill were added. readWatcherStatus().alive remains daemon-liveness. This distinction is subtle and load-bearing -- document it so a future reader does not reintroduce the shared-pid confusion.
+  witness: data-layer agent behavior-change note; readProjectLiveness(cwd).active is the per-project signal
+  status: pending
+- id: sourcestaleness-requires-events-arg
+  text: sourceStaleness() called with no argument returns stale:true reason no timestamped events, which reads as a broken source rather than a misuse. Given it feeds a user-facing stale-source warning, make the no-argument case either analyze the default source itself or fail loudly as a programming error -- never emit a false stale verdict.
+  witness: 'real call: sourceStaleness() with no args returns stale:true; sourceStaleness(events) correctly returns stale:false age_ms 59911'
+  status: pending
+- id: events-without-timestamp
+  text: '103 of 203841 replayed events carry no ts at all. Any surface that sorts, buckets by day, computes an age or windows by time silently drops or mis-places them. Decide explicitly: synthesize a ts from surrounding lines, or tag them untimed and exclude them from time-based views rather than letting them fall through.'
+  witness: 'real measurement: events WITH ts 203738 of 203841'
+  status: pending
+- id: dispatch-start-end-imbalance
+  text: Real counts are dispatch.start 51203 versus dispatch.end 53948 -- 2745 MORE ends than starts. Ends outnumbering starts means the pairing cannot assume a matching start, so in-flight detection must handle an orphan end (a start scrolled past the bounded replay window, or a start line shape not yet parsed) without miscounting or crashing.
+  witness: real measurement over 203841 replayed events
+  status: pending
+- id: surface-nextstep-vs-turnstate-divergence
+  text: 'The CLI drilldown detected and reported a real inconsistency on C:/dev/spoint: next-step.md still shows PLAN while turn-state.json has moved to EXECUTE, meaning the served prose on disk lags the actual FSM state. This divergence is a genuine observable condition and should be surfaced everywhere phase is shown, including the GUI, rather than silently preferring one source. It also validates reading turn-state.json as primary with next-step.md as the prose fallback.'
+  witness: 'real run of node src/cli.js --agents --agent spoint: instruction line reads next-step.md still on PLAN, turn-state has moved to EXECUTE'
+  status: pending
+- id: gui-parity-with-cli-agents-view
+  text: The CLI --agents view now delivers the full live-manager goal (phase, in-phase elapsed, last-event age, pending counts, served instruction, streaming recent output, idle agents hidden by default, single-agent drilldown with the raw driving prompt). The GUI must reach at least this parity, since the same information architecture is proven to work against real data.
+  witness: 'real run: node src/cli.js --agents shows 2 shown / 66 discovered with live streaming output'
+  status: pending
+- id: discovery-count-varies-by-surface
+  text: 'Different surfaces report different project totals from the same machine: the CLI --agents reports 66 discovered, the data-layer replay reported 174 discovered with 99 worktree-hosted, and the HTTP live-state route reported 63. These must be reconciled to one discovery result or each must state explicitly what population it counts, otherwise the numbers read as contradictory.'
+  witness: 'real measurements: CLI 66, data-layer 174, live-state route 63'
+  status: pending
+- id: idle-default-hiding-is-correct
+  text: 'The CLI defaults to showing only working-phase agents and hides idle/abandoned/COMPLETE behind --idle, reporting 2 shown of 66 discovered with an explicit hidden count. This is the correct resolution of the noise problem and should be the GUI default too: never show all discovered projects by default, always state the hidden count.'
+  witness: 'real run: 2 shown / 66 discovered, + 64 idle/abandoned/COMPLETE agent(s) hidden -- pass --idle to show'
+  status: pending
+- id: server-boot-loads-full-fleet
+  text: createServer with no bounding loads 260552 events across the whole discovered fleet on boot. Combined with 174 discovered projects this makes every server start expensive and every test slow. Boot must be bounded by default (current epoch or time window) and an explicitly-scoped server must load only its requested scope.
+  witness: 'real probe: snapshot.total 260552 immediately after boot with a temp logDir requested'
+  status: pending
+- id: explicit-logdir-ignored-regression
+  text: 'REGRESSION, not pre-existing. createServer({logDir}) with an explicit directory no longer watches that directory: a probe created a temp gm-log-shaped dir, passed it as logDir, appended a line, and the server instead loaded 260552 fleet-wide spool events (bySub plugkit 242858, hook 3382, memory 6339, rs_learn 7973) and never delivered the appended line. This breaks the documented contract that an explicit GM_LOG_DIR / logDir is honored, breaks test isolation, and is the true cause of the test.js:97 SSE failure that was reported as pre-existing. An explicitly-requested source must always win over automatic discovery.'
+  witness: Real run of node test.js now exits 0 with "gmsniff OK -- 997222 events across 69 days - live-feedback verified - multi-project fanout verified - formal-spec verified - stuck-state+throughput+memory-health+codeinsight-age verified - total-parser verified - watcher-log-total-parse+source-priority+correlation+project-state verified". The SSE assertion at test.js:97 that previously failed with "did not deliver appended jsonl line within 5s (got 0 events)" now passes, confirming an explicitly-passed logDir is honored again rather than being overridden by fleet-wide discovery.
+  status: completed
+  commit_comment: Honor an explicitly-requested log source over automatic spool discovery
+- id: correct-preexisting-sse-failure-attribution
+  text: 'The test.js:97 SSE failure was reported by two separate agents as pre-existing and reproducing on a pristine tree. Real investigation shows it is caused by explicit-logdir-ignored-regression: the test passes a temp logDir and asserts an appended line arrives over SSE, which now fails because the explicit dir is ignored. Correct the attribution so the row is fixed rather than dismissed as inherited breakage.'
+  witness: 'Confirmed the failure was a regression, not inherited breakage: it was reproduced by a targeted probe (temp logDir + appended line returned 260552 fleet-wide events and never delivered the line), and it disappeared once explicit-source precedence was restored. Real run of node test.js now exits 0 with the full assertion list passing.'
+  status: completed
+  commit_comment: Correct the mis-attribution of the SSE test failure as pre-existing
+- id: skill-layout-renders-names-only
+  text: 'Real browser witness of #panel=skill-layout: the panel renders a flat comma-separated wall of roughly 140 project names including every dead worktree, with only 11 row nodes in the DOM and NO phase, elapsed time, instruction text, output feed or liveness distinction. The panel that is meant to be the product currently shows less than the CLI does. Must reach parity with the CLI --agents view.'
+  witness: browser page.evaluate on the live GUI returned panelText of names only, rowNodes 11, zero page errors
+  status: pending
+- id: health-critical-unexplained
+  text: 'The GUI leads with Health: critical without naming what is critical or which project, giving an alarming signal with no actionable content. Either state the specific failing condition and link to the project, or do not lead with it.'
+  witness: 'browser witness: panelText begins Health: critical followed only by project names'
+  status: pending
+- id: verify-css-imports-resolve-over-http
+  text: 'Confirmed fixed and worth guarding: all 17 app-shell.css @import targets now return HTTP 200 when served, and the browser reports app-shell.css with 17 live rules. Previously all 17 were 404 and the sheet was inert. Add an assertion so a future vendoring change cannot silently reintroduce it.'
+  witness: Real HTTP check against the running server returned 17 resolved and 0 missing for every app-shell.css import target, and a real browser page.evaluate reported app-shell.css with 17 live cssRules alongside colors_and_type.css 25, editor-primitives.css 384, chat.css 408 and gui-extra.css 139, with zero page errors. Previously all 17 targets returned 404 and the sheet was entirely inert.
+  status: completed
+  commit_comment: Confirm every vendored CSS import resolves when served
+- id: exclude-dead-worktrees-from-ui
+  text: Roughly 140 entries render in the GUI project list, a large share of them wf_* worktree paths that are abandoned or already deleted. Listing dead worktrees as peers of live agents is the single largest source of UI noise. Exclude by default or label distinctly.
+  witness: browser witness listed dozens of wf_* and agent-* worktree entries alongside 2 genuinely active projects
+  status: pending
+- id: correlation-session-id-tier-matches-nothing
+  text: 'correlationCoverage reports session_id: 0 across 203855 events even though C:/dev/gm carries a real session_id in its turn-state.json. The session_id rank tier exists but currently matches nothing, so either the extractor does not read the field the runtime actually writes, or the tier is vestigial. Confirm before any surface claims to group by session_id.'
+  witness: 'docs agent: correlationCoverage session_id 0 of 203855 despite a real session_id on C:/dev/gm'
+  status: pending
+- id: daemon-alive-contradiction
+  text: 'CONFIRMED BUG. readWatcherStatus(cwd).daemon_alive returns true (pid 3364) while readProjectLiveness(cwd).daemon_alive returns false in the same process at the same instant, because they read different files: the per-project .status.json holds pid 3364 and the machine-global ~/.gm-tools/daemon-status.json holds pid 4304. Direct process.kill probe proves pid 3364 IS alive and pid 4304 is NOT, and the global file is 255773s (roughly 3 days) stale. So readWatcherStatus is correct and readProjectLiveness.daemon_alive is wrong -- it trusts the stale global file over the live per-project one. Fix the precedence: prefer the freshest verified-alive pid, and never report daemon_alive false while a real daemon pid is serving the project.'
+  witness: 'real probe: pid 3364 alive=true, pid 4304 alive=false, daemon-status.json age 255773s'
+  status: pending
+- id: reconcile-subsystem-list-with-rs-learn
+  text: SUBSYSTEMS is now 5 entries [plugkit,hook,bootstrap,memory,rs_learn] and real replay shows 5295 live rs_learn events (recall, vector_top_k, auto_recall), contradicting the earlier AGENTS.md claim that rs_learn was dead with zero live events -- and contradicting commit 17af397 which moved the other way. Reconcile against current ../gm source to determine the correct emitter, and confirm gui/panels.js SUB_LIST carries the identical literal, since the two are required to stay byte-identical.
+  witness: docs agent measured 5295 live rs_learn events dated 2026-07-07 in real replay
+  status: pending
+- id: remove-stray-playwright-core
+  text: node_modules/playwright-core is present on disk despite zero declared dependencies. It is not in the published tarball and not imported by src/, so shipped users are unaffected, but it muddies the zero-dependency invariant locally and should be removed or explained.
+  witness: docs agent found it while verifying the zero-dependency property
+  status: pending
+- id: drop-removed-cli-flags-from-docs
+  text: The old README documented --spool-queue, --watcher-versions and --instruction-tiers, which now return unknown flag; the equivalent /api/* routes are still live. Docs were corrected to describe them as server routes only -- verify no other surface still advertises them as CLI flags.
+  witness: 'docs agent: the three flags return unknown flag while the routes remain in server.js'
+  status: pending
+- id: parse-dispatch-completion-lines
+  text: 'ROOT CAUSE of the unmodeled residual and the dispatch imbalance. The watcher log carries BOTH [dispatch] -> (start) AND [dispatch] <- (completion) text lines, and only the start form is parsed. Real counts: spoint 14888 start / 14777 end, gmsniff 1694 / 1681, casey 3511 / 3466. The completion line is RICHER than the dispatch.end evt record because it carries out= response bytes as well as ms=, e.g. [dispatch] <- verb=instruction task=3 ms=3876 out=16855b. Parse it, pair it to its start by task id, and expose response size per dispatch. This is roughly 14777 lines in spoint alone -- a large share of the 9.55% unmodeled residual.'
+  witness: 'real count across 3 live projects: 20093 start lines vs 19924 completion lines, all currently ASCII <- and unparsed'
+  status: pending
+- id: expose-dispatch-response-size
+  text: The [dispatch] <- completion line carries out=<n>b response bytes, a signal available nowhere else. Surface per-dispatch response size so an observer can spot a verb returning an unexpectedly large or empty payload, which is a real failure mode for instruction and codesearch dispatches.
+  witness: 'real sample: [dispatch] <- verb=instruction task=3 ms=3876 out=16855b'
+  status: pending
+- id: correct-dispatch-imbalance-diagnosis
+  text: The earlier reading that ends outnumber starts (51203 start vs 53948 end) was an artifact of comparing text-derived dispatch.start against the separate dispatch.end evt records, two different populations. Real like-for-like pairing of the text lines shows starts slightly EXCEED ends -- 169 orphan starts across 3 projects (spoint 111, gmsniff 13, casey 45) -- which is exactly the expected shape for in-flight and interrupted dispatches. Pair start to completion by task id and treat a small orphan-start count as normal in-flight, not as corruption.
+  witness: 'real per-project counts: start 20093, completion 19924, delta +169'
+  status: pending

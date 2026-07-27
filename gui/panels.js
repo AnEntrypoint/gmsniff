@@ -5,36 +5,27 @@
 // the active panel's container on data load / SSE events / interval ticks.
 
 import * as webjsx from 'webjsx';
-import { Chip, Badge, Pill, Btn, Glyph } from 'ds/components/shell.js';
-import { PhaseWalk, DEFAULT_PHASES, TreeNode, BarRow, StatTile, StatsGrid, SubGrid, SessionRow, DevRow, LiveLog } from 'ds/components/data-density.js';
+import { Chip, Badge, Pill, Btn } from 'ds/components/shell.js';
+import { PhaseWalk, BarRow, StatsGrid, SessionRow, DevRow, LiveLog } from 'ds/components/data-density.js';
 import { TreeView, TreeItem, PropertyGrid, PropertyField, Dialog, JsonViewer } from 'ds/components/editor-primitives.js';
-import { api, apiPost, esc, fmtTs, state, toast } from './data.js';
+import { api, apiPost, fmtTs, state, toast } from './data.js';
 import { runForceLayout } from './forcegraph.js';
+import { basename, subsystemList, mergeObservedSubsystems, phaseUniverse, PHASE_FALLBACK } from './shared.js';
+import { HonestState, ScopedPanelState } from './honest-state.js';
 
 const h = webjsx.createElement;
 
-// ---------------------------------------------------------------------------
-// TOOLBAR primitive -- gmsniff has no dedicated ds Toolbar component; this
-// is the same inline `.gm-toolbar` row already used by AllEvents/Search/
-// SubsystemPanel/Codesearch/GmCallConsole, factored into a small
-// helper so panels that had NO toolbar (Sessions, Process Tree, Deviations,
-// Live Stream) can add one with the same visual/behavioral shape.
-// `actions` is an array of vnodes (buttons/inputs/chips) rendered left-to-right.
+// `.gm-toolbar` row shared by every panel's filter/action strip. (ds ships
+// Toolbar/ToolbarRow, but they are chat-surface chrome with their own spacing
+// scale; this stays the gmsniff table-panel row.)
 function Toolbar(...actions) {
   return h('div', { class: 'gm-toolbar' }, ...actions);
 }
 
-// Seed set matches src/index.js SUBSYSTEMS (the server-side source of truth, returned as
-// snap.subsystems) -- confirmed against real ../gm source + a week of real gm-log data across
-// every discovered project: only plugkit (dispatch.* default), hook (gates/deviations),
-// bootstrap (bootstrap.js), and memory (recall.rs, sub:"memory") have live emitters today.
-// Dashboard's observedSubsystems merge (below) still grows SUB_LIST if a genuinely new tag
-// shows up in real data, so this seed only needs to start correct, not stay exhaustive by hand.
 export const SUB_COLORS = {
   hook: 'var(--purple, #bc8cff)', plugkit: 'var(--flame, #ff7b72)',
   bootstrap: 'var(--sky, #79c0ff)', memory: 'var(--green, #3fb950)',
 };
-export let SUB_LIST = ['plugkit', 'hook', 'bootstrap', 'memory'];
 
 function colorFor(sub) {
   if (SUB_COLORS[sub]) return SUB_COLORS[sub];
@@ -43,7 +34,14 @@ function colorFor(sub) {
   return `hsl(${hue % 360}, 60%, 65%)`;
 }
 
-function Empty(msg) { return h('p', { class: 'gm-empty' }, msg); }
+// Every panel's zero-state routes through HonestState so "nothing happened",
+// "nothing loaded" and "nothing matched" can never collapse into one silent
+// message. Kept as a thin named wrapper so the ~30 existing call sites read the
+// same, while each now has to say WHICH zero it is.
+function Empty(text, kind = 'empty', hint) { return HonestState({ kind, text, hint }); }
+function Failed(what, error) {
+  return HonestState({ kind: 'error', text: `Could not load ${what}.`, hint: String(error) });
+}
 
 // Human-readable single-line sugar for an event payload: key=value pairs
 // instead of raw JSON punctuation. Used for table-cell summaries and the
@@ -71,7 +69,7 @@ export async function Dashboard({ onNav, devTotal, health } = {}) {
   const snap = await api('/api/snapshot');
   if (snap.error) return Empty('Failed to load snapshot: ' + snap.error);
   if (Array.isArray(snap.observedSubsystems) && snap.observedSubsystems.length) {
-    SUB_LIST = [...new Set([...SUB_LIST, ...snap.observedSubsystems])];
+    mergeObservedSubsystems(snap.observedSubsystems);
   }
   // Daily-first glance: what is happening right now, before any histogram.
   // Everything here is client-held already (state.projects from boot,
@@ -121,7 +119,7 @@ export async function Dashboard({ onNav, devTotal, health } = {}) {
     ],
   });
   const bySub = snap.bySub || {};
-  const subRows = SUB_LIST.map(s => {
+  const subRows = subsystemList().map(s => {
     const n = bySub[s] || 0;
     const pct = snap.total ? Math.round(n / snap.total * 100) : 0;
     return BarRow({ label: s, value: String(n), pct, tone: colorFor(s) });
@@ -155,9 +153,9 @@ export async function ByDay() {
   if (!Array.isArray(days) || !days.length) return Empty('No day-bucketed data yet.');
   return h('div', { class: 'ds-panel' }, h('h2', {}, 'Events by Day'),
     h('table', { class: 'gm-table' },
-      h('tr', {}, h('th', {}, 'Day'), h('th', {}, 'Total'), ...SUB_LIST.map(s => h('th', { class: 'gm-sub-color', style: `--sub-color:${colorFor(s)}` }, s))),
+      h('tr', {}, h('th', {}, 'Day'), h('th', {}, 'Total'), ...subsystemList().map(s => h('th', { class: 'gm-sub-color', style: `--sub-color:${colorFor(s)}` }, s))),
       ...days.map(d => h('tr', { key: d.day }, h('td', {}, d.day), h('td', {}, String(d.total)),
-        ...SUB_LIST.map(s => h('td', {}, String(d.bySub[s] || '')))))));
+        ...subsystemList().map(s => h('td', {}, String(d.bySub[s] || '')))))));
 }
 
 // ---------------------------------------------------------------------------
@@ -187,10 +185,6 @@ let liveProjectFilter = null;
 // costs fixed alongside this. A module-level counter that only ever increments removes the
 // collision regardless of how many entries are ever pushed or shifted.
 let liveEntrySeq = 0;
-function projectBasename(cwd) {
-  if (!cwd) return '(unknown)';
-  return String(cwd).replace(/[\\/]+$/, '').split(/[\\/]/).pop() || cwd;
-}
 // Debug accessor -- the module-level liveEntries/liveProjectFilter/liveEntrySeq state had no
 // window.* exposure, so diagnosing a live-panel rendering anomaly required guessing from DOM
 // snapshots alone. Read-only snapshot (never returns the live array/mutable references) so a
@@ -223,15 +217,15 @@ export function LiveStream({ connState = 'connecting' } = {}, setBody) {
       if (setBody) setBody();
     },
   });
-  const cwds = [...new Set(liveEntries.map(e => e.cwd).filter(Boolean))].sort((a, b) => projectBasename(a).localeCompare(projectBasename(b)));
+  const cwds = [...new Set(liveEntries.map(e => e.cwd).filter(Boolean))].sort((a, b) => basename(a).localeCompare(basename(b)));
   const projectSelect = h('select', {
     value: liveProjectFilter || '',
     onchange: (e) => { liveProjectFilter = e.target.value || null; if (setBody) setBody(); },
   },
     h('option', { value: '' }, `all projects (${cwds.length})`),
-    ...cwds.map(cwd => h('option', { key: cwd, value: cwd }, projectBasename(cwd))));
+    ...cwds.map(cwd => h('option', { key: cwd, value: cwd }, basename(cwd))));
   const filtered = liveProjectFilter ? liveEntries.filter(e => e.cwd === liveProjectFilter) : liveEntries;
-  const tagged = filtered.slice(-500).map(e => ({ ...e, sub: e.cwd ? `${projectBasename(e.cwd)}/${e.sub}` : e.sub }));
+  const tagged = filtered.slice(-500).map(e => ({ ...e, sub: e.cwd ? `${basename(e.cwd)}/${e.sub}` : e.sub }));
   return h('div', { class: 'ds-panel gm-p-8' },
     h('div', { class: 'gm-row-between' },
       h('h2', { class: 'gm-m-0' }, 'Live Stream'),
@@ -354,7 +348,7 @@ export async function AllEvents(setBody) {
   return h('div', { class: 'ds-panel' },
     h('div', { class: 'gm-toolbar' },
       h('input', { placeholder: 'filter...', value: evPageState.filters.q || '', oninput: (e) => { evPageState.filters.q = e.target.value; evPageState.offset = 0; setBody(); } }),
-      filterSelect('sub', 'all subsystems', SUB_LIST, evPageState.filters.sub),
+      filterSelect('sub', 'all subsystems', subsystemList(), evPageState.filters.sub),
       filterSelect('event', 'all events', (evTypes || []).map(e => e.event), evPageState.filters.event),
       filterSelect('day', 'all days', (days || []).map(d => d.day), evPageState.filters.day)),
     renderEventTable(data.rows, 'all-events', setBody),
@@ -374,7 +368,7 @@ export function Search(setBody) {
         oninput: (e) => { searchState.q = e.target.value; },
       }),
       h('select', { onchange: (e) => { searchState.sub = e.target.value; } },
-        h('option', { value: '' }, 'all subsystems'), ...SUB_LIST.map(s => h('option', { value: s }, s))),
+        h('option', { value: '' }, 'all subsystems'), ...subsystemList().map(s => h('option', { value: s }, s))),
       Btn({ children: 'Search', onClick: () => runSearch(setBody) })),
     searchState.results.length ? renderEventTable(searchState.results, 'search-results', setBody) : Empty('No search performed yet.'));
 }
@@ -453,7 +447,8 @@ export async function Deviations(setBody) {
 // ---------------------------------------------------------------------------
 // SESSIONS / PROCESS TREE
 // ---------------------------------------------------------------------------
-const PHASES = ['PLAN', 'EXECUTE', 'EMIT', 'VERIFY', 'CONSOLIDATE', 'COMPLETE'];
+// Phase vocabulary comes from shared.js phaseUniverse()/PHASE_FALLBACK, which
+// prefers real server/graph.json data over any literal in this file.
 
 // Session detail Dialog: focus-trapped modal (ds Dialog primitive) opened by
 // clicking a SessionRow. Fetches the phase walk + full event list scoped to
@@ -531,222 +526,10 @@ export function SessionDetailDialog(setBody) {
   });
 }
 
-// ---------------------------------------------------------------------------
-// SKILL LAYOUT / LIVE AGENTS -- shows every discovered project's current
-// phase/skill/served-instruction at a glance, with a drilldown into the full
-// instruction text and which of the three resolve tiers (vendored override,
-// source-synced cache, compiled default) is actually serving it. Backed by
-// GET /api/projects/live-state and live-updated via the 'project.phase-
-// changed' SSE frame (see app.js's stream handler).
-// ---------------------------------------------------------------------------
-const PHASE_TONE = {
-  PLAN: 'var(--sky, #79c0ff)', EXECUTE: 'var(--accent, #58a6ff)', EMIT: 'var(--purple, #bc8cff)',
-  VERIFY: 'var(--yellow, #d29922)', CONSOLIDATE: 'var(--orange, #ffa657)', COMPLETE: 'var(--green, #3fb950)',
-};
-const TIER_TONE = {
-  vendored: 'var(--orange, #ffa657)', 'source-synced': 'var(--purple, #bc8cff)',
-  default: 'var(--fg-muted, #8b949e)', 'auto-provisioned': 'var(--sky, #79c0ff)',
-};
-const TIER_LABEL = {
-  vendored: 'vendored override', 'source-synced': 'source-synced',
-  default: 'compiled default', 'auto-provisioned': 'auto-provisioned (unedited)',
-};
+// Skill Layout and its drilldown moved to gui/live-agents.js, which rebuilt them
+// as the Live Agents manager surface (append-only feed, gate blockers, driving
+// prompt, per-agent controls). No live-agent state is rendered from this file.
 
-// A project whose instruction_tier is "default" but instruction_auto_provisioned is true has a
-// REAL file on disk (gm-plugkit's bootstrap sync materialized it there), byte-identical to the
-// last-known-shipped default -- genuinely still the compiled default in effect, not a per-project
-// customization, but a DIFFERENT situation from "no file at all" that a reader would otherwise
-// conflate with a true vendored override if this weren't distinguished (the false-positive class
-// resolveInstructionTier's own manifest-hash check exists to eliminate at the data layer -- this
-// is the corresponding display-layer distinction, using its own 4th visual state rather than
-// collapsing back into a plain "compiled default" pill that would hide the file's real presence).
-function effectiveTierKey(p) {
-  return (p.instruction_tier === 'default' && p.instruction_auto_provisioned) ? 'auto-provisioned' : p.instruction_tier;
-}
-
-const skillLayoutState = { filter: '' };
-const skillDrilldownState = { open: false, project: null, vendored: null, vendoredLoading: false };
-
-function openSkillDrilldown(project, setBody) {
-  skillDrilldownState.open = true;
-  skillDrilldownState.project = project;
-  skillDrilldownState.vendored = null;
-  skillDrilldownState.vendoredLoading = true;
-  setBody();
-  api('/api/vendored-settings?cwd=' + encodeURIComponent(project.cwd)).then((r) => {
-    // The drilldown may have been closed or switched to a different project while this in-flight
-    // fetch was still pending -- discard a now-stale response rather than overwriting whatever the
-    // dialog is showing now (same "don't let a slow request clobber newer state" discipline
-    // openSessionDetail already follows for its own tree/deviations fetch).
-    if (!skillDrilldownState.open || skillDrilldownState.project !== project) return;
-    skillDrilldownState.vendored = r.error ? null : r;
-    skillDrilldownState.vendoredLoading = false;
-    setBody();
-  });
-}
-
-function closeSkillDrilldown(setBody) {
-  skillDrilldownState.open = false;
-  skillDrilldownState.project = null;
-  skillDrilldownState.vendored = null;
-  skillDrilldownState.vendoredLoading = false;
-  setBody();
-}
-
-// Renders one recentEventsForCwd() node (processTree's own node shape) as a single output-feed
-// row -- same kind/phase/id vocabulary ConversationHistory already uses, so a project's recent
-// activity reads consistently whether viewed from Skill Layout or Process Tree.
-function outputFeedRow(n, i) {
-  return h('div', { key: i, class: 'gm-list-row' },
-    h('span', { class: 'ts gm-mr-8' }, fmtTs(n.ts)),
-    h('strong', {}, n.kind),
-    n.phase ? h('span', { class: 'gm-pill gm-ml-6' }, n.phase) : null,
-    n.id ? h('span', { class: 'gm-pill gm-ml-6' }, n.id) : null,
-    n.deviation ? h('span', { class: 'gm-pill gm-ml-6', style: 'color:var(--flame,#f85149);' }, n.deviation) : null,
-    n.reason ? h('span', { class: 'gm-ml-6', style: 'opacity:0.7;' }, String(n.reason)) : null,
-    n.prd_pending != null ? h('span', { class: 'gm-ml-6', style: 'opacity:0.7;' }, `prd_pending=${n.prd_pending}`) : null);
-}
-
-// Formats an entries[] row (label, path, present, size, mtime_ts) from /api/vendored-settings as
-// one compact line -- present-only entries reach here (the endpoint already filters), so this is
-// purely a display formatter, never a presence check.
-function vendoredSettingRow(e) {
-  return h('div', { key: e.label, class: 'gm-list-row', style: 'font-size:0.85em;' },
-    h('span', { class: 'gm-pill gm-mr-6' }, e.label),
-    h('span', { style: 'font-family:monospace; opacity:0.75; word-break:break-all;' }, esc(e.path)),
-    e.size != null ? h('span', { class: 'gm-ml-6', style: 'opacity:0.6;' }, `${e.size}B`) : null,
-    e.mtime_ts ? h('span', { class: 'gm-ml-6', style: 'opacity:0.6;' }, fmtTs(e.mtime_ts)) : null);
-}
-
-// fsm-vendor's own real customization surface (see registry.js's discoverVendoredSettings for the
-// full scope: phase-prose .md files, fsm/graph.json -- genuinely load-bearing, can redefine
-// phases/edges/gates wholesale -- fsm/predicates.md, hooks/*.js, browser-config.json, daemon-
-// project-config.json) -- a WIDER, separately-tracked set from the single instruction_tier pill
-// above (that one only ever resolves the CURRENTLY-SERVED phase key's gates/residual auto-sync
-// state). Renders its own loading/empty/populated states rather than folding into the tier pill,
-// since "this project has run fsm-vendor at all" and "here is specifically which phase's prose is
-// currently active" are two different questions an observer can reasonably ask independently.
-function vendoredSettingsSection(vendored, loading) {
-  if (loading) return h('div', { class: 'gm-mb-12', style: 'opacity:0.6;' }, 'Loading vendored settings...');
-  if (!vendored || !vendored.vendored) return null;
-  return h('div', { class: 'gm-mb-12' },
-    h('div', { class: 'gm-flex-between' },
-      h('strong', {}, `Vendored settings (${vendored.file_count} file${vendored.file_count === 1 ? '' : 's'})`),
-      vendored.has_custom_graph
-        ? h('span', { class: 'gm-pill', style: 'color:var(--orange, #ffa657);' }, 'custom FSM graph')
-        : null),
-    h('div', { class: 'gm-mt-4', style: 'max-height:180px; overflow:auto;' }, ...vendored.entries.map(vendoredSettingRow)));
-}
-
-export function SkillDrilldownDialog(setBody) {
-  const s = skillDrilldownState;
-  if (!s.open || !s.project) return null;
-  const p = s.project;
-  const tierKey = effectiveTierKey(p);
-  const tierTone = TIER_TONE[tierKey] || TIER_TONE.default;
-  const recentEvents = p.recent_events || [];
-  // Split-pane: instruction (left) and its output feed (right) visible simultaneously --
-  // an observer reading recent output no longer loses the instruction out of view, and vice
-  // versa. Each column scrolls independently (own max-height) rather than one long page scroll.
-  const body = h('div', {},
-    h('div', { class: 'gm-mb-12' },
-      Pill({ children: p.phase || 'no phase' }),
-      Pill({ children: p.skill || 'no skill' }),
-      p.stale ? Pill({ children: 'stale' }) : null,
-      !p.alive ? Pill({ children: 'stopped' }) : null),
-    h('div', { class: 'gm-mb-12', style: `color:${tierTone}; font-weight:600;` },
-      TIER_LABEL[tierKey] || tierKey,
-      p.instruction_source_file ? h('div', { class: 'gm-mt-4', style: 'font-weight:400; font-family:monospace; font-size:0.85em; word-break:break-all;' }, esc(p.instruction_source_file)) : null,
-      p.instruction_source_repo ? h('div', { class: 'gm-mt-4', style: 'font-weight:400;' }, 'synced from: ' + esc(p.instruction_source_repo)) : null),
-    vendoredSettingsSection(s.vendored, s.vendoredLoading),
-    h('div', { class: 'gm-split-pane' },
-      h('div', { class: 'gm-split-col' },
-        h('h2', { class: 'gm-mt-10' }, 'Served instruction (' + (p.instruction_key || 'unknown') + ')'),
-        p.unparseable
-          ? h('p', { class: 'gm-text-danger' }, 'next-step.md present but could not be parsed (partial write or malformed content).')
-          : !p.present
-            ? Empty('No active agent -- next-step.md not found for this project.')
-            : h('pre', { class: 'gm-code-block', style: 'white-space:pre-wrap; max-height:60vh; overflow:auto;' }, esc(p.instruction_excerpt || ''))),
-      h('div', { class: 'gm-split-col' },
-        h('h2', { class: 'gm-mt-10' }, `Recent output${p.recent_sess ? ' (session ' + String(p.recent_sess).slice(0, 20) + ')' : ''}`),
-        recentEvents.length
-          ? h('div', { style: 'max-height:60vh; overflow:auto;' }, ...recentEvents.map(outputFeedRow))
-          : Empty(p.recent_sess ? 'No recent dispatch events for this session.' : 'No session activity recorded for this project yet.'))));
-  return Dialog({
-    title: (p.cwd || '').split(/[\\/]/).filter(Boolean).pop() || p.cwd,
-    open: true, dismissible: true, ariaLabel: 'Instruction and output drilldown', size: 'wide',
-    onClose: () => closeSkillDrilldown(setBody),
-    actions: [{ label: 'Close', onClick: () => closeSkillDrilldown(setBody) }],
-    children: body,
-  });
-}
-
-function skillLayoutRow(p, setBody) {
-  const phaseIdx = DEFAULT_PHASES.indexOf(p.phase);
-  const reached = DEFAULT_PHASES.map((_, i) => phaseIdx >= 0 && i <= phaseIdx);
-  const tierKey = effectiveTierKey(p);
-  const tierTone = TIER_TONE[tierKey] || TIER_TONE.default;
-  const name = (p.cwd || '').split(/[\\/]/).filter(Boolean).pop() || p.cwd;
-  return h('div', {
-    class: 'ds-session-row', key: p.cwd, role: 'button', tabindex: '0',
-    onclick: () => openSkillDrilldown(p, setBody),
-    onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openSkillDrilldown(p, setBody); } },
-  },
-    h('div', { class: 'gm-flex-between' },
-      h('strong', {}, name),
-      h('span', {},
-        !p.alive ? Pill({ children: 'stopped' }) : (p.present ? Pill({ children: p.phase || '(no phase)' }) : Pill({ children: 'no active agent' })),
-        p.instruction_tier ? h('span', { class: 'gm-ml-6', style: `color:${tierTone};` }, TIER_LABEL[tierKey] || tierKey) : null)),
-    p.present ? PhaseWalk({ reached }) : null,
-    p.skill ? h('div', { class: 'gm-mt-4', style: 'opacity:0.75;' }, 'skill: ' + esc(p.skill) + (p.instruction_key ? ' / ' + esc(p.instruction_key) : '')) : null,
-    p.instruction_excerpt ? h('div', { class: 'gm-mt-4', style: 'opacity:0.6; font-size:0.85em;' },
-        (p.instruction_excerpt.length > 140
-          ? h('span', {}, esc(p.instruction_excerpt.slice(0, 140)) + '... ', h('em', { style: 'opacity:0.8;' }, '(preview -- click for full instruction)'))
-          : esc(p.instruction_excerpt))) : null,
-    p.recent_events && p.recent_events.length
-      ? h('div', { class: 'gm-mt-4', style: 'opacity:0.55; font-size:0.8em;' },
-          'output: ' + p.recent_events.slice(0, 2).map(n => n.kind + (n.phase ? ':' + n.phase : '')).join(', '))
-      : null);
-}
-
-// Same glance-cap shape Dashboard's "Projects now" table already uses (app.js/panels.js
-// GLANCE_MAX): alive projects -- the live-agent signal this panel exists for -- always show
-// in full; dead-watcher rows fill remaining slots up to the cap with an explicit hidden count,
-// never a silent truncation. discoverProjects already sorts alive-first so slice() preserves
-// that priority. Only applied to the unfiltered view -- an active filter searches every
-// discovered project, not just the glance window.
-const SKILL_LAYOUT_GLANCE_MAX = 20;
-
-export async function SkillLayout(setBody) {
-  const r = await api('/api/projects/live-state');
-  if (r.error) return Empty('Failed to load live agent state: ' + r.error);
-  const projects = r.projects || [];
-  if (!projects.length) return Empty('No projects discovered yet.');
-
-  const filterVal = skillLayoutState.filter.toLowerCase();
-  const filtered = filterVal
-    ? projects.filter(p => [(p.cwd || ''), (p.phase || ''), (p.skill || ''), (p.instruction_key || '')].some(f => f.toLowerCase().includes(filterVal)))
-    : projects;
-
-  const aliveCount = filtered.filter(p => p.alive).length;
-  const glanceLimit = Math.max(SKILL_LAYOUT_GLANCE_MAX, aliveCount);
-  const shown = filterVal ? filtered : filtered.slice(0, glanceLimit);
-  const hiddenCount = filtered.length - shown.length;
-
-  return h('div', {},
-    h('h2', {}, 'Skill Layout / Live Agents'),
-    Toolbar(
-      h('input', {
-        class: 'gm-input', type: 'text', placeholder: 'Filter by cwd / phase / skill...',
-        value: skillLayoutState.filter,
-        oninput: (e) => { skillLayoutState.filter = e.target.value; setBody(); },
-      })),
-    h('p', { class: 'gm-mt-4', style: 'opacity:0.7;' }, `${shown.length} of ${projects.length} projects${hiddenCount > 0 ? ` (${hiddenCount} more dead watchers hidden -- filter to find them)` : ''}`),
-    shown.length
-      ? h('div', { class: 'gm-mt-10' }, ...shown.map(p => skillLayoutRow(p, setBody)))
-      : Empty('No projects match this filter.'),
-    SkillDrilldownDialog(setBody));
-}
 
 export async function Sessions(onOpen, setBody) {
   // Refresh action re-invokes this exact same fetch (api('/api/sessions...'))
@@ -761,7 +544,8 @@ export async function Sessions(onOpen, setBody) {
     refreshToolbar,
     ...r.rows.map(s => {
       const gaps = [];
-      for (let i = 0; i < PHASES.length - 1; i++) if (s.phases_reached[i + 1] && !s.phases_reached[i]) gaps.push(PHASES[i]);
+      const ph = PHASE_FALLBACK;
+      for (let i = 0; i < ph.length - 1; i++) if (s.phases_reached[i + 1] && !s.phases_reached[i]) gaps.push(ph[i]);
       return SessionRow({
         sessId: s.sess, events: s.events, verbs: s.dispatches, prd: `${s.prd_adds}/${s.prd_resolves}`,
         muts: `${s.mutable_adds}/${s.mutable_resolves}`, resid: `${s.residual_fires}f/${s.residual_skips}s`,
@@ -783,7 +567,7 @@ function buildProcessTreeHierarchy(sess, nodes) {
     if (!groups.has(phase)) groups.set(phase, []);
     groups.get(phase).push(n);
   }
-  const PHASE_ORDER = ['PLAN', 'EXECUTE', 'EMIT', 'VERIFY', 'CONSOLIDATE', 'COMPLETE', '(no phase)'];
+  const PHASE_ORDER = [...PHASE_FALLBACK, '(no phase)'];
   const phaseKeys = [...groups.keys()].sort((a, b) => {
     const ia = PHASE_ORDER.indexOf(a), ib = PHASE_ORDER.indexOf(b);
     return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);

@@ -1,0 +1,319 @@
+/* ============================================================
+   AppShell — page frame. The topbar floats above a soft background;
+   the body sits inside a rounded inner shell for a friendlier feel.
+   ============================================================ */
+.app {
+  display: flex; flex-direction: column;
+  /* Offset parent for the sidebar drawer/scrim/toggle, which are absolute so
+     they overlay THIS shell (a thebird WM window) rather than the viewport. */
+  position: relative;
+  min-height: 100vh;
+  /* Definite height so the flex column resolves height:100% for descendants
+     (e.g. a full-height chat) at every breakpoint, not just where a desktop
+     media override happened to set explicit heights. dvh tracks mobile chrome. */
+  min-height: 100dvh;
+  height: 100dvh;
+  background: var(--bg);
+  color: var(--fg);
+  /* Notched-device safe area padding (no-op on devices without notches) */
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+}
+
+/* When the app shell is embedded inside a windowed surface (e.g. the freddie
+   dashboard mounted in a WM window via .fd-root) it is NOT a full-page app:
+   `min-height:100vh` and the absence of an explicit width make it collapse to
+   0 width at desktop, where the responsive single-column @media rules don't
+   apply. Inside .fd-root it must fill its container instead. (At <=767px the
+   grid already linearizes, which is why the bug only showed at desktop width.) */
+.fd-root .app { width: 100%; height: 100%; min-height: 0; flex: 1 1 auto; }
+.fd-root .app-body { min-width: 0; }
+
+/* Full-bleed canvas host (e.g. a game/3D viewport that fills the page behind the
+   shell): the shell's opaque var(--bg) would paint OVER the canvas and hide it.
+   Mark the host with `canvas-host` to make the shell surfaces transparent so the
+   live canvas shows through. The canvas itself is the backdrop. */
+.canvas-host,
+.canvas-host .app,
+body.canvas-host { background: transparent !important; }
+
+:root {
+  --app-status-h: 26px;
+  --app-topbar-h: var(--size-lg);
+  --app-crumb-h: var(--size-sm);
+}
+
+.app-topbar {
+  position: sticky; top: 0; z-index: var(--z-header);
+  display: flex; flex-wrap: wrap;
+  align-items: center; gap: var(--space-4);
+  min-height: var(--app-topbar-h);
+  padding: 10px var(--pad-x);
+  background: color-mix(in oklab, var(--bg) 97%, transparent);
+}
+
+/* Merged chrome: when AppShell gets both a topbar and a crumb it wraps them
+   in .app-chrome and they share ONE sticky band instead of stacking as two
+   bars. The breadcrumb provides the left identity (it already begins with the
+   brand), so the topbar's standalone brand is hidden to avoid showing the name
+   twice; nav and the crumb's right slot sit together on the right. */
+.app-chrome {
+  position: sticky; top: 0; z-index: var(--z-header);
+  display: flex; flex-wrap: wrap; align-items: center;
+  gap: var(--space-2) var(--space-4);
+  padding: 8px var(--pad-x);
+  background: color-mix(in oklab, var(--bg) 97%, transparent);
+}
+.app-chrome > .app-topbar,
+.app-chrome > .app-crumb {
+  position: static; background: none; backdrop-filter: none;
+  -webkit-backdrop-filter: none; padding: 0; min-height: 0;
+  flex: 1 1 auto;
+}
+.app-chrome > .app-crumb { order: 1; flex: 1 1 auto; }
+.app-chrome > .app-topbar { order: 2; flex: 0 0 auto; }
+.app-chrome > .app-topbar > .brand { display: none; }
+.app-chrome > .app-topbar > nav { margin-left: 0; }
+.app-chrome > .app-crumb > .crumb-right { margin-left: auto; }
+.app-topbar > .brand { flex: 0 0 auto; }
+.app-topbar > .app-search { flex: 1 1 auto; }
+.app-topbar > nav { margin-left: auto; }
+.app-topbar nav { display: flex; gap: 4px; font-size: var(--fs-sm); flex-wrap: wrap; }
+.app-topbar nav a { flex: 0 0 auto; }
+.app-topbar nav a {
+  color: var(--fg-2);
+  /* Dense desktop chrome (was a 44px pill with 12px 14px pad — marketing-scale
+     touch target in the top bar). Matches the .app-side a treatment: ~34px,
+     --r-1 rounded rect, tighter padding. The 44px tap target is restored under
+     @media(pointer:coarse) (the existing .app-topbar nav a rule further down). */
+  padding: var(--space-2) var(--space-2-5);
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  border-radius: var(--r-1);
+  transition: background var(--dur-snap) var(--ease), color var(--dur-snap) var(--ease);
+}
+.app-topbar nav a:hover { background: var(--bg-2); color: var(--fg); }
+.app-topbar nav a:focus-visible {
+  outline: var(--focus-w) solid var(--focus-color);
+  outline-offset: var(--focus-offset);
+}
+/* Active tab reads as a subtle tinted pill with an accent underline rather than
+   an oversized filled oval that sits taller than its inactive siblings and reads
+   as misaligned. Same height as the inactive links — only the tint + underline
+   change. */
+.app-topbar nav a.active {
+  color: var(--accent-ink);
+  background: color-mix(in oklab, var(--accent) 16%, transparent);
+  box-shadow: inset 0 -2px 0 0 var(--accent);
+  font-weight: 600;
+}
+
+.brand {
+  font-family: var(--ff-display);
+  font-weight: 700; font-size: var(--fs-lg);
+  letter-spacing: var(--tr-tight);
+}
+/* The wordmark separator printed in the electric lead — the brand tell. */
+.brand .slash { color: var(--accent-ink); font-weight: 700; margin: 0 3px; }
+
+.app-search {
+  display: inline-flex; align-items: center; gap: var(--space-2-5);
+  /* Snap to the single-line control ladder (--field-height == --ctl-md, 34px,
+     density-scaled) so the topbar search aligns with sibling topbar controls and
+     shrinks under [data-density]. Was raw 9px 16px padding off the ladder — the
+     one front-door input the control-height port missed. */
+  height: var(--field-height);
+  padding: 0 var(--space-3); background: var(--bg-2);
+  border-radius: var(--r-pill);
+  font-size: var(--fs-sm); color: var(--fg-3);
+  max-width: 360px;
+}
+.app-search .icon { opacity: 0.6; }
+.app-search input {
+  border: 0; background: transparent;
+  font-family: inherit; font-size: inherit; color: var(--fg);
+  width: 100%;
+}
+.app-search:focus-within {
+  outline: var(--focus-w) solid var(--focus-color);
+  outline-offset: var(--focus-offset);
+}
+
+.app-crumb {
+  min-height: var(--app-crumb-h);
+  padding: 6px var(--pad-x);
+  display: flex; align-items: center; gap: 8px;
+  font-size: var(--fs-sm); color: var(--fg-3);
+}
+.app-crumb .sep { opacity: 0.5; }
+.app-crumb .leaf { color: var(--fg); font-weight: 600; }
+.app-crumb .crumb-right { margin-left: auto; color: var(--fg-3); }
+
+.app-side-shell { background: var(--bg); }
+.app-body { display: grid; grid-template-columns: var(--sidebar-width) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); align-items: stretch; align-content: stretch; flex: 1; min-height: 0; }
+.app-body.no-side { grid-template-columns: minmax(0, 1fr); }
+/* When there is no sidebar, the empty side-shell must not occupy a grid row,
+   otherwise main wraps to a second (collapsed) row. Remove it from layout. */
+.app-body.no-side .app-side-shell { display: none; }
+
+.app-side {
+  display: flex; flex-direction: column; gap: var(--space-4);
+  padding: var(--space-5) var(--space-3);
+  font-size: var(--fs-sm);
+}
+.app-side .group {
+  font-size: var(--fs-xs); font-weight: 600;
+  color: var(--fg-3); padding: 0 var(--space-3);
+  margin-bottom: 6px;
+}
+.app-side a {
+  display: grid; grid-template-columns: 18px 1fr auto;
+  gap: var(--space-2-5); align-items: center;
+  /* Dense rounded-rect nav row (was a 44px pill with 12px 14px padding — tall
+     and consumer-shaped). A --r-1 rounded rect at ~34px reads as compact app
+     chrome; the full 44px touch target is restored under pointer:coarse below. */
+  padding: var(--space-2) var(--space-2-5);
+  min-height: 34px;
+  border-radius: var(--r-1);
+  color: var(--fg-2);
+  margin-bottom: 2px;
+}
+@media (pointer: coarse) {
+  .app-side a { min-height: 44px; padding: var(--space-2-75) var(--space-3); }
+}
+.app-side a:hover { background: var(--bg-2); color: var(--fg); }
+.app-side a:focus-visible {
+  outline: var(--focus-w) solid var(--focus-color);
+  outline-offset: var(--focus-offset);
+}
+.app-side a.active {
+  color: var(--accent-fg);
+  background: var(--accent);
+  font-weight: 600;
+}
+.app-side .count {
+  background: color-mix(in oklab, var(--fg) 10%, transparent);
+  color: var(--fg-2);
+  padding: 3px 10px; font-size: var(--fs-micro); font-weight: 700;
+  border-radius: var(--r-pill);
+}
+/* The lime active pill is the sidebar's one accent moment; its own count
+   chip rides the ink-on-accent pair instead of a second competing hue. */
+.app-side a.active .count {
+  background: color-mix(in oklab, var(--accent-fg) 82%, transparent);
+  color: var(--accent);
+}
+
+.app-main {
+  padding: var(--space-5) var(--pad-x) 0;
+  min-width: 0;
+  /* Full-height flex column so a single flex:1 child (e.g. .chat) fills the
+     region between crumb and status instead of floating at content height. */
+  display: flex; flex-direction: column;
+  min-height: 0;
+  align-self: stretch;
+  height: 100%;
+}
+/* Document children (hero, sections, panels) keep their natural height in the
+   scrolling flex column. Without flex-shrink:0 the flex algorithm shrinks them
+   toward min-height:0 once total content exceeds the fixed-height .app-main,
+   collapsing every section to 0 and piling content on top of itself — the
+   failure mode any long-scroll page (a marketing/landing route) hits. Grow
+   children (.chat/.grow/etc.) re-assert flex:1 1 auto below via higher
+   specificity, so a single full-height pane still fills the region. */
+.app-main > * { min-height: 0; flex: none; }
+/* The main region scrolls its own overflow at every breakpoint (previously
+   only ≥901px), so a fixed-height .app never clips route content and inner
+   panels don't fight the page scroll. */
+.app-main { overflow-y: auto; }
+/* Reserve the scrollbar track so routes with/without overflow don't shift
+   the layout horizontally when the bar appears. */
+.app-main { scrollbar-gutter: stable; }
+/* Jump-target anchors clear the inner-scroll top edge (no chrome overlap,
+   but a little breathing room when deep-linked within .app-main). */
+.app-main [id] { scroll-margin-top: var(--space-4); }
+/* Full-height route children fill the region instead of scrolling the page. */
+.app-main > .chat,
+.app-main > .chat-area,
+.app-main > .ds-file-stage,
+.app-main > .ds-files-stack,
+.app-main > .grow { flex: 1 1 auto; min-height: 0; }
+.app-main.narrow { max-width: var(--measure-narrow); margin: 0 auto; }
+/* Article-body heading rhythm and lede spacing, consumed by flatspace-rendered
+   long-form pages (docs, papers) that drop headings/panels directly into .app-main. */
+.app-main > h1,
+.app-main > h2,
+.app-main > h3 { margin-top: 36px; margin-bottom: 12px; }
+.app-main > h1:first-child { margin-top: 8px; }
+.app-main > .panel,
+.app-main > .work-detail-chips,
+.app-main > .cli { margin-top: 18px; margin-bottom: 18px; }
+.app-main .ds-lede { margin-top: 4px; margin-bottom: 18px; max-width: 64ch; line-height: 1.6; }
+.work-detail-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; row-gap: 10px; }
+@media (max-width: 720px) {
+  .app-main > h1,
+  .app-main > h2,
+  .app-main > h3 { margin-top: 28px; }
+}
+
+@media (min-width: 1400px) {
+  /* Fluid ceiling, not a hard stop: scales from 1400px up to 1920px across the
+     1400-2200px viewport band (matches .ws-shell's 1920px ultrawide cap below)
+     instead of freezing at 1400px and leaving >1000px dead margin on a 2560px+
+     display. Row/prose measure caps (--measure-wide etc.) still own line-length
+     readability, so widening the shell itself does not create unreadable rows. */
+  .app { max-width: clamp(1400px, 92vw, 1920px); margin-left: auto; margin-right: auto; }
+  .app-main .chat,
+  .app-main > .chat-area,
+  .app-main > .main-content { max-width: none; margin: 0; width: 100%; }
+  /* Status bar inherits the .app max-width cap above and stretches edge-to-edge
+     within it; no separate width constraint (which previously narrowed it). */
+  .app-status { width: 100%; }
+  /* Cap row text measure inside the wide capped main (ultrawide readability). */
+  .row .title, .row .sub { max-width: var(--measure-wide); }
+}
+/* Beyond 1920px the shell itself stops growing (matches .ws-shell's own cap) —
+   extra space becomes page margin rather than stretching sidebar/content grid
+   tracks to distances a pointer/eye shouldn't have to travel. */
+@media (min-width: 2200px) {
+  .app { max-width: 1920px; }
+}
+
+.app-status {
+  display: flex; align-items: center; gap: var(--space-3);
+  width: 100%;
+  height: var(--app-status-h); min-height: var(--app-status-h);
+  /* A thin desktop status strip, not a webpage footer band. */
+  padding: 0 var(--space-4);
+  /* Status chrome is prose, not code - mono is reserved for code/paths. */
+  font-family: var(--ff-body); font-size: var(--fs-xs); line-height: 1.2;
+  color: var(--fg-3);
+  border-top: 1px solid var(--rule);
+}
+.app-status .item { color: inherit; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.app-status .item:first-of-type { color: var(--accent-ink); }
+.app-status .spread { flex: 1; }
+/* The status bar NEVER wraps: at narrow widths the trailing items (hints,
+   agent target) drop in priority order instead of breaking mid-word onto a
+   second line. */
+.app-status { flex-wrap: nowrap; overflow: hidden; }
+@media (max-width: 1100px) {
+  .app-status .item:last-of-type:not(:only-of-type) { display: none; }
+}
+
+/* The "dateline" — ASCII bar used at the top of every preview/brand page.
+   3-4 flex slots; a .spread filler pushes the trailing slot to the far
+   edge instead of every span running together with no gap. */
+.dateline {
+  display: flex; align-items: center; gap: var(--space-3);
+  flex-wrap: nowrap; overflow: hidden;
+  font-family: var(--ff-mono); font-size: var(--fs-xs); line-height: 1.2;
+  letter-spacing: 0.02em;
+  color: var(--fg-3);
+}
+.dateline span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.dateline .spread { flex: 1 1 auto; min-width: var(--space-3); }
+

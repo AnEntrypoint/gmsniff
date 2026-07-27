@@ -1,0 +1,405 @@
+/* ============================================================
+   Hero
+   ============================================================ */
+/* Signature hero — asymmetric editorial header. Title spans wide; the body +
+   actions sit offset in a narrower right column on desktop, stacked on mobile.
+   No centered stack. */
+.ds-hero {
+  padding: var(--space-9) 0 var(--space-8);
+  display: grid; gap: var(--space-5) var(--space-5);
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+  grid-template-areas: 'title title' 'body aside';
+  align-items: start;
+  max-width: var(--measure-wide);
+  position: relative; isolation: isolate;
+}
+.ds-hero-head { grid-area: title; display: grid; gap: var(--space-3); }
+.ds-hero-body  { grid-area: body; }
+/* The right column carries its own visual weight — a spined, halftone-
+   textured card holding the badge/stat cluster and the CTAs — so the
+   asymmetric grid reads as a deliberate composition, not leftover space
+   beside the narrow body copy. Stretches to the body column's height. */
+.ds-hero-aside {
+  grid-area: aside; position: relative; isolation: isolate;
+  align-self: stretch; display: flex; flex-direction: column;
+  justify-content: space-between; gap: var(--space-5);
+  background: var(--bg-2);
+  border-radius: 0 var(--r-2) var(--r-2) 0;
+  padding: var(--space-5) var(--space-5) var(--space-5) calc(var(--space-4) + var(--bw-chunk));
+}
+.ds-hero-aside::before {
+  content: ''; position: absolute; left: 0; top: 0; bottom: 0;
+  width: var(--bw-chunk); background: var(--accent);
+  border-radius: var(--bw-chunk) 0 0 var(--bw-chunk);
+}
+.ds-hero-stats { display: flex; flex-direction: column; gap: var(--space-2); }
+.ds-hero-stat {
+  font-family: var(--ff-mono); font-size: var(--fs-sm);
+  color: var(--fg-2); letter-spacing: var(--tr-tight);
+  padding-bottom: var(--space-2); border-bottom: var(--bw-hair) solid var(--bg-3);
+}
+.ds-hero-stat:last-child { border-bottom: 0; padding-bottom: 0; }
+.ds-hero-title {
+  font-family: var(--ff-display); font-weight: 700;
+  font-size: clamp(40px, 9cqi, 116px);
+  line-height: 0.96; letter-spacing: var(--tr-tighter);
+  margin: 0; max-width: 16ch; text-wrap: balance;
+}
+.ds-hero-body {
+  font-family: var(--ff-body); font-size: var(--fs-xl);
+  line-height: 1.45; margin: 0; max-width: 46ch;
+  color: var(--fg-2);
+}
+/* The lead phrase in the title — printed in the electric lead, not glowing. */
+.ds-hero-accent { color: var(--accent-ink); font-weight: 700; }
+.ds-hero-actions {
+  display: flex; gap: var(--space-2, 10px); flex-wrap: wrap;
+  align-self: start; margin-top: var(--space-hair, 4px);
+}
+/* Container-queried (the whole shell is; a 500px pane on a wide viewport
+   would keep the two-column grid under a width @media). Left-aligned stack —
+   no centering — preserving the asymmetric intent. */
+@container (max-width: 900px) {
+  .ds-hero {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: 'title' 'body' 'aside';
+    align-items: start;
+    padding: var(--space-7) 0 var(--space-6);
+  }
+  .ds-hero-aside {
+    border-radius: var(--r-2); flex-direction: row; flex-wrap: wrap;
+    justify-content: flex-start; align-items: center;
+  }
+  .ds-hero-stats { flex-direction: row; flex-wrap: wrap; }
+  .ds-hero-stat { border-bottom: 0; padding-bottom: 0; }
+}
+.ds-chat-title { margin: 0; font-size: inherit; }
+
+/* ============================================================
+   Section grouping
+   ============================================================ */
+.ds-section { margin: var(--space-8) 0; }
+/* Compact section (e.g. a PageHeader used as a page's first element): no large
+   leading margin, modest trailing margin — top-aligns without consumer overrides. */
+.ds-section-compact { margin-top: 0; margin-bottom: var(--space-4); }
+.ds-section > h3 {
+  font-family: var(--ff-body); font-weight: 600; font-size: var(--fs-h3);
+  margin: 0 0 var(--space-5);
+  letter-spacing: -0.01em;
+}
+
+@media (max-width: 900px) {
+  .ds-section { margin: var(--space-4) 0; }
+}
+
+/* ============================================================
+   Print texture — the signature surface treatment. Opt-in overlay that
+   reads as risograph/newsprint grain, layered above the surface fill but
+   below content. Faint by default so type stays crisp; reduced-data and
+   reduced-motion are unaffected (texture is static).
+   ============================================================ */
+.ds-grain { position: relative; isolation: isolate; }
+.ds-grain::after {
+  content: ''; position: absolute; inset: 0; z-index: -1;
+  pointer-events: none;
+  background-image: var(--grain);
+  background-size: 160px 160px;
+  opacity: var(--grain-opacity);
+  mix-blend-mode: var(--grain-blend);
+}
+/* ============================================================
+   Marquee / ticker — brand kinetic device ("always open 24/7"). The track
+   holds two identical runs so the loop is seamless; reduced-motion freezes it
+   to a single static run. Editorial, not a decorative flourish.
+   ============================================================ */
+.ds-marquee {
+  overflow: hidden; width: 100%;
+  border-block: var(--bw-rule) solid var(--fg);
+  padding: var(--space-2) 0;
+  font-family: var(--ff-display); font-weight: 600;
+  text-transform: uppercase; letter-spacing: var(--tr-caps);
+}
+.ds-marquee-track {
+  display: inline-flex; gap: var(--space-5);
+  white-space: nowrap; will-change: transform;
+  animation: ds-marquee-run 28s linear infinite;
+}
+.ds-marquee-item { display: inline-flex; align-items: center; gap: var(--space-5); }
+.ds-marquee-sep { color: var(--accent-ink); }
+.ds-marquee:hover .ds-marquee-track,
+.ds-marquee:focus-within .ds-marquee-track,
+.ds-marquee:active .ds-marquee-track { animation-play-state: paused; }
+@keyframes ds-marquee-run {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-50%); }
+}
+/* Touch has no hover-pause; slow the ticker so it burns less attention. */
+@media (hover: none), (pointer: coarse) {
+  .ds-marquee-track { animation-duration: 40s; }
+}
+@media (prefers-reduced-motion: reduce) {
+  /* Static: wrap to a readable strip instead of a frozen half-offscreen run. */
+  .ds-marquee-track { animation: none; flex-wrap: wrap; white-space: normal; }
+  .ds-marquee-run-b { display: none; }
+}
+
+/* ============================================================
+   Install — single CLI command card
+   ============================================================ */
+.cli {
+  display: flex; align-items: center; gap: 14px;
+  overflow-x: auto;
+  padding: 20px 24px;
+  background: var(--ink); color: var(--paper);
+  border-radius: var(--r-3);
+  font-family: var(--ff-mono); font-size: var(--fs-lg);
+}
+.cli .prompt { color: var(--green-2); }
+.cli .cmd    { flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; color: var(--paper); }
+.cli .copy   {
+  padding: 8px 16px; background: transparent; color: var(--paper);
+  font-size: var(--fs-tiny); text-transform: uppercase; letter-spacing: var(--tr-caps);
+  cursor: pointer; box-shadow: inset 0 0 0 1px var(--rule-strong);
+  border-radius: var(--r-pill);
+}
+.cli .copy:hover { background: var(--fg-3); }
+
+/* Multi-line CLI block: when .cli holds .ds-cli-row / .ds-cli-comment children
+   (quickstart scripts, multi-command snippets — see CliBlock in
+   src/components/content.js) it stacks as a column instead of the
+   single-line install row. */
+.cli:has(.ds-cli-row),
+.cli:has(.ds-cli-comment) {
+  flex-direction: column; align-items: stretch; gap: 0;
+  font-size: var(--fs-sm); line-height: 1.6;
+}
+.ds-cli-row {
+  display: flex; gap: 10px;
+  font-family: var(--ff-mono); font-size: 13px; line-height: 1.6;
+  padding: 3px 0;
+}
+.ds-cli-row .prompt { color: var(--green-2); flex: 0 0 auto; user-select: none; }
+.ds-cli-row .cmd { flex: 1 1 auto; white-space: pre-wrap; word-break: break-word; color: var(--paper); }
+.ds-cli-comment {
+  color: var(--fg-3);
+  font-family: var(--ff-mono); font-size: var(--fs-tiny); line-height: 1.6;
+  padding: 3px 0; white-space: pre-wrap; word-break: break-word;
+}
+
+/* ============================================================
+   Receipt — key/value table
+   ============================================================ */
+table.kv { width: 100%; border-collapse: collapse; }
+table.kv td {
+  padding: 8px 0;
+  font-family: var(--ff-body); font-size: var(--fs-sm);
+}
+table.kv tr + tr td { border-top: 1px solid var(--rule); }
+table.kv td:first-child {
+  color: var(--fg-3);
+  font-size: var(--fs-xs);
+  text-transform: uppercase; letter-spacing: var(--tr-caps);
+  width: 14ch;
+}
+table.kv td:last-child {
+  font-weight: 600;
+  overflow-wrap: anywhere; min-width: 0;
+}
+/* Tiny screens: stack the key over the value instead of squeezing a 14ch
+   label column beside long unbroken values (URLs, hashes). */
+@media (max-width: 400px) {
+  table.kv td { display: block; width: auto; padding: 4px 0; }
+  table.kv td:first-child { padding-top: 8px; }
+  table.kv tr + tr td { border-top: 0; }
+  table.kv tr + tr td:first-child { border-top: 1px solid var(--rule); }
+}
+
+/* ============================================================
+   Generic table
+   ============================================================ */
+table {
+  width: 100%; border-collapse: collapse;
+  font-family: var(--ff-body); font-size: var(--fs-sm);
+  /* A data grid, not a card: a tight --r-0 corner (was --r-3/22px, which read
+     as a rounded card). Cells drop to 8px 12px for a dense, scannable row
+     (was 12/14 x 16 => ~43px rows). Density scales the vertical padding. */
+  border-radius: var(--r-0); overflow: hidden;
+}
+table th {
+  text-align: left;
+  padding: calc(var(--space-2) * var(--density)) var(--space-2-75);
+  font-size: var(--fs-tiny); font-weight: 600;
+  color: var(--fg-3); text-transform: uppercase; letter-spacing: var(--tr-caps);
+  background: var(--bg-2);
+}
+table td { padding: calc(var(--space-2) * var(--density)) var(--space-2-75); border-top: 1px solid var(--rule); }
+table tr.clickable { cursor: pointer; }
+table tr.clickable:hover td { background: var(--bg-2); }
+table tr.clickable:focus-visible {
+  outline: var(--focus-w) solid var(--focus-color);
+  outline-offset: -2px;
+}
+table tr.clickable:focus-visible td { background: var(--bg-2); }
+
+/* Table() striped/compact opt-in density modifiers (webgeist g-table parity).
+   Scoped under .ds-table-wrap so they never leak onto an unrelated bare
+   <table> a consumer hand-rolls outside this component. */
+.ds-table-wrap.is-striped table tr:nth-child(even) td { background: var(--bg-2); }
+.ds-table-wrap.is-striped table tr.clickable:nth-child(even):hover td,
+.ds-table-wrap.is-striped table tr.clickable:nth-child(even):focus-visible td { background: var(--bg-3, var(--bg-2)); }
+.ds-table-wrap.is-compact table th { padding: var(--space-1-5, 5px) var(--space-2, 8px); }
+.ds-table-wrap.is-compact table td { padding: var(--space-1-5, 5px) var(--space-2, 8px); }
+
+/* ============================================================
+   Changelog
+   ============================================================ */
+.ds-changelog-row {
+  grid-template-columns: minmax(110px, 14ch) minmax(60px, 9ch) minmax(0, 1fr) !important;
+}
+.ds-changelog-ver {
+  font-family: var(--ff-body); font-weight: 600; font-size: var(--fs-sm);
+}
+
+/* ============================================================
+   Works
+   ============================================================ */
+.work-detail {
+  padding: var(--space-4) var(--space-5) var(--space-5);
+  margin: 4px 0 var(--space-2);
+  background: var(--bg-2);
+  border-radius: var(--r-3);
+  display: flex; flex-direction: column; gap: var(--space-3);
+}
+.ds-work-body { margin: 0; max-width: 60ch; }
+.ds-work-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+
+/* ============================================================
+   Manifesto / pull moment
+   ============================================================ */
+.ds-manifesto { max-width: 60ch; }
+.ds-manifesto-para {
+  font-family: var(--ff-body); font-size: var(--fs-lg);
+  line-height: var(--lh-long); margin: 0 0 var(--space-3);
+}
+.ds-manifesto-para.dim { color: var(--fg-3); }
+
+/* ============================================================
+   Currently shipping dots
+   ============================================================ */
+.ds-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: currentColor; flex-shrink: 0; vertical-align: middle; }
+.ds-dot-on  { color: var(--green-2); }
+.ds-dot-off { color: var(--fg-3); }
+.ds-dot-live { color: var(--green-2); }
+.ds-dot-idle { color: var(--fg-3); }
+
+/* ============================================================
+   KPI
+   ============================================================ */
+.kpi {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: var(--space-2);
+}
+.kpi-card {
+  /* Was --space-5 (32px) pad + --r-3 (22px) — four cards ate a full fold. A
+     16px pad on a --r-1 corner keeps them prominent but dense; the number drops
+     from a 48px marketing display to a 32px app-scale figure. */
+  padding: var(--space-3);
+  background: var(--bg-2);
+  border-radius: var(--r-1);
+}
+.kpi-card .num {
+  font-family: var(--ff-body); font-weight: 600;
+  font-size: clamp(22px, 3cqi, 32px); line-height: 1;
+  letter-spacing: var(--tr-tight);
+}
+.kpi-card .lbl {
+  font-size: var(--fs-xs); color: var(--fg-3);
+  font-weight: 600; margin-top: 8px;
+  letter-spacing: var(--tr-caps); text-transform: uppercase;
+}
+.kpi-foot {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-top: var(--space-2);
+}
+.kpi-delta {
+  display: inline-flex; align-items: center; gap: var(--space-hair);
+  font-size: var(--fs-xs); font-weight: 600;
+}
+.kpi-delta-up { color: var(--green); }
+.kpi-delta-down { color: var(--danger); }
+.ds-sparkline path { stroke: currentColor; }
+.ds-sparkline-up { color: var(--success); }
+.ds-sparkline-down { color: var(--danger); }
+
+/* ============================================================
+   BarChart
+   ============================================================ */
+.ds-barchart { display: flex; flex-direction: column; gap: var(--space-2); }
+.ds-barchart-row {
+  display: grid; grid-template-columns: minmax(90px, 25%) 1fr auto;
+  align-items: center; gap: var(--space-2);
+}
+.ds-barchart-label { font-size: var(--fs-sm); color: var(--fg-2); }
+.ds-barchart-track {
+  /* 6px unifies with the system's other bar tracks (.ds-upload-bar,
+     .ds-bar-bg); was --space-2 (8px), the lone thicker slab in the bar family. */
+  height: var(--space-1-75); border-radius: var(--r-pill);
+  background: var(--bg-3); overflow: hidden;
+}
+.ds-barchart-fill {
+  height: 100%; width: var(--bar-pct, 0%);
+  background: var(--fg-3); border-radius: var(--r-pill);
+}
+.ds-barchart-fill.is-active { background: var(--accent); }
+.ds-barchart-value {
+  font-size: var(--fs-xs); font-weight: 600; color: var(--fg-3);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ============================================================
+   Empty state
+   ============================================================ */
+.empty {
+  /* Was --space-8 (96px) — an empty list spent 192px of vertical space on
+     nothing. --space-6 (48px) still centres a message with air, without the
+     empty state dominating the fold. Mobile drops it further (below). */
+  padding: var(--space-6);
+  text-align: center;
+  color: var(--fg-3);
+  background: var(--bg-2);
+  border-radius: var(--r-1);
+  font-size: var(--fs-sm);
+}
+
+/* ============================================================
+   Form
+   ============================================================ */
+.row-form {
+  display: grid; gap: 12px;
+  padding: var(--space-5);
+  background: var(--bg-2);
+  border-radius: var(--r-3);
+}
+.row-form input,
+.row-form textarea {
+  font-family: inherit; font-size: var(--fs-sm);
+  padding: 12px 16px;
+  background: var(--bg); color: var(--fg);
+  border: 0; border-radius: var(--r-2);
+  box-shadow: inset 0 0 0 1px var(--rule);
+}
+.row-form input:focus-visible,
+.row-form textarea:focus-visible { box-shadow: var(--focus-ring-inset); }
+
+/* Field char counter (TextField maxLength) — canonical definition is with
+   the rest of the .ds-field family below (states-interactions.css); this
+   duplicate was removed to stop the two bodies fighting on stylesheet load
+   order. */
+
+/* Multi-column form layout (Form columns prop) */
+.row-form[data-columns="2"] { grid-template-columns: repeat(2, 1fr); }
+.row-form[data-columns="3"] { grid-template-columns: repeat(3, 1fr); }
+@media (max-width: 600px) {
+  .row-form[data-columns="2"],
+  .row-form[data-columns="3"] { grid-template-columns: 1fr; }
+}

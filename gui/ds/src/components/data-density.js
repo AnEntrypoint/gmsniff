@@ -12,9 +12,18 @@ const h = webjsx.createElement;
 
 // ---------------------------------------------------------------------------
 // PhaseWalk — compact horizontal phase-progress indicator.
-//   phases  : ordered phase names (default the 5-stage gm chain).
+//   phases  : ordered phase names (defaults to DEFAULT_PHASES below).
 //   reached : bool[] parallel to phases — true once that phase has been hit.
 //   gapKinds: phase names that are a known gap (red), overrides reached.
+//
+// `reached` is a visited-set, deliberately NOT a "current position" index: a
+// lifecycle may revisit a phase (gm's re-plan edges run EXECUTE/EMIT/VERIFY
+// back to PLAN), and a revisit must not read as a regression or a skip. Hosts
+// therefore pass which phases have actually been entered, in any order.
+//
+// DEFAULT_PHASES is only a default. A project can redefine its phase graph
+// entirely (gm reads .gm/instructions/fsm/graph.json), so any caller that can
+// know the real list should pass `phases` explicitly rather than inheriting it.
 // ---------------------------------------------------------------------------
 export const DEFAULT_PHASES = ['PLAN', 'EXECUTE', 'EMIT', 'VERIFY', 'CONSOLIDATE', 'COMPLETE'];
 

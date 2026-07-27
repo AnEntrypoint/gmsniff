@@ -1,0 +1,157 @@
+/* ============================================================
+   247420 design system — component sheet
+   "Acid Editorial": system-font display + body + mono, no custom web fonts.
+   Confident hierarchy, asymmetric grid tension, print texture over glow,
+   one electric lead accent. Indicator rails over hairlines.
+   ============================================================ */
+
+/* ============================================================
+   Base
+   ============================================================ */
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+button, input, select, textarea { font: inherit; }
+
+/* ============================================================
+   Accessibility — Skip Link
+   ============================================================ */
+.skip-link {
+  position: absolute;
+  top: -40px;
+  left: 0;
+  background: var(--accent);
+  color: var(--accent-fg);
+  padding: 8px 16px;
+  text-decoration: none;
+  z-index: 100;
+  border-radius: var(--r-pill);
+  font-weight: 600;
+  font-size: var(--fs-sm);
+}
+.skip-link:focus {
+  top: 10px;
+  outline: var(--focus-w) solid var(--focus-color);
+  outline-offset: var(--focus-offset);
+}
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--ff-body);
+  font-size: var(--fs-body);
+  line-height: var(--lh-base);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+/* Light (paper, the default theme) needs a stronger accent share than dark to
+   clear a visible selection tint against --bg-2 -- the dark-theme value (24%)
+   read too weak on paper. Dark/ink keeps its existing 24% mix, restored below
+   in the ink/dark + auto-dark blocks (mirrors the --danger/--flame pattern of
+   scoping a value per theme rather than sharing one across both). */
+::selection { background: color-mix(in oklab, var(--accent) 46%, var(--bg-2)); color: var(--fg); }
+
+/* Every root has a CQ container so fluid type can resolve to a meaningful inline-size. */
+.app, .ds-stage {
+  container-type: inline-size;
+  overflow-x: clip;
+  min-width: 0;
+}
+.app * { min-width: 0; }
+
+/* ============================================================
+   Typography
+   ============================================================ */
+h1, .t-h1 { font-family: var(--ff-display); font-size: var(--fs-h1); line-height: var(--lh-snug); letter-spacing: var(--tr-tight); font-weight: 600; margin: 0; }
+h2, .t-h2 { font-family: var(--ff-display); font-size: var(--fs-h2); line-height: var(--lh-snug); letter-spacing: var(--tr-tight); font-weight: 600; margin: 0; }
+h3, .t-h3 { font-family: var(--ff-display); font-size: var(--fs-h3); line-height: var(--lh-snug); letter-spacing: -0.01em;          font-weight: 600; margin: 0; }
+h4, .t-h4 { font-family: var(--ff-display); font-size: var(--fs-h4); line-height: var(--lh-snug);                                  font-weight: 600; margin: 0; }
+
+/* App/chrome typescale opt-in: compact heading ceiling for application UIs. */
+[data-typescale="app"] h1, [data-typescale="app"] .t-h1 { font-size: var(--fs-h1-app); line-height: 1.15; }
+[data-typescale="app"] h2, [data-typescale="app"] .t-h2 { font-size: var(--fs-h2-app); }
+[data-typescale="app"] h3, [data-typescale="app"] .t-h3 { font-size: var(--fs-h3-app); }
+[data-typescale="app"] h4, [data-typescale="app"] .t-h4 { font-size: var(--fs-h4-app); }
+
+.t-hero    { font-family: var(--ff-display); font-size: var(--fs-hero); line-height: var(--lh-tight); letter-spacing: var(--tr-tighter); font-weight: 700; margin: 0; }
+.t-mega    { font-family: var(--ff-display); font-size: var(--fs-mega); line-height: 0.92;            letter-spacing: var(--tr-tighter); font-weight: 700; margin: 0; }
+
+.t-display { font-family: var(--ff-display); font-weight: 600; letter-spacing: var(--tr-tight); }
+.t-mono    { font-family: var(--ff-mono); }
+.t-body    { font-family: var(--ff-body); }
+
+.t-label   { font-family: var(--ff-mono); font-size: var(--fs-tiny); text-transform: uppercase; letter-spacing: var(--tr-label); font-weight: 500; }
+.t-micro   { font-family: var(--ff-mono); font-size: var(--fs-micro); text-transform: uppercase; letter-spacing: var(--tr-label); color: var(--fg-3); }
+.t-meta    { font-family: var(--ff-body); font-size: var(--fs-sm); color: var(--fg-3); }
+
+.lede, .t-lede {
+  font-family: var(--ff-body); font-size: var(--fs-xl);
+  line-height: var(--lh-tall); max-width: 38ch; font-weight: 400; color: var(--fg-2);
+  margin: 0;
+}
+
+.eyebrow {
+  font-family: var(--ff-mono);
+  font-size: var(--fs-tiny);
+  font-weight: 600;
+  letter-spacing: var(--tr-label);
+  text-transform: uppercase;
+  color: var(--accent-ink);
+  display: inline-flex; align-items: center; gap: 12px;
+}
+/* Editorial kicker mark — a short solid ink rule, the print-byline tell. */
+.eyebrow::before {
+  content: '';
+  width: 28px; height: 3px; background: currentColor;
+}
+
+.ds-prose {
+  font-family: var(--ff-body);
+  font-size: var(--fs-lg);
+  line-height: var(--lh-long);
+  max-width: var(--measure);
+  text-wrap: pretty;
+}
+.ds-prose p  { margin: 0 0 var(--space-4); }
+.ds-prose h1 { font-size: clamp(34px, 5.4cqi, 64px); margin-bottom: var(--space-3); }
+.ds-prose h2 { margin: var(--space-6) 0 var(--space-3); }
+.ds-prose h3 { margin: var(--space-5) 0 var(--space-2); font-size: var(--fs-lg); font-weight: 600; }
+
+.dim { color: var(--fg-3); }
+
+/* Links */
+a { color: inherit; text-decoration: none; }
+a.ds-link-accent, .ds-prose a {
+  color: var(--accent-ink);
+  text-decoration: underline;
+  text-underline-offset: 4px;
+  text-decoration-thickness: 2px;
+}
+a.ds-link-accent:hover, .ds-prose a:hover {
+  background: var(--accent); color: var(--accent-fg); text-decoration-color: transparent;
+}
+
+kbd {
+  font-family: var(--ff-mono); font-size: 0.85em;
+  background: var(--bg-2); padding: 2px 6px; border-radius: var(--r-1);
+}
+
+code {
+  font-family: var(--ff-mono); font-size: 0.92em;
+  background: var(--bg-2); padding: 0.15em 0.5em; border-radius: var(--r-1);
+}
+
+pre {
+  font-family: var(--ff-mono);
+  background: var(--panel-bg);
+  color: var(--panel-text, inherit);
+  padding: var(--space-5);
+  overflow-x: auto;
+  line-height: 1.55;
+  font-size: var(--fs-sm);
+  margin: 0;
+  border-radius: var(--r-3);
+}
+pre .k { color: var(--code-str-alt, var(--mascot)); }
+pre .s { color: var(--code-string, var(--green)); }
+pre .c { color: var(--fg-3); }
+pre .n { color: var(--code-num); }
+

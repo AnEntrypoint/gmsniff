@@ -48,10 +48,50 @@ const FILES = [
   ['src/components/overlay-primitives.js', 'src/components/overlay-primitives.js'],
   ['src/components/shell.js', 'src/components/shell.js'],
   ['src/components/theme-toggle.js', 'src/components/theme-toggle.js'],
+  // Live-agent-manager surface: SessionDashboard/SessionCard (per-agent stop /
+  // open / view + bulk selection), ContextPane, EmptyState/fmtFileSize, the
+  // form + interaction primitives, and the virtualizer LiveStream's 500-row
+  // render cap works around. Every import in this set resolves relatively
+  // within gui/ds (verified: zero bare specifiers in the transitive closure),
+  // so the bundler-free importmap in gui/index.html needs no new mapping.
+  ['src/components/sessions.js', 'src/components/sessions.js'],
+  ['src/components/context-pane.js', 'src/components/context-pane.js'],
+  ['src/components/files.js', 'src/components/files.js'],
+  ['src/components/form-primitives.js', 'src/components/form-primitives.js'],
+  ['src/components/interaction-primitives.js', 'src/components/interaction-primitives.js'],
+  ['src/virtual-scroll.js', 'src/virtual-scroll.js'],
+  // Leaf utilities the above import transitively -- no further dependencies.
+  ['src/locale.js', 'src/locale.js'],
+  ['src/i18n.js', 'src/i18n.js'],
+  ['src/debug.js', 'src/debug.js'],
   ['src/theme.js', 'src/theme.js'],
+  // app-shell.css is only an @import manifest pointing at src/css/app-shell/*;
+  // vendoring it without those 17 sheets makes every rule 404 and silently
+  // dead (which is exactly what happened before -- PhaseWalk, StatTile, and
+  // every other data-density component rendered unstyled). The parts must
+  // stay listed alongside it.
   ['app-shell.css', 'app-shell.css'],
   ['colors_and_type.css', 'colors_and_type.css'],
   ['editor-primitives.css', 'editor-primitives.css'],
+  // .ds-dash* / .ds-session* / .ds-context / status discs live here.
+  ['chat.css', 'chat.css'],
+  ['src/css/app-shell/base.css', 'src/css/app-shell/base.css'],
+  ['src/css/app-shell/topbar.css', 'src/css/app-shell/topbar.css'],
+  ['src/css/app-shell/primitives.css', 'src/css/app-shell/primitives.css'],
+  ['src/css/app-shell/panel-row.css', 'src/css/app-shell/panel-row.css'],
+  ['src/css/app-shell/hero-content.css', 'src/css/app-shell/hero-content.css'],
+  ['src/css/app-shell/responsive.css', 'src/css/app-shell/responsive.css'],
+  ['src/css/app-shell/chat-basic.css', 'src/css/app-shell/chat-basic.css'],
+  ['src/css/app-shell/files.css', 'src/css/app-shell/files.css'],
+  ['src/css/app-shell/catalog-theme.css', 'src/css/app-shell/catalog-theme.css'],
+  ['src/css/app-shell/chat-polish.css', 'src/css/app-shell/chat-polish.css'],
+  ['src/css/app-shell/sidebar-misc.css', 'src/css/app-shell/sidebar-misc.css'],
+  ['src/css/app-shell/states-interactions.css', 'src/css/app-shell/states-interactions.css'],
+  ['src/css/app-shell/loading-alerts.css', 'src/css/app-shell/loading-alerts.css'],
+  ['src/css/app-shell/responsive2-workspace.css', 'src/css/app-shell/responsive2-workspace.css'],
+  ['src/css/app-shell/row-print.css', 'src/css/app-shell/row-print.css'],
+  ['src/css/app-shell/data-density.css', 'src/css/app-shell/data-density.css'],
+  ['src/css/app-shell/kits-appended.css', 'src/css/app-shell/kits-appended.css'],
   ['vendor/webjsx/applyDiff.js', 'vendor/webjsx/applyDiff.js'],
   ['vendor/webjsx/attributes.js', 'vendor/webjsx/attributes.js'],
   ['vendor/webjsx/constants.js', 'vendor/webjsx/constants.js'],

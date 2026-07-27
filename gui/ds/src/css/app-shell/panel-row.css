@@ -1,0 +1,177 @@
+/* ============================================================
+   Panel — soft tonal container, no border decoration
+   ============================================================ */
+.panel {
+  background: var(--panel-1, var(--bg-2));
+  border: var(--bw-hair) solid var(--rule);
+  border-radius: var(--r-2);
+  margin: 0 0 var(--space-4);
+  padding: var(--space-3);
+  position: relative;
+  /* Crisp, restrained elevation — a hairline border does the edge definition;
+     the shadow only adds a whisper of lift, not a soft glow-card float. */
+  box-shadow: var(--shadow-1);
+  transition: box-shadow var(--dur-base) var(--ease-spring), border-color var(--dur-snap) var(--ease),
+    transform var(--dur-base) var(--ease-spring);
+}
+/* Editorial accent spine — an opt-in printed-ink rule down the left edge that
+   reads as a magazine pull-quote bar, not a glow card. */
+.panel.panel-spine {
+  border-radius: 0 var(--r-2) var(--r-2) 0;
+  padding-left: calc(var(--space-3) + var(--bw-chunk));
+}
+.panel.panel-spine::before {
+  content: ''; position: absolute; left: 0; top: 0; bottom: 0;
+  width: var(--bw-chunk); background: var(--accent);
+  border-radius: var(--bw-chunk) 0 0 var(--bw-chunk);
+}
+.panel.panel-inline { background: var(--bg-2); padding: var(--space-3) var(--space-3); }
+.panel.panel-wide   { background: transparent; box-shadow: none; border: none; }
+/* Dense panel — a compact container for app surfaces (inspector sections,
+   sidebars) that want the .panel look without the roomy 16px pad + 24px stack
+   gap. Tighter corner + padding + head, so it sits between .panel and the
+   flush editor .ds-ep-panel. */
+.panel.panel--dense {
+  padding: var(--space-2); margin-bottom: var(--space-2-75);
+  border-radius: var(--r-1);
+}
+.panel.panel--dense .panel-head { padding: var(--space-1-5) var(--space-2); }
+.panel.panel--dense .panel-body { padding: var(--space-1-5) var(--space-2) var(--space-2); }
+.panel.panel--dense .panel-body > * + * { margin-top: var(--space-2); }
+.panel-head {
+  display: flex; align-items: baseline; justify-content: space-between;
+  /* Shares the .panel-body 16px side padding so the caps label and the body
+     rows sit on ONE left axis (the old 24/32 padding was authored for the
+     pre-padding .panel-wide era and indented the label 16px past its content). */
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--fs-tiny); font-weight: 600;
+  color: var(--fg-3);
+  letter-spacing: var(--tr-caps); text-transform: uppercase;
+}
+.panel.panel-wide .panel-head { padding-left: 0; padding-right: 0; }
+.panel-head > :last-child {
+  font-weight: 500; color: var(--fg-3);
+  font-family: var(--ff-mono); letter-spacing: 0;
+}
+.panel-body { padding: var(--space-2) var(--space-3) var(--space-3); }
+.panel-body > * { margin: 0; }
+.panel-body > * + * { margin-top: var(--space-3); }
+.panel.panel-wide .panel-body { padding: 0; }
+
+/* ============================================================
+   Row — primary list pattern. Indicator rail on the left,
+   no hairlines between rows.
+   ============================================================ */
+.row {
+  display: grid;
+  grid-template-columns: minmax(80px, 12ch) minmax(0, 1fr) auto;
+  gap: var(--space-3);
+  align-items: baseline;
+  /* App density is the BASE: a list row is quiet working chrome, so it defaults
+     to the compact 12px/16px rhythm (density-scaled) rather than the old
+     16px/24px marketing padding. .row--lede restores the roomier marketing
+     voice for editorial index pages. */
+  padding: calc(var(--space-2-75) * var(--density)) var(--space-3);
+  background: var(--bg);
+  border-radius: var(--r-1);
+  color: var(--fg);
+  position: relative;
+  /* Only background + the leading rail animate; padding/size never change on
+     interaction, so they are deliberately absent (a padding transition here was
+     dead and misleading). */
+  transition: background var(--dur-snap) var(--ease), box-shadow var(--dur-base) var(--ease-spring);
+}
+.row + .row { margin-top: 2px; }
+/* Interactive rows (anchor/button wrappers) get a hairline lift on hover,
+   matching the btn/panel elevation language — non-interactive rows (plain
+   divs used as static list items) are unaffected since the selector needs a
+   real interactive role. */
+a.row:hover, button.row:hover, .row[role="button"]:hover {
+  box-shadow: var(--shadow-1);
+}
+/* `detail` drops to its own full-width line. The row is a grid, so span every
+   track (grid-column 1/-1); flex-basis:100% covers the flex-row fallback. */
+.ds-row-detail {
+  white-space: pre-wrap;
+  font-family: var(--ff-mono);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-snug);
+  margin-top: var(--space-2);
+  padding: 10px 12px;
+  background: var(--bg);
+  border-radius: var(--r-1);
+  overflow-x: auto;
+  flex-basis: 100%;
+  grid-column: 1 / -1;
+}
+.row::before {
+  content: '';
+  position: absolute; left: 7px; top: 0; bottom: 0; width: 3px;
+  margin: auto 0;
+  height: 0;                 /* collapsed by default; reveals from centre */
+  background: var(--rule-strong);
+  border-radius: var(--r-pill);
+  opacity: 0;
+  transition: height var(--dur-base) var(--ease), opacity var(--dur-snap) var(--ease), background var(--dur-snap) var(--ease);
+}
+/* A clickable row (onClick -> role=button, or a link row) is interactive, so it
+   carries a pointer cursor; without this the click affordance is invisible. */
+.row[role="button"], a.row { cursor: pointer; }
+/* Hover reveals the rail (grows from centre) only on interactive rows — a static
+   row should not signal an affordance it does not have. */
+.row[role="button"]:hover, a.row:hover { background: var(--bg-2); }
+.row[role="button"]:hover::before, a.row:hover::before { height: 56%; opacity: 1; }
+/* Editorial hover-reveal — the row's meta (cta) slides toward the lead accent
+   and nudges right, the printed-index "open ->" affordance. */
+.row .meta { transition: color var(--dur-base) var(--ease), transform var(--dur-base) var(--ease-spring); }
+a.row:hover .meta, .row[role="button"]:hover .meta { color: var(--accent-ink); transform: translateX(3px); }
+.row.active { background: color-mix(in oklab, var(--accent) 10%, var(--bg-2)); }
+.row.active::before { height: 64%; opacity: 1; background: var(--accent); }
+.row.active .title { color: var(--accent-ink); }
+.row.row-state-disabled { opacity: 0.5; pointer-events: none; }
+.row.row-state-error { background: color-mix(in oklab, var(--flame) 10%, var(--bg-2)); }
+.row.row-state-error::before { height: 64%; opacity: 1; background: var(--flame); }
+/* rail tones — a persistent status colour on the leading rail (the ::before
+   bar). Always shown (a status indicator, not a hover affordance). Active/error
+   still win via their own rules below in source order. */
+.row.rail-green::before,
+.row.rail-purple::before,
+.row.rail-flame::before { height: 56%; opacity: 1; }
+.row.rail-green::before  { background: var(--accent-ink); }
+.row.rail-purple::before { background: var(--purple-2); }
+.row.rail-flame::before  { background: var(--flame); }
+/* Differentiate the rail by SHAPE, not hue alone (color-blind safety): error
+   reads as a taller solid bar, subagent as a dashed/gapped fill, ok stays the
+   short solid bar. Paired with the sr-only status word emitted by Row(). */
+.row.rail-flame::before  { height: 64%; }
+.row.rail-purple::before { background: repeating-linear-gradient(var(--purple-2) 0 4px, transparent 4px 7px); }
+.row-grid { /* explicit grid-template-columns set inline */ }
+/* A row with no leading code/index drops the empty first column so the title
+   takes the full width instead of wrapping in the narrow code gutter. */
+.row.row-nocode { grid-template-columns: minmax(0, 1fr) auto; }
+
+.row .code  { font-family: var(--ff-mono); font-size: var(--fs-xs); color: var(--fg-3); font-variant-numeric: tabular-nums; letter-spacing: 0.01em; }
+/* Title defaults to the quiet app voice (fs-sm/500) — the 18px/600 marketing
+   voice is now opt-in via .row--lede. */
+.row .title { font-family: var(--ff-body); font-weight: 500; font-size: var(--fs-sm); line-height: var(--lh-snug); display: flex; align-items: baseline; gap: var(--space-2-5); flex-wrap: wrap; min-width: 0; }
+.row .title .sub { font-family: var(--ff-body); font-weight: 400; font-size: var(--fs-sm); color: var(--fg-3); }
+/* Marketing/editorial index row — restores the roomier padding + larger title
+   the default carried before app-scale became the base. */
+.row--lede { padding: var(--space-3) var(--space-4); }
+.row--lede .title { font-size: var(--fs-lg); font-weight: 600; }
+/* App typescale: list rows are quiet working chrome (the 18px/600 default is a
+   marketing-surface voice). One size for ALL app list rows - matches
+   .ds-file-row/.ds-session-title at fs-sm/500; values mirror the kit's own
+   mobile block below. Marketing pages without data-typescale keep the default. */
+[data-typescale="app"] .row { padding: 12px 16px; }
+[data-typescale="app"] .row .title { font-size: var(--fs-sm); font-weight: 500; }
+.row .sub   { font-family: var(--ff-body); font-weight: 400; font-size: var(--fs-sm); color: var(--fg-3); }
+/* Context-pane cwd fact reads as a path (like .ds-dash-cwd/.ds-session-agent/
+   .ds-dash-model) -- scoped to that one row so no other Row .sub is affected. */
+.ds-context-cwd-row .row .sub { font-family: var(--ff-mono); }
+.row .meta  { font-family: var(--ff-mono); font-size: var(--fs-xs); color: var(--fg-3); text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; align-self: center; }
+/* WorksList meta pairs a label with a disclosure chevron, inline-aligned. */
+.ds-works-meta { display: inline-flex; align-items: center; gap: .4em; }
+
+a.row { text-decoration: none; }
+

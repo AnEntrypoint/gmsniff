@@ -5,36 +5,54 @@ import { ThemeToggle } from 'ds/components/theme-toggle.js';
 import { CommandPalette } from 'ds/components/overlay-primitives.js';
 import { state, loadProjects, api, toast } from './data.js';
 import {
-  Dashboard, ByDay, LiveStream, pushLiveEntry, AllEvents, Search, SubsystemPanel,
+  Dashboard, ByDay, LiveStream, pushLiveEntry, AllEvents, SubsystemPanel,
   Deviations, Sessions, ProcessTree,
   PrdEditor, MutablesEditor, LifecycleControl, Codesearch, GmCallConsole,
-  BrowserSessions, ConversationHistory, CodeInsightPanel, MemoryGraphPanel, stopMemoryGraphLayout, SUB_LIST,
-  lifecycleAct, runCodesearch, dispatchConsole, liveStreamDebugSnapshot, SkillLayout,
+  BrowserSessions, CodeInsightPanel, MemoryGraphPanel, stopMemoryGraphLayout,
+  lifecycleAct, runCodesearch, dispatchConsole, liveStreamDebugSnapshot,
 } from './panels.js';
+import {
+  LiveAgents, liveState, appendLiveEvent, applyAutoscroll, loadAgentContext,
+  openDrilldown, closeDrilldown, agentKey,
+} from './live-agents.js';
+import { loadCapabilities, subsystemList, basename } from './shared.js';
 
 const h = webjsx.createElement;
 const root = document.getElementById('root');
 
+// Panels removed in this rework, kept ONLY as redirect targets so an existing
+// bookmark or shared deep link lands somewhere sensible instead of dead-ending:
+//   skill-layout  -> agents      (renamed; this IS the same view, rebuilt)
+//   search-panel  -> events      (Search was a second UI over the same rows)
+//   conversations -> tree        (a strict 6-of-27-kind subset of Process Tree)
+const PANEL_ALIASES = {
+  'skill-layout': 'agents',
+  'search-panel': 'events',
+  conversations: 'tree',
+};
+
 const NAV = {
-  'skill-layout': 'Skill Layout',
-  overview: 'Dashboard', days: 'By Day', live: 'Live Stream', events: 'All Events', 'search-panel': 'Search',
+  agents: 'Live Agents',
+  overview: 'Dashboard', days: 'By Day', live: 'Live Stream', events: 'All Events',
   deviations: 'Deviations', sessions: 'Sessions', tree: 'Process Tree',
   prd: 'PRD Editor', mutables: 'Mutables Editor', lifecycle: 'Lifecycle Control',
   codesearch: 'Codesearch', console: 'GM Call Console',
-  'browser-sessions': 'Browser Sessions', conversations: 'Conversations',
+  'browser-sessions': 'Browser Sessions',
   codeinsight: 'CodeInsight', 'memory-graph': 'Memory Graph',
 };
 
 const ui = {
-  panel: 'skill-layout',
+  panel: 'agents',
   connState: 'connecting',
   devTotal: 0,
   treeSess: '',
-  convSess: '',
-  sessListCache: [],
   bodyNode: null,
   health: [],
   paletteOpen: false,
+  sessListCache: [],
+  lastEventId: null,
+  missedFrames: 0,
+  streamNote: null,
 };
 
 // ---------------------------------------------------------------------------
@@ -48,11 +66,15 @@ const ui = {
 function parseHash(hash) {
   const raw = (hash || '').replace(/^#/, '');
   const params = new URLSearchParams(raw);
-  const panel = params.get('panel');
+  let panel = params.get('panel');
+  if (panel && PANEL_ALIASES[panel]) panel = PANEL_ALIASES[panel];
   return {
     panel: panel && NAV[panel] !== undefined ? panel : (panel && panel.startsWith('sub-') ? panel : null),
     treeSess: params.get('tree') || '',
-    convSess: params.get('conv') || '',
+    // Live Agents sub-state: which agent's drilldown is open and what the list
+    // is filtered to, so "look at this agent right now" is a shareable link.
+    agent: params.get('agent') || '',
+    filter: params.get('q') || '',
   };
 }
 
@@ -60,7 +82,10 @@ function hashForState() {
   const params = new URLSearchParams();
   params.set('panel', ui.panel);
   if (ui.panel === 'tree' && ui.treeSess) params.set('tree', ui.treeSess);
-  if (ui.panel === 'conversations' && ui.convSess) params.set('conv', ui.convSess);
+  if (ui.panel === 'agents') {
+    if (liveState.open) params.set('agent', liveState.open);
+    if (liveState.filter) params.set('q', liveState.filter);
+  }
   return '#' + params.toString();
 }
 
@@ -79,7 +104,8 @@ function syncHash() {
 function applyHashState(parsed) {
   if (parsed.panel) ui.panel = parsed.panel;
   ui.treeSess = parsed.treeSess;
-  ui.convSess = parsed.convSess;
+  liveState.open = parsed.agent || null;
+  liveState.filter = parsed.filter || '';
 }
 
 window.addEventListener('popstate', () => {
@@ -199,20 +225,58 @@ function healthRowSeverity(row) {
   return 'ok';
 }
 
+// Says WHY each named project is unhealthy. A bare "Health: critical" followed
+// by 140 comma-separated names states a severity without a cause and buries the
+// live agents under the machine's entire abandoned backlog -- so the banner now
+// carries the reason per project, caps the list, and says how many it omitted.
+const HEALTH_BANNER_MAX = 6;
+
+function healthReason(r) {
+  const bits = [];
+  if (!r.watcherAlive) bits.push('watcher not running');
+  if (r.staleSeconds == null) bits.push('no events ever');
+  else if (r.staleSeconds >= HEALTH_STALE_FULL_SEC) bits.push(`silent ${Math.round(r.staleSeconds / 60)}m`);
+  if ((r.deviationRate || 0) >= HEALTH_DEV_RATE_AMBER_PER_MIN) bits.push(`${r.deviationRate.toFixed(1)} deviations/min`);
+  return bits.join(', ') || 'degraded';
+}
+
 function HealthBanner() {
   const rows = ui.health || [];
   const offending = rows.map(r => ({ ...r, severity: healthRowSeverity(r) })).filter(r => r.severity !== 'ok');
   if (!offending.length) return null;
   const tone = offending.some(r => r.severity === 'red') ? 'red' : 'amber';
+  // Most of this machine's "unhealthy" projects are simply finished or
+  // abandoned, so a red banner listing all of them is noise. Worst-first, capped.
+  const ranked = [...offending].sort((a, b) => (b.deviationRate || 0) - (a.deviationRate || 0));
+  const shown = ranked.slice(0, HEALTH_BANNER_MAX);
+  const omitted = ranked.length - shown.length;
   return h('div', { class: 'gm-health-banner gm-health-' + tone, role: 'alert' },
-    h('span', { class: 'gm-health-label' }, tone === 'red' ? 'Health: critical' : 'Health: degraded'),
-    h('span', { class: 'gm-health-list' }, ...offending.map((r, i) => h('button', {
+    h('span', { class: 'gm-health-label' },
+      `${tone === 'red' ? 'Health: critical' : 'Health: degraded'} (${offending.length} of ${rows.length} projects)`),
+    h('span', { class: 'gm-health-list' }, ...shown.map(r => h('button', {
       type: 'button',
       key: 'health-' + r.cwd,
       class: 'gm-health-item gm-health-item-' + r.severity,
-      title: r.cwd,
+      title: `${r.cwd} -- ${healthReason(r)}`,
       onclick: () => switchToProject(r.cwd),
-    }, r.name + (i < offending.length - 1 ? ', ' : '')))));
+    }, `${r.name} (${healthReason(r)})`))),
+    omitted > 0 ? h('span', { class: 'gm-health-omitted' }, `and ${omitted} more`) : null);
+}
+
+// A dropped/resumed stream, or a watcher failing, previously produced no visible
+// reaction at all -- the UI simply stopped updating and looked idle. This states
+// the transport's condition so a quiet screen is never mistaken for a quiet system.
+function StreamNote() {
+  if (!ui.streamNote) return null;
+  return h('div', {
+    class: 'gm-stream-note', role: 'status', 'aria-live': 'polite',
+  },
+    h('span', {}, ui.streamNote),
+    h('button', {
+      type: 'button', class: 'gm-stream-note-x',
+      onclick: () => { ui.streamNote = null; renderShell(); },
+      'aria-label': 'dismiss',
+    }, 'x'));
 }
 
 // ---------------------------------------------------------------------------
@@ -259,15 +323,27 @@ function statusGlance() {
 
 function renderShell() {
   const advSections = [
-    { group: 'Subsystems', items: SUB_LIST.map(s => navItem('sub-' + s, s)) },
+    { group: 'Subsystems', items: subsystemList().map(s => navItem('sub-' + s, s)) },
     { group: 'Analytics', items: [navItem('codeinsight', 'CodeInsight'), navItem('memory-graph', 'Memory Graph')] },
     { group: 'Control', items: [navItem('prd', 'PRD Editor'), navItem('mutables', 'Mutables Editor'), navItem('lifecycle', 'Lifecycle Control'), navItem('codesearch', 'Codesearch'), navItem('console', 'GM Call Console'), navItem('browser-sessions', 'Browser Sessions')] },
   ];
   const advCount = advSections.reduce((n, s) => n + s.items.length, 0);
+  // Exactly ONE live view leads. Live Agents is the manager surface; everything
+  // else is a forensic tool you reach for after it tells you where to look, so
+  // Investigate is collapsed alongside the other secondary groups rather than
+  // competing with the lead view for first attention.
   const side = Side({
     sections: [
-      { group: 'Daily', items: [navItem('skill-layout', 'Skill Layout'), navItem('overview', 'Dashboard'), navItem('live', 'Live Stream'), navItem('deviations', 'Deviations', ui.devTotal || null), navItem('sessions', 'Sessions')] },
-      { group: 'Investigate', items: [navItem('days', 'By Day'), navItem('events', 'All Events'), navItem('search-panel', 'Search'), navItem('tree', 'Process Tree'), navItem('conversations', 'Conversations')] },
+      { group: 'Live', items: [navItem('agents', 'Live Agents')] },
+      { group: 'Investigate', items: [
+        navItem('deviations', 'Deviations', ui.devTotal || null),
+        navItem('live', 'Live Stream'),
+        navItem('events', 'All Events'),
+        navItem('sessions', 'Sessions'),
+        navItem('tree', 'Process Tree'),
+        navItem('overview', 'Dashboard'),
+        navItem('days', 'By Day'),
+      ] },
       { group: 'Advanced', items: [{ label: navAdvanced ? 'Hide advanced' : 'Show advanced', href: '#', onClick: toggleAdvanced, count: navAdvanced ? null : advCount }] },
       ...(navAdvanced ? advSections : []),
     ],
@@ -293,7 +369,7 @@ function renderShell() {
     // Persistent health banner sits above the panel router (bodyContainer) inside main,
     // so it is visible regardless of which panel is active, and hidden entirely (null) when
     // every discovered project is healthy.
-    main: [HealthBanner(), bodyContainer],
+    main: [HealthBanner(), StreamNote(), bodyContainer],
     status: Status({ left: ['gmsniff'], right: [state.cwd || '(own root)', statusGlance()].filter(Boolean) }),
   });
   webjsx.applyDiff(root, app);
@@ -320,6 +396,44 @@ function renderShell() {
 // SSE-driven re-renders (live tick, deviation badge, session-list poll)
 // which resolve near-instantly against already-fetched/cached data and must
 // stay flicker-free -- gating the spinner on `force` keeps those silent.
+// Scoped re-render: an ambient data update only needs the panel container
+// re-diffed, not the whole shell (sidebar, topbar, status bar, palette host).
+// renderShell() stays the path for anything that actually changes the shell
+// (nav counts, connection chip, health banner) -- everything else lands here.
+function renderPanelOnly() {
+  const container = document.getElementById('panel-body');
+  if (!container) { renderShell(); return; }
+  webjsx.applyDiff(container, h('main', { id: 'panel-body', class: 'gm-panel-body' }, ui.bodyNode));
+  applyAutoscroll();
+}
+
+// SSE frames arrive in bursts (a single agent turn emits dispatch.start,
+// several prd.*, instruction.served and dispatch.end within a few ms). Rendering
+// each one synchronously meant a full refetch + full shell re-diff per frame.
+// Coalescing into one animation frame collapses a burst into a single render.
+let renderQueued = false;
+let renderWantsFetch = false;
+function scheduleRender({ refetch = false } = {}) {
+  renderWantsFetch = renderWantsFetch || refetch;
+  if (renderQueued) return;
+  renderQueued = true;
+  requestAnimationFrame(async () => {
+    renderQueued = false;
+    const wantFetch = renderWantsFetch;
+    renderWantsFetch = false;
+    if (wantFetch) {
+      await renderBody();
+    } else {
+      // No refetch: the panel's own client-held state already changed (a feed
+      // append), so re-render the panel from that state alone.
+      try {
+        ui.bodyNode = await computeBody(false);
+        renderPanelOnly();
+      } catch (_) { await renderBody(); }
+    }
+  });
+}
+
 async function renderBody(force) {
   if (force) {
     ui.bodyNode = h('div', { class: 'ds-panel gm-panel-loading' }, Spinner({ label: 'loading ' + (NAV[ui.panel] || ui.panel) }));
@@ -347,30 +461,26 @@ async function renderBody(force) {
       }));
   }
   renderShell();
+  applyAutoscroll();
 }
 
 async function computeBody(force) {
   const p = ui.panel;
   const setBody = (f) => renderBody(f);
   if (p !== 'memory-graph') stopMemoryGraphLayout();
-  if (p === 'skill-layout') return SkillLayout(setBody);
+  if (p === 'agents') return LiveAgents({ connState: ui.connState, onNav: go }, setBody);
   if (p === 'overview') return Dashboard({ onNav: go, devTotal: ui.devTotal, health: ui.health });
   if (p === 'days') return ByDay();
   if (p === 'live') return LiveStream({ connState: ui.connState }, setBody);
   if (p === 'events') return AllEvents(setBody);
-  if (p === 'search-panel') return Search(setBody);
   if (p.startsWith('sub-')) return SubsystemPanel(p.slice(4), setBody);
   if (p === 'deviations') return Deviations(setBody);
   if (p === 'sessions') return Sessions((sess) => { ui.treeSess = sess; ui.panel = 'tree'; syncHash(); renderBody(true).then(focusMain); }, setBody);
   if (p === 'tree') {
     if (!ui.sessListCache.length || force) { const r = await api('/api/sessions?limit=200'); ui.sessListCache = r.rows || []; }
     return ProcessTree(ui.treeSess, ui.sessListCache, (sess) => { ui.treeSess = sess; syncHash(); renderBody(); },
-      (sess) => { ui.convSess = sess; ui.panel = 'conversations'; syncHash(); renderBody(true).then(focusMain); },
+      null,
       () => renderBody(true)); // refresh: force=true re-fetches sessListCache + process-tree via this same computeBody path
-  }
-  if (p === 'conversations') {
-    if (!ui.sessListCache.length || force) { const r = await api('/api/sessions?limit=200'); ui.sessListCache = r.rows || []; }
-    return ConversationHistory(ui.convSess, ui.sessListCache, (sess) => { ui.convSess = sess; syncHash(); renderBody(); });
   }
   if (p === 'prd') return PrdEditor(setBody);
   if (p === 'mutables') return MutablesEditor(setBody);
@@ -380,12 +490,12 @@ async function computeBody(force) {
   if (p === 'browser-sessions') return BrowserSessions();
   if (p === 'codeinsight') return CodeInsightPanel(setBody);
   if (p === 'memory-graph') return MemoryGraphPanel();
-  // Unknown panel id (removed panel, stale bookmark/deep link) -- degrade to the default
-  // landing panel rather than a dead end, since NAV[p] is already undefined for these ids
-  // (parseHash's own fallback only catches load-time hashes, not a runtime navigation attempt).
-  ui.panel = 'skill-layout';
+  // Unknown panel id (removed panel, stale bookmark/deep link) -- degrade to the
+  // default landing panel rather than a dead end. PANEL_ALIASES already redirects
+  // the ids this rework retired; this catches anything else.
+  ui.panel = 'agents';
   syncHash();
-  return SkillLayout(setBody);
+  return LiveAgents({ connState: ui.connState, onNav: go }, setBody);
 }
 
 // Keyboard-only nav: webjsx reuses the sidebar <a> DOM node across the
@@ -422,30 +532,135 @@ async function refreshDeviationBadge() {
   renderShell();
 }
 
+// ---------------------------------------------------------------------------
+// SSE SUBSCRIPTION REGISTRY -- panels declare which frame families they care
+// about instead of app.js carrying a hardcoded if-ladder on ui.panel. A frame
+// that matches no subscription costs nothing; a panel added later subscribes
+// here rather than editing the dispatch path.
+//
+// `wants` returns 'append' (the panel updated its own client-held state, so
+// re-render from that without a refetch) or 'refetch' (the panel's server data
+// genuinely changed) or false.
+// ---------------------------------------------------------------------------
+const SSE_SUBSCRIPTIONS = [
+  {
+    panel: 'agents',
+    wants: (ev) => {
+      // Incremental append: the frame lands directly in the matching agent's
+      // feed and the panel re-renders from client state -- no live-state
+      // refetch, no lost scroll position.
+      const key = appendLiveEvent(ev, liveState.rows);
+      if (key) return 'append';
+      // A plugkit frame for a project we are NOT tracking yet is a genuinely new
+      // agent, which does require pulling the roster.
+      return ev._sub === 'plugkit' ? 'refetch' : false;
+    },
+  },
+  { panel: 'live', wants: () => 'append' },
+  { panel: 'overview', wants: (ev) => (ev._sub === 'plugkit' ? 'refetch' : false) },
+  { panel: 'sessions', wants: (ev) => (ev._sub === 'plugkit' ? 'refetch' : false) },
+  { panel: 'deviations', wants: (ev) => (isDeviation(ev) ? 'refetch' : false) },
+];
+
+function isDeviation(ev) {
+  return typeof ev.event === 'string' && ev.event.startsWith('deviation.');
+}
+
+// Notify-on-state-change: transitions, deviations and gate denials bump a
+// title-bar counter while the tab is hidden, so gmsniff is useful unattended.
+let unseenCount = 0;
+const BASE_TITLE = document.title;
+function noteStateChange(ev) {
+  const notable = isDeviation(ev) || ev.event === 'phase.transitioned';
+  if (!notable) return;
+  if (document.visibilityState === 'hidden') {
+    unseenCount++;
+    document.title = `(${unseenCount}) ${BASE_TITLE}`;
+  }
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') { unseenCount = 0; document.title = BASE_TITLE; }
+});
+
 let sse = null;
 let reconnectDelay = 1000;
+
+function handleFrame(ev) {
+  pushLiveEntry(ev);
+  noteStateChange(ev);
+  if (isDeviation(ev)) refreshDeviationBadge();
+  let mode = false;
+  for (const sub of SSE_SUBSCRIPTIONS) {
+    if (sub.panel !== ui.panel) continue;
+    const want = sub.wants(ev);
+    if (want === 'refetch') { mode = 'refetch'; break; }
+    if (want === 'append') mode = mode || 'append';
+  }
+  if (mode) scheduleRender({ refetch: mode === 'refetch' });
+}
+
 function connectSSE() {
+  // Last-Event-ID replay: EventSource sends the header automatically from the
+  // `id:` field the server already emits, so a reconnect after a backoff gap
+  // resumes rather than silently dropping whatever arrived while disconnected.
   sse = new EventSource('/api/stream');
-  sse.addEventListener('hello', () => { ui.connState = 'live'; reconnectDelay = 1000; renderShell(); if (ui.panel === 'live') renderBody(); });
+
+  sse.addEventListener('hello', () => {
+    ui.connState = 'live';
+    reconnectDelay = 1000;
+    ui.streamNote = ui.missedFrames ? `resumed -- ${ui.missedFrames} frame(s) may have been missed while disconnected` : null;
+    renderShell();
+    if (ui.panel === 'live' || ui.panel === 'agents') scheduleRender({ refetch: true });
+  });
+
   sse.addEventListener('event', (e) => {
+    if (e.lastEventId) ui.lastEventId = e.lastEventId;
+    try { handleFrame(JSON.parse(e.data)); } catch (_) {}
+  });
+
+  // Previously ignored entirely: a watcher dying or a new agent starting
+  // produced NO UI reaction at all. Each now updates the roster and says so.
+  sse.addEventListener('error', (e) => {
+    // A server-sent `error` FRAME (a watcher failed) -- distinct from the
+    // transport-level onerror below, which fires with no data.
+    if (!e || !e.data) return;
     try {
-      const ev = JSON.parse(e.data);
-      pushLiveEntry(ev);
-      if (ui.panel === 'live') renderBody();
-      if (ui.panel === 'overview') renderBody();
-      if (typeof ev.event === 'string' && ev.event.startsWith('deviation.')) refreshDeviationBadge();
-      if (ui.panel === 'deviations' && typeof ev.event === 'string' && ev.event.startsWith('deviation.')) renderBody();
-      if (ui.panel === 'sessions') renderBody();
-      // Skill Layout's instruction+output feed only changes on plugkit dispatch/phase events
-      // (not every raw log line -- e.g. hook/exec noise from an unrelated subsystem would
-      // otherwise force a full projects/live-state re-fetch on every tick), so gate the
-      // re-render to the same event family project.phase-changed already uses.
-      if (ui.panel === 'skill-layout' && ev._sub === 'plugkit') renderBody();
+      const payload = JSON.parse(e.data);
+      toast(`Watcher error${payload.cwd ? ' in ' + basename(payload.cwd) : ''}: ${payload.error || payload.message || 'unknown'}`, true);
+      ui.streamNote = `watcher error: ${payload.error || payload.message || 'unknown'}`;
+      renderShell();
     } catch (_) {}
   });
-  sse.addEventListener('project.phase-changed', () => { if (ui.panel === 'skill-layout') renderBody(); });
+
+  sse.addEventListener('project.added', (e) => {
+    let cwd = null;
+    try { cwd = JSON.parse(e.data).cwd; } catch (_) {}
+    toast(`New agent started${cwd ? ': ' + basename(cwd) : ''}`);
+    loadProjects();
+    scheduleRender({ refetch: true });
+  });
+
+  sse.addEventListener('project.removed', (e) => {
+    let cwd = null;
+    try { cwd = JSON.parse(e.data).cwd; } catch (_) {}
+    toast(`Agent stopped${cwd ? ': ' + basename(cwd) : ''}`);
+    // A project can vanish mid-watch (a removed worktree). Drop it from the
+    // roster so the open drilldown degrades to its "no longer present" state
+    // instead of rendering a row backed by nothing.
+    if (cwd) liveState.rows = liveState.rows.filter(r => r.cwd !== cwd);
+    loadProjects();
+    scheduleRender({ refetch: true });
+  });
+
+  sse.addEventListener('project.phase-changed', () => {
+    if (ui.panel === 'agents' || ui.panel === 'overview') scheduleRender({ refetch: true });
+  });
+
   sse.onerror = () => {
-    ui.connState = 'reconnecting'; renderShell();
+    ui.connState = 'reconnecting';
+    ui.missedFrames++;
+    ui.streamNote = 'live stream disconnected -- reconnecting, events during the gap will be replayed';
+    renderShell();
     try { sse.close(); } catch (_) {}
     setTimeout(connectSSE, Math.min(reconnectDelay, 15000));
     reconnectDelay = Math.min(reconnectDelay * 2, 15000);
@@ -455,6 +670,10 @@ function connectSSE() {
 async function boot() {
   applyHashState(parseHash(location.hash));
   expandAdvancedFor(ui.panel);
+  // Capabilities before the first paint: the verb allowlist and subsystem
+  // universe are server-published, and painting a hardcoded copy of either
+  // first is exactly the drift this replaces.
+  await loadCapabilities();
   // Canonicalize the hash immediately (covers both a bare load with no hash,
   // where this establishes #panel=overview, and a hash naming an unknown
   // panel, where applyHashState already fell back to the default and this
@@ -466,8 +685,19 @@ async function boot() {
   await renderBody();
   refreshDeviationBadge();
   setInterval(refreshDeviationBadge, 10000);
+  // Elapsed times ("in EXECUTE for 4m", "last output 30s ago") are derived from
+  // wall-clock, so they go stale on a silent stream. A slow tick re-renders the
+  // lead view from already-held state -- no fetch, no flicker.
+  setInterval(() => { if (ui.panel === 'agents' && !liveState.open) scheduleRender({ refetch: false }); }, 15000);
   connectSSE();
-  window.gmsniff = { state, ui, go, renderBody, renderShell, openPalette, closePalette, buildCommandRegistry, parseHash, hashForState, syncHash, liveStreamDebugSnapshot, isAdvancedPanel, getNavAdvanced: () => navAdvanced, statusGlance };
+  // Gates and driving prompts for whatever the lead view is showing.
+  loadAgentContext(liveState.rows.map(r => r.cwd), () => scheduleRender({ refetch: false }));
+  window.gmsniff = {
+    state, ui, go, renderBody, renderShell, openPalette, closePalette, buildCommandRegistry,
+    parseHash, hashForState, syncHash, liveStreamDebugSnapshot, isAdvancedPanel,
+    getNavAdvanced: () => navAdvanced, statusGlance,
+    liveState, agentKey, openDrilldown, closeDrilldown, scheduleRender,
+  };
 }
 
 boot();

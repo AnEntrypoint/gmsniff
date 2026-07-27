@@ -36,7 +36,7 @@ export function parseYamlRows(text) {
     const bm = line.match(BOUNDARY_LINE);
     if (bm) {
       if (cur) { cur._end = i; rows.push(cur); }
-      cur = { id: undefined, _start: i, _lines: [line] };
+      cur = { id: undefined, _start: i, _lines: [line], _boundary: bm[1] };
       cur[bm[1]] = unquote(bm[2].trim());
       if (bm[1] === 'id') cur.id = cur[bm[1]];
       listField = null;
@@ -149,10 +149,23 @@ export function rewriteRow(text, id, fields) {
   if (idx === -1) return null;
   const target = rows[idx];
   const merged = { ...target, ...fields };
-  const lines = [`- id: ${yamlScalar(id)}`];
+  // The rewritten row keeps its ORIGINAL boundary field. parseYamlRows treats any top-level
+  // `- <field>:` as a row boundary (gm's live prd.yml has a legacy `- title:` cluster with id as
+  // a plain field), and unconditionally re-emitting `- id:` reshaped those rows on write --
+  // moving the boundary onto a different key and demoting title to an indented field. That
+  // contradicts this function's own byte-preservation contract for the row being edited, and
+  // silently rewrote rows the caller never asked to restructure.
+  const boundaryKey = target._boundary || 'id';
+  const boundaryVal = merged[boundaryKey] !== undefined ? merged[boundaryKey] : id;
+  const lines = [`- ${boundaryKey}: ${yamlScalar(boundaryVal)}`];
   for (const [k, v] of Object.entries(merged)) {
-    if (k === 'id' || k.startsWith('_')) continue;
+    if (k === boundaryKey || k.startsWith('_')) continue;
     if (v === undefined || v === null || v === '') continue;
+    if (Array.isArray(v)) {
+      lines.push(`  ${k}:`);
+      for (const item of v) lines.push(`  - ${yamlScalar(item)}`);
+      continue;
+    }
     lines.push(`  ${k}: ${yamlScalar(v)}`);
   }
   const newRowText = lines.join('\n');
@@ -176,22 +189,232 @@ export function atomicWriteFile(filePath, contents) {
   fs.renameSync(tmp, filePath);
 }
 
+function readJsonOrNull(p) {
+  try { return JSON.parse(fs.readFileSync(p, 'utf-8')); } catch (_) { return null; }
+}
+
+function readTextOrNull(p) {
+  try { return fs.readFileSync(p, 'utf-8').trim(); } catch (_) { return null; }
+}
+
+// Machine-global gm-plugkit install dir. Mirrors index.js's GM_TOOLS_DIR (kept local so
+// registry.js has no import cycle with index.js).
+export const GM_TOOLS_DIR = process.env.GM_TOOLS_DIR || path.join(os.homedir(), '.gm-tools');
+
+// Machine-level daemon health from ~/.gm-tools/daemon-status.json ({pid, ts, active_projects}).
+// This is the ONLY place a real daemon pid liveness check belongs: the pid in each project's
+// .status.json is the same shared machine-wide daemon pid, so probing it per-project tells you
+// nothing about that project (all projects flip together).
+export function readDaemonStatus() {
+  const j = readJsonOrNull(path.join(GM_TOOLS_DIR, 'daemon-status.json'));
+  if (!j || !j.pid) return { present: false, pid: null, alive: false, ts: null, age_ms: null, active_projects: null };
+  let alive = false;
+  try { process.kill(j.pid, 0); alive = true; } catch (_) {}
+  return {
+    present: true,
+    pid: j.pid,
+    alive,
+    ts: j.ts || null,
+    age_ms: j.ts ? Date.now() - j.ts : null,
+    active_projects: Number.isFinite(j.active_projects) ? j.active_projects : null,
+  };
+}
+
+// Machine-wide installed versions. These are INSTALL versions, distinct from the per-project
+// SERVED version that index.js's readProjectLogSignals recovers from the watcher.log banner.
+export function readInstalledVersions() {
+  return {
+    plugkit: readTextOrNull(path.join(GM_TOOLS_DIR, 'plugkit.version')),
+    gm_plugkit: readTextOrNull(path.join(GM_TOOLS_DIR, 'gm-plugkit.version')),
+  };
+}
+
+// Per-project liveness derived from REAL per-project signals, never the shared daemon pid.
+//
+// .status.json's `pid` is one machine-wide agentplug daemon serving every project at once
+// (confirmed: identical pid 3364 across gmsniff/spoint/casey/test simultaneously), so
+// process.kill(pid,0) is true for every project whenever the daemon runs at all -- including
+// projects that have been idle for weeks. It answers "is the daemon up", never "is this project
+// active". The real per-project signals are: the heartbeat ts .status.json carries for THIS
+// project, this project's watcher.log mtime, its turn-summary ts, and its spool queue depth.
+export const PROJECT_ACTIVE_MS = parseInt(process.env.GM_PROJECT_ACTIVE_MS, 10) || 5 * 60 * 1000;
+
+function spoolQueueDepth(spoolDir) {
+  let pending = 0;
+  try {
+    for (const verbDir of fs.readdirSync(path.join(spoolDir, 'in'), { withFileTypes: true })) {
+      if (!verbDir.isDirectory()) continue;
+      try { pending += fs.readdirSync(path.join(spoolDir, 'in', verbDir.name)).filter(f => !f.startsWith('.')).length; } catch (_) {}
+    }
+  } catch (_) {}
+  return pending;
+}
+
+export function readProjectLiveness(cwd, { now = Date.now() } = {}) {
+  const spoolDir = path.join(cwd, '.gm', 'exec-spool');
+  const status = readJsonOrNull(path.join(spoolDir, '.status.json'));
+  const summary = readJsonOrNull(path.join(spoolDir, '.turn-summary.json'));
+  const watcherMtime = statMtimeMs(path.join(spoolDir, '.watcher.log'));
+  const turnState = readTurnState(cwd);
+
+  // .status.json's ts is DELIBERATELY EXCLUDED from the activity computation. Measured live:
+  // the shared daemon rewrites every registered project's .status.json every ~200ms regardless
+  // of whether that project is doing anything, so its age is ~0 for every project always
+  // (gmsniff 281ms, spoint 131ms, casey 210ms, test 258ms -- simultaneously, while casey's real
+  // work was 2.2 hours cold). Treating it as activity marks the entire fleet permanently active,
+  // which is the same false-positive as trusting the shared pid, one layer down. It is reported
+  // as heartbeat_age_ms for diagnostics only.
+  const heartbeat_age_ms = status && status.ts ? now - status.ts : null;
+
+  const ages = [];
+  const log_age_ms = watcherMtime !== null ? now - watcherMtime : null;
+  if (log_age_ms !== null) ages.push(log_age_ms);
+  const summary_age_ms = summary && summary.ts ? now - summary.ts : null;
+  if (summary_age_ms !== null) ages.push(summary_age_ms);
+  const turn_age_ms = turnState && turnState.updated_at_ms ? now - turnState.updated_at_ms : null;
+  if (turn_age_ms !== null) ages.push(turn_age_ms);
+
+  const last_activity_age_ms = ages.length ? Math.min(...ages) : null;
+  const queue_depth = spoolQueueDepth(spoolDir);
+  const daemon = readDaemonStatus();
+
+  return {
+    // Real per-project activity, the field a caller should badge on: derived only from signals
+    // this project's own work writes (watcher.log mtime, turn-summary ts, turn-state ts).
+    active: last_activity_age_ms !== null && last_activity_age_ms <= PROJECT_ACTIVE_MS,
+    last_activity_age_ms,
+    activity_sources: { log_age_ms, summary_age_ms, turn_age_ms },
+    heartbeat_age_ms,
+    log_age_ms,
+    summary_age_ms,
+    turn_age_ms,
+    queue_depth,
+    // Machine-level, deliberately named apart from `active` so it can never be mistaken for a
+    // per-project signal.
+    daemon_alive: daemon.alive,
+    daemon_pid: daemon.pid,
+    shared_process: !!(status && status.shared_process),
+  };
+}
+
+// .gm/turn-state.json -- the authoritative live phase source, written on every transition.
+// Two real on-disk shapes exist: the current {phase, session_id, last_skill, updated_at_ms,
+// pending_step_id, pending_step_deadline_ms}, and a legacy shape carrying only
+// {turnId, execCallsSinceMemorize, firstToolFired, recallFiredThisTurn} and NO phase at all
+// (confirmed live in C:\dev\test). The legacy shape is reported as present-but-phaseless rather
+// than being mistaken for a project sitting in a null phase.
+export function readTurnState(cwd) {
+  const j = readJsonOrNull(path.join(cwd, '.gm', 'turn-state.json'));
+  if (!j) return null;
+  const legacy = !('phase' in j) && ('turnId' in j);
+  return {
+    present: true,
+    legacy_shape: legacy,
+    phase: typeof j.phase === 'string' ? j.phase : null,
+    session_id: j.session_id || null,
+    last_skill: j.last_skill || null,
+    updated_at_ms: Number.isFinite(j.updated_at_ms) ? j.updated_at_ms : null,
+    pending_step_id: j.pending_step_id || null,
+    pending_step_deadline_ms: Number.isFinite(j.pending_step_deadline_ms) ? j.pending_step_deadline_ms : null,
+    turn_id: j.turnId || null,
+  };
+}
+
+// The remaining per-project marker files, none of which were previously read. Each is small and
+// carries live state a live-manager view wants: dispatch/instruction heartbeat timestamps, the
+// last prompt body, gate-fire markers, the codeinsight digest, and the poll-scan cursor.
+export function readProjectMarkers(cwd) {
+  const gm = path.join(cwd, '.gm');
+  const spool = path.join(gm, 'exec-spool');
+  const num = (p) => { const t = readTextOrNull(p); const n = t ? Number(t) : NaN; return Number.isFinite(n) ? n : null; };
+
+  const lastGate = readJsonOrNull(path.join(spool, '.last-gate-fired.json'));
+  const digestRaw = readTextOrNull(path.join(spool, '.codeinsight-digest'));
+  // Real format: "v3:<hash>:files=<n>"
+  const dm = digestRaw ? digestRaw.match(/^v(\d+):([0-9a-f]+):files=(\d+)$/) : null;
+  const pollScan = readJsonOrNull(path.join(spool, '.poll-scan-offset.json'));
+  const claimAudit = readTextOrNull(path.join(gm, 'claim-audit-fired'));
+  const residual = readTextOrNull(path.join(gm, 'residual-check-fired'));
+
+  return {
+    last_dispatch_ts: num(path.join(gm, 'last-dispatch-ts')),
+    last_instruction_ts: num(path.join(gm, 'last-instruction-ts')),
+    last_prompt: readTextOrNull(path.join(gm, 'last-prompt.txt')),
+    // Marker files exist-or-not AND carry a body ("clean" observed for claim-audit; empty for
+    // residual) -- both facts are surfaced, since an empty marker is still a fired marker.
+    claim_audit_fired: claimAudit !== null,
+    claim_audit_result: claimAudit || null,
+    residual_check_fired: residual !== null,
+    residual_check_result: residual || null,
+    last_gate: lastGate && lastGate.key ? { key: lastGate.key, ts: lastGate.ts || null } : null,
+    gate_deviation_repeats: readJsonOrNull(path.join(spool, '.gate-deviation-repeats.json')) || {},
+    codeinsight_digest: dm ? { version: Number(dm[1]), hash: dm[2], files: Number(dm[3]), raw: digestRaw } : (digestRaw ? { raw: digestRaw } : null),
+    poll_scan: pollScan ? { date: pollScan.date || null, last_scan_ms: pollScan.last_scan_ms || null, offset: Number.isFinite(pollScan.offset) ? pollScan.offset : null } : null,
+  };
+}
+
+// Fully consumes .gm/exec-spool/.turn-summary.json. Every field is real and current:
+// {last_instruction_age_ms, last_instruction_ts, long_gap_threshold_ms, mutables_pending_count,
+//  phase, prd_pending, prd_pending_count, runtime, ts, update_available}.
+//
+// runtime-key collision: .turn-summary.json's `runtime` is the EXECUTION runtime of the wasm
+// guest (observed "native"), while .status.json's `runtime` is the HOST process kind (observed
+// "agentplug"). Same key name, two different meanings, and conflating them would report a
+// project as running under the wrong runtime. They are surfaced under distinct names --
+// guest_runtime here, host_runtime in readWatcherStatus -- and never merged.
+export function readTurnSummary(cwd) {
+  const j = readJsonOrNull(path.join(cwd, '.gm', 'exec-spool', '.turn-summary.json'));
+  if (!j) return null;
+  return {
+    present: true,
+    phase: typeof j.phase === 'string' ? j.phase : null,
+    ts: Number.isFinite(j.ts) ? j.ts : null,
+    last_instruction_ts: Number.isFinite(j.last_instruction_ts) ? j.last_instruction_ts : null,
+    last_instruction_age_ms: Number.isFinite(j.last_instruction_age_ms) ? j.last_instruction_age_ms : null,
+    long_gap_threshold_ms: Number.isFinite(j.long_gap_threshold_ms) ? j.long_gap_threshold_ms : null,
+    // Both spellings are real: prd_pending_count is what instruction.served emits and what the
+    // summary carries today; prd_pending is the older field, still present in the same file.
+    prd_pending_count: Number.isFinite(j.prd_pending_count) ? j.prd_pending_count : (Number.isFinite(j.prd_pending) ? j.prd_pending : null),
+    mutables_pending_count: Number.isFinite(j.mutables_pending_count) ? j.mutables_pending_count : null,
+    guest_runtime: j.runtime || null,
+    update_available: j.update_available ?? null,
+  };
+}
+
 export function readWatcherStatus(cwd) {
   try {
     const j = JSON.parse(fs.readFileSync(path.join(cwd, '.gm', 'exec-spool', '.status.json'), 'utf-8'));
     if (!j || !j.pid) return null;
+    const age = j.ts ? Date.now() - j.ts : null;
+    // Current live shape is the agentplug shared daemon: {pid, ts, daemon, shared_process,
+    // runtime:"agentplug"} -- it carries NO version, wrapper_sha, idle_limit_ms or busy_until.
+    // Those keys are kept in the returned shape for consumer compatibility but are sourced
+    // honestly: version comes from the watcher.log banner via index.js readProjectLogSignals
+    // (the only real per-project version signal left), not from this file, so it stays null here
+    // rather than being fabricated. wrapper_sha/idle_limit_ms exist only in the legacy per-
+    // project JS-wrapper shape and are null on every current-generation project.
+    //
+    // `alive` is DAEMON liveness, not project liveness: this pid is one machine-wide daemon
+    // shared by every project, so it is identical across all of them and flips them together.
+    // Use readProjectLiveness(cwd).active for a real per-project answer.
     let alive = false;
     try { process.kill(j.pid, 0); alive = true; } catch (_) {}
-    const age = j.ts ? Date.now() - j.ts : null;
-    // Two live .status.json shapes: legacy per-project JS-wrapper (version + wrapper_sha,
-    // one process per project) and the current agentplug shared daemon (runtime:"agentplug",
-    // shared_process:true, one process serving many project cwds, no version/wrapper_sha field
-    // at all since the wasm guest it serves updates independently of the runner binary).
-    // version presence alone previously gated aliveness display, silently dropping every
-    // agentplug-driven project (the entire current-generation fleet) from callers wanting to
-    // label/badge the daemon (e.g. the GUI's health-summary route).
     const runtime = j.runtime || (j.version ? 'wrapper' : null);
-    return { pid: j.pid, version: j.version || null, wrapper_sha: j.wrapper_sha || null, idle_limit_ms: j.idle_limit_ms || null, runtime, shared_process: !!j.shared_process, alive, age_ms: age };
+    return {
+      pid: j.pid,
+      version: j.version || null,
+      version_source: j.version ? 'status.json' : null,
+      wrapper_sha: j.wrapper_sha || null,
+      idle_limit_ms: j.idle_limit_ms || null,
+      runtime,
+      host_runtime: runtime,
+      daemon: !!j.daemon,
+      shared_process: !!j.shared_process,
+      alive,
+      daemon_alive: alive,
+      shared_pid: !!j.shared_process,
+      age_ms: age,
+    };
   } catch (_) { return null; }
 }
 
@@ -203,10 +426,59 @@ export function readWatcherStatus(cwd) {
 // thread stalls). A cheap fs.statSync (mtimeMs only, no content read) gates the cache: result
 // is reused unless either file's mtime has actually changed since the last read, so the cache
 // never serves content staler than what's really on disk.
+// Every registry cache is bounded. These are keyed by project cwd and a machine can accumulate
+// far more discovered cwds than are live (the daemon registry alone lists deleted worktrees),
+// so an unbounded Map is a slow leak in a long-running GUI server process. LRU-by-insertion:
+// re-setting a key refreshes its position.
+const REGISTRY_CACHE_MAX = parseInt(process.env.GM_REGISTRY_CACHE_MAX, 10) || 256;
+
+function cacheSet(map, key, value, max = REGISTRY_CACHE_MAX) {
+  if (map.has(key)) map.delete(key);
+  map.set(key, value);
+  while (map.size > max) map.delete(map.keys().next().value);
+  return value;
+}
+
+function cacheGet(map, key) {
+  if (!map.has(key)) return undefined;
+  const v = map.get(key);
+  map.delete(key);
+  map.set(key, v);
+  return v;
+}
+
 const _prdMutStateCache = new Map(); // cwd -> { prdMtime, mutMtime, value }
 
 function statMtimeMs(p) {
   try { return fs.statSync(p).mtimeMs; } catch (_) { return null; }
+}
+
+// Closed-status vocabulary is POLICY, not a fact about the file format. gm's own prd.yml uses
+// done/complete/completed today, but a project can adopt any closed-status word, and hardcoding
+// the list silently miscounts every row using another one as still-pending. Overridable via
+// GM_PRD_CLOSED_STATUSES / GM_MUT_OPEN_STATUSES (comma-separated), with the observed gm defaults
+// retained. Mutables invert the question: `unknown` is the OPEN state, everything else closed.
+function policyList(envKey, fallback) {
+  const raw = process.env[envKey];
+  if (!raw) return fallback;
+  const items = raw.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+  return items.length ? items : fallback;
+}
+
+export function prdClosedStatuses() {
+  return policyList('GM_PRD_CLOSED_STATUSES', ['done', 'complete', 'completed']);
+}
+
+export function mutableOpenStatuses() {
+  return policyList('GM_MUT_OPEN_STATUSES', ['unknown']);
+}
+
+export function statusPolicy() {
+  return { prd_closed: prdClosedStatuses(), mutable_open: mutableOpenStatuses(), default_prd_status: 'pending', default_mutable_status: 'unknown' };
+}
+
+function statusRe(words) {
+  return new RegExp(`status:\\s*(${words.map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})\\b`, 'i');
 }
 
 export function readPrdMutablesState(cwd) {
@@ -214,23 +486,27 @@ export function readPrdMutablesState(cwd) {
   const mutPath = path.join(cwd, '.gm', 'mutables.yml');
   const prdMtime = statMtimeMs(prdPath);
   const mutMtime = statMtimeMs(mutPath);
-  const cached = _prdMutStateCache.get(cwd);
-  if (cached && cached.prdMtime === prdMtime && cached.mutMtime === mutMtime) return cached.value;
+  const policy = statusPolicy();
+  const policyKey = `${policy.prd_closed.join('|')}#${policy.mutable_open.join('|')}`;
+  const cached = cacheGet(_prdMutStateCache, cwd);
+  if (cached && cached.prdMtime === prdMtime && cached.mutMtime === mutMtime && cached.policyKey === policyKey) return cached.value;
 
+  const closedRe = statusRe(policy.prd_closed);
+  const openRe = statusRe(policy.mutable_open);
   const out = { prd_pending: 0, prd_total: 0, mut_unknown: 0, mut_total: 0 };
   try {
     const prdText = fs.readFileSync(prdPath, 'utf-8');
     const items = prdText.split(/^- id:/m).slice(1);
     out.prd_total = items.length;
-    out.prd_pending = items.filter(i => !/status:\s*(done|complete|completed)/.test(i)).length;
+    out.prd_pending = items.filter(i => !closedRe.test(i)).length;
   } catch (_) {}
   try {
     const mutText = fs.readFileSync(mutPath, 'utf-8');
     const items = mutText.split(/^- id:/m).slice(1);
     out.mut_total = items.length;
-    out.mut_unknown = items.filter(i => /status:\s*unknown/.test(i)).length;
+    out.mut_unknown = items.filter(i => openRe.test(i)).length;
   } catch (_) {}
-  _prdMutStateCache.set(cwd, { prdMtime, mutMtime, value: out });
+  cacheSet(_prdMutStateCache, cwd, { prdMtime, mutMtime, policyKey, value: out });
   return out;
 }
 
@@ -251,10 +527,32 @@ const _phaseStateCache = new Map(); // cwd -> { mtime, value }
 // on-disk shape: "# Next step\n\nPhase: <PHASE>\nUpdated: <epoch-ms>\n\n---\n\n# <PHASE>\n<prose>".
 export function readLivePhaseState(cwd) {
   const nextStepPath = path.join(cwd, '.gm', 'next-step.md');
+  const summaryPath = path.join(cwd, '.gm', 'exec-spool', '.turn-summary.json');
+  const turnStatePath = path.join(cwd, '.gm', 'turn-state.json');
   const mtime = statMtimeMs(nextStepPath);
-  if (mtime === null) return { phase: null, skill: null, instruction_heading: null, instruction_excerpt: null, updated_ts: null, stale: true, present: false };
-  const cached = _phaseStateCache.get(cwd);
-  if (cached && cached.mtime === mtime) return cached.value;
+  // Cache key covers EVERY file whose content this result depends on. Keying on next-step.md's
+  // mtime alone served a stale phase whenever turn-state.json or turn-summary.json changed
+  // without next-step.md being rewritten -- which is the common case, since a transition updates
+  // turn-state.json on every phase change while next-step.md only changes when new prose is
+  // served (real divergence: gmsniff turn-state EXECUTE vs turn-summary PLAN, casey turn-state
+  // COMPLETE vs turn-summary CONSOLIDATE, both observed simultaneously).
+  const summaryMtime = statMtimeMs(summaryPath);
+  const turnStateMtime = statMtimeMs(turnStatePath);
+  const turnState = readTurnState(cwd);
+
+  if (mtime === null) {
+    // next-step.md absent but turn-state.json can still carry a real phase.
+    if (turnState && turnState.phase) {
+      return {
+        phase: turnState.phase, skill: turnState.last_skill || null, instruction_heading: null,
+        instruction_excerpt: null, updated_ts: turnState.updated_at_ms, stale: true, present: false,
+        phase_source: 'turn-state.json', session_id: turnState.session_id || null,
+      };
+    }
+    return { phase: null, skill: null, instruction_heading: null, instruction_excerpt: null, updated_ts: null, stale: true, present: false, phase_source: null };
+  }
+  const cached = cacheGet(_phaseStateCache, cwd);
+  if (cached && cached.mtime === mtime && cached.summaryMtime === summaryMtime && cached.turnStateMtime === turnStateMtime) return cached.value;
 
   let value;
   try {
@@ -265,8 +563,15 @@ export function readLivePhaseState(cwd) {
     const body = bodyIdx >= 0 ? text.slice(bodyIdx + 5).trimStart() : '';
     const headingMatch = body.match(/^#\s*(.+?)\s*$/m);
     const heading = headingMatch ? headingMatch[1].trim().toUpperCase() : null;
-    const phase = phaseMatch ? phaseMatch[1].trim() : heading;
-    const updated_ts = updatedMatch ? Number(updatedMatch[1]) : null;
+    // turn-state.json is the PRIMARY phase source: it is written by the transition itself and is
+    // structured, where next-step.md's "Phase:" line is prose that is only rewritten when new
+    // instruction text is served. The prose scrape remains the fallback for projects whose
+    // turn-state.json is absent or carries the legacy phaseless {turnId,...} shape.
+    const prosePhase = phaseMatch ? phaseMatch[1].trim() : heading;
+    const useTurnState = !!(turnState && turnState.phase);
+    const phase = useTurnState ? turnState.phase : prosePhase;
+    const proseUpdated = updatedMatch ? Number(updatedMatch[1]) : null;
+    const updated_ts = useTurnState && turnState.updated_at_ms ? turnState.updated_at_ms : proseUpdated;
     // long_gap_threshold_ms is the project's own served staleness bound (turn-summary.json,
     // default 300000ms); fall back to that default when the summary is unavailable rather than
     // guessing a different number here.
@@ -289,13 +594,22 @@ export function readLivePhaseState(cwd) {
       updated_ts,
       stale: updated_ts === null ? true : (Date.now() - updated_ts) > threshold,
       present: true,
+      phase_source: useTurnState ? 'turn-state.json' : 'next-step.md',
+      // The prose phase is retained alongside so a divergence between the structured source and
+      // the served instruction text is visible rather than silently resolved -- a project whose
+      // turn-state says EXECUTE while the served prose still reads PLAN is mid-transition, and
+      // that IS the signal a live-manager view wants.
+      prose_phase: prosePhase || null,
+      phase_divergence: !!(useTurnState && prosePhase && prosePhase !== turnState.phase),
+      session_id: turnState ? turnState.session_id : null,
+      last_skill: turnState ? turnState.last_skill : null,
     };
   } catch (_) {
     // Partial write mid-update or unreadable content -- fail open to an unparseable-but-present
     // state rather than throwing, so one bad project's file doesn't break every other row.
-    value = { phase: null, skill: null, instruction_heading: null, instruction_excerpt: null, updated_ts: null, stale: true, present: true, unparseable: true };
+    value = { phase: null, skill: null, instruction_heading: null, instruction_excerpt: null, updated_ts: null, stale: true, present: true, unparseable: true, phase_source: null };
   }
-  _phaseStateCache.set(cwd, { mtime, value });
+  cacheSet(_phaseStateCache, cwd, { mtime, summaryMtime, turnStateMtime, value });
   return value;
 }
 
@@ -318,11 +632,11 @@ function readShippedManifest(cwd) {
   const manifestPath = path.join(cwd, '.gm', '.instructions-shipped-manifest.json');
   let stat;
   try { stat = fs.statSync(manifestPath); } catch (_) { return null; }
-  const cached = _manifestCache.get(cwd);
+  const cached = cacheGet(_manifestCache, cwd);
   if (cached && cached.mtimeMs === stat.mtimeMs) return cached.manifest;
   let manifest = null;
   try { manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')); } catch (_) { manifest = null; }
-  _manifestCache.set(cwd, { mtimeMs: stat.mtimeMs, manifest });
+  cacheSet(_manifestCache, cwd, { mtimeMs: stat.mtimeMs, manifest });
   return manifest;
 }
 
@@ -462,28 +776,51 @@ function canon(p) {
   return p && path.resolve(p).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
 }
 
-// discoverProjects re-derives its cwd SET from two O(events)/O(fs) sources every call: a full
-// scan of the events array plus a readdirSync walk of every dev root. events only ever grows
-// (append-only store), so the cwd set itself is safe to cache keyed on events.length -- a real
-// measured burst of 60k+ events showed this repeated full-array scan as a dominant cost behind
-// /api/health-summary latency (itself called every 10s per connected client). Only the cwd-SET
-// half is cached; per-project alive/prd_pending/prd_total live status is re-read fresh below on
-// every call (those change independent of events.length and must never go stale).
-let _cwdSetCache = { eventsLength: -1, cwds: null };
+// Authoritative deep-path discovery source. daemon-registry.txt lists every cwd the shared
+// daemon has served, INCLUDING worktree-hosted projects nested several levels deep
+// (C:\dev\spoint\.claude\worktrees\wf_*) that a one-level readdir of the dev roots structurally
+// cannot reach. It is append-only and never self-prunes -- measured live, only 3 of its 12
+// entries still exist on disk -- so it is a discovery HINT whose every candidate must be
+// existence-filtered, never a liveness list.
+export function readDaemonRegistryCwds() {
+  try {
+    return fs.readFileSync(path.join(GM_TOOLS_DIR, 'daemon-registry.txt'), 'utf-8')
+      .split('\n').map(s => s.trim()).filter(Boolean);
+  } catch (_) { return []; }
+}
+
+// discoverProjects re-derives its cwd SET from O(events)/O(fs) sources every call. The cache is
+// keyed on the events array IDENTITY plus its length, not length alone: a Store that replaces
+// its events array (a re-load, a source switch, a bounded-window re-read) can produce a
+// different array with a coincidentally equal length, and a length-only key would then serve the
+// previous source's cwd set indefinitely. A TTL additionally bounds staleness for the fs-scan
+// half, which changes independent of events entirely.
+const CWDSET_TTL_MS = parseInt(process.env.GM_CWDSET_TTL_MS, 10) || 30000;
+let _cwdSetCache = { eventsRef: null, eventsLength: -1, rootsKey: null, at: 0, cwds: null };
 function discoverCwdSet(events, extraRoots) {
-  const len = (events || []).length;
-  if (_cwdSetCache.eventsLength === len && _cwdSetCache.cwds) return _cwdSetCache.cwds;
+  const arr = events || [];
+  const len = arr.length;
+  const rootsKey = (extraRoots || []).join('|');
+  const fresh = Date.now() - _cwdSetCache.at < CWDSET_TTL_MS;
+  if (fresh && _cwdSetCache.cwds && _cwdSetCache.eventsRef === arr && _cwdSetCache.eventsLength === len && _cwdSetCache.rootsKey === rootsKey) {
+    return _cwdSetCache.cwds;
+  }
 
   const cwds = new Set();
   const norm = new Map();
   const addCwd = (p) => { if (!p) return; const k = canon(p); if (!k) return; if (!norm.has(k)) { norm.set(k, p); cwds.add(p); } };
 
-  for (const e of events || []) {
+  for (const e of arr) {
     if (e._sub === 'plugkit' && e.event === 'watcher.boot' && e.spool_dir) {
       addCwd(path.dirname(path.dirname(e.spool_dir)));
     } else if (e.cwd) {
       addCwd(e.cwd);
     }
+  }
+
+  // Registry candidates are existence-filtered on the real marker, exactly like a scanned root.
+  for (const p of readDaemonRegistryCwds()) {
+    try { if (fs.existsSync(path.join(p, '.gm', 'exec-spool', '.status.json'))) addCwd(p); } catch (_) {}
   }
 
   const roots = [...extraRoots];
@@ -498,11 +835,21 @@ function discoverCwdSet(events, extraRoots) {
         const proj = path.join(root, d.name);
         const marker = path.join(proj, '.gm', 'exec-spool', '.status.json');
         if (fs.existsSync(marker)) addCwd(proj);
+        // Second level: worktree hosts keep their projects under <root>/<proj>/.claude/worktrees/
+        // (real shape from daemon-registry.txt). A one-level scan misses every one of them.
+        const wt = path.join(proj, '.claude', 'worktrees');
+        try {
+          for (const w of fs.readdirSync(wt, { withFileTypes: true })) {
+            if (!w.isDirectory()) continue;
+            const wproj = path.join(wt, w.name);
+            if (fs.existsSync(path.join(wproj, '.gm', 'exec-spool', '.status.json'))) addCwd(wproj);
+          }
+        } catch (_) {}
       }
     } catch (_) {}
   }
 
-  _cwdSetCache = { eventsLength: len, cwds };
+  _cwdSetCache = { eventsRef: arr, eventsLength: len, rootsKey, at: Date.now(), cwds };
   return cwds;
 }
 
@@ -515,17 +862,33 @@ export function discoverProjects(events, { extraRoots = [] } = {}) {
   for (const cwd of cwds) {
     const status = readWatcherStatus(cwd);
     const ps = readPrdMutablesState(cwd);
+    const live = readProjectLiveness(cwd);
+    const turnState = readTurnState(cwd);
     rows.push({
       cwd,
-      alive: !!(status && status.alive),
+      // `alive` now means THIS PROJECT is active, derived from its own watcher.log/turn-summary/
+      // turn-state timestamps. It previously meant "the shared daemon pid responds", which was
+      // true for every discovered project simultaneously and so distinguished nothing.
+      alive: live.active,
+      daemon_alive: live.daemon_alive,
+      last_activity_age_ms: live.last_activity_age_ms,
+      queue_depth: live.queue_depth,
+      phase: turnState ? turnState.phase : null,
+      last_skill: turnState ? turnState.last_skill : null,
+      // Per-project served version does not live in .status.json any more; index.js's
+      // readProjectLogSignals recovers it from the watcher.log banner. Null here is honest
+      // rather than fabricated -- see readWatcherStatus's version_source.
       version: status ? status.version : null,
+      version_source: status ? status.version_source : null,
       prd_pending: ps.prd_pending,
       prd_total: ps.prd_total,
       mut_unknown: ps.mut_unknown,
       mut_total: ps.mut_total,
     });
   }
-  rows.sort((a, b) => (b.alive ? 1 : 0) - (a.alive ? 1 : 0) || path.basename(a.cwd).localeCompare(path.basename(b.cwd)));
+  rows.sort((a, b) => (b.alive ? 1 : 0) - (a.alive ? 1 : 0)
+    || (a.last_activity_age_ms ?? Infinity) - (b.last_activity_age_ms ?? Infinity)
+    || path.basename(a.cwd).localeCompare(path.basename(b.cwd)));
   return rows;
 }
 
@@ -557,17 +920,39 @@ export const VERB_ALLOWLIST = new Set([
   // recognize these or a real dispatch under an alias name reads as "unknown verb" downstream.
   'nodejs', 'javascript', 'node', 'js', 'python', 'py', 'sh', 'shell', 'zsh',
   'forget', 'discipline', 'close', 'filter', 'status',
-  'learn', // retired: verbs.rs match arm always errors, but it IS a real recognized dispatch target
   // lang-runner verbs (shell_exec dispatch)
   'powershell', 'ps1', 'ssh', 'go', 'rust', 'c', 'cpp', 'java', 'deno',
-  // Recognized verbs (verbs.rs match arms, though they return errors)
-  'wait', 'sleep',
+  // Runner-level verbs handled by the agentplug daemon itself, not the wasm guest
+  // (agentplug/crates/agentplug-runner/src/daemon.rs: handle_plugin_refresh_request,
+  // handle_background_convert, and the in/background-convert spool directory).
+  'plugin-refresh', 'background-convert',
+  // RETIRED verbs. These are still real match arms in verbs.rs, so a dispatch under one of these
+  // names is recognized rather than falling through to "unknown verb" -- but the arm always
+  // returns an error, so it can never succeed. Kept in the allowlist so gmsniff classifies a
+  // real dispatch correctly, and listed in RETIRED_VERBS so a caller can warn instead of
+  // presenting them as usable.
+  'learn', 'wait', 'sleep',
 ]);
+
+// verbs.rs arms that exist purely to return an informative error:
+//   "learn" -> "verb retired: the rs-learn crate is removed; memory routes through
+//               memorize/recall/memorize-prune"
+//   "wait" | "sleep" -> "verb not supported: wasm has no real timer/async-sleep primitive here"
+export const RETIRED_VERBS = new Set(['learn', 'wait', 'sleep']);
 
 const VERB_SHAPE = /^[a-zA-Z0-9_-]+$/;
 
 export function isKnownVerb(verb) {
   return typeof verb === 'string' && VERB_SHAPE.test(verb) && VERB_ALLOWLIST.has(verb);
+}
+
+export function isRetiredVerb(verb) {
+  return typeof verb === 'string' && RETIRED_VERBS.has(verb);
+}
+
+// Usable = recognized AND not one of the always-error retired arms.
+export function isUsableVerb(verb) {
+  return isKnownVerb(verb) && !isRetiredVerb(verb);
 }
 
 export function isAllowedProjectCwd(cwd, allowedCwds) {

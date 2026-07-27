@@ -2,8 +2,15 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { GmLogWatcher, MultiProjectWatcher, replayAll, DEFAULT_LOG_DIR } from './index.js';
-import { readWatcherStatus } from './registry.js';
+import { GmLogWatcher, MultiProjectWatcher, replayAll, DEFAULT_LOG_DIR, correlationOf, correlationKey, correlationCoverage, sourceStaleness } from './index.js';
+import { readWatcherStatus, readProjectLiveness, readInstalledVersions, readTurnState, readTurnSummary, VERB_ALLOWLIST, isUsableVerb, isRetiredVerb, isKnownVerb } from './registry.js';
+import { parseLine, readTail, DEFAULT_REPLAY_BYTES } from './watcher-log.js';
+
+// Machine-global gm state, written by the agentplug shared daemon (one process serving every
+// project cwd). daemon-registry.txt is the authoritative newline list of every served cwd --
+// including worktree-hosted projects nested arbitrarily deep (C:\dev\<repo>\.claude\worktrees\
+// wf_*), which a one-level readdir of the dev roots structurally cannot see.
+const GM_TOOLS_DIR = path.join(os.homedir(), '.gm-tools');
 
 const PHASES = ['PLAN', 'EXECUTE', 'EMIT', 'VERIFY', 'CONSOLIDATE', 'COMPLETE'];
 
@@ -22,10 +29,8 @@ const FLAG_DEFS = [
   { name: 'help', alias: 'h', type: 'bool', desc: 'print human-readable help and exit 0' },
   { name: 'schema', type: 'bool', desc: 'print machine-readable JSON description of every flag + output shape, then exit 0' },
   { name: 'spool', type: 'string', desc: 'force one project dir (or .watcher.log path) as the event source' },
-  { name: 'since', type: 'string', desc: 'ISO date, epoch ms, or relative Ns/Nm/Nh/Nd/Nw; alias --after' },
-  { name: 'after', type: 'string', desc: 'alias for --since' },
-  { name: 'until', type: 'string', desc: 'ISO date, epoch ms, or relative Ns/Nm/Nh/Nd/Nw; alias --before' },
-  { name: 'before', type: 'string', desc: 'alias for --until' },
+  { name: 'since', alias: 'after', type: 'string', desc: 'ISO date, epoch ms, or relative Ns/Nm/Nh/Nd/Nw; alias --after' },
+  { name: 'until', alias: 'before', type: 'string', desc: 'ISO date, epoch ms, or relative Ns/Nm/Nh/Nd/Nw; alias --before' },
   { name: 'sub', type: 'multi', desc: 'filter by subsystem (plugkit, hook, bootstrap, memory, ...); repeat = OR' },
   { name: 'event', type: 'multi', desc: 'filter by event type (dispatch.end, deviation.gate-deny, ...); repeat = OR' },
   { name: 'sess', type: 'multi', desc: 'filter by session id prefix; repeat = OR' },
@@ -43,13 +48,11 @@ const FLAG_DEFS = [
   { name: 'bucket', type: 'string', default: '0.1', desc: 'histogram bucket width for --recall-scores' },
   { name: 'days', type: 'string', default: '7', desc: 'day window for --memory-leverage' },
   { name: 'limit', alias: 'head', type: 'number', default: 0, desc: 'stop after N matches (0 = unlimited); --head is an alias' },
-  { name: 'head', type: 'number', desc: 'alias for --limit' },
   { name: 'tail-n', type: 'number', desc: 'keep only the last N rows after sort' },
   { name: 'ctx', type: 'number', default: 0, desc: 'N events of context before+after each match' },
   { name: 'truncate', type: 'number', default: 200, desc: 'max chars per row body; default 200 human / 2000 --json; --full disables' },
   { name: 'top', type: 'number', default: 20, desc: 'top-N cutoff for --recall-misses/--classifier-rejects' },
   { name: 'json', alias: 'ndjson', type: 'bool', desc: 'emit ndjson rows (one JSON event per line) instead of human-formatted text' },
-  { name: 'ndjson', type: 'bool', desc: 'alias for --json' },
   { name: 'tail', alias: 'f', type: 'bool', desc: 'live tail after replay, fanned out across every discovered project + central log (also -f); narrow with --spool' },
   { name: 'full', type: 'bool', desc: 'do not truncate row bodies' },
   { name: 'reverse', type: 'bool', desc: 'newest first' },
@@ -64,19 +67,28 @@ const FLAG_DEFS = [
   { name: 'updates', type: 'bool', desc: 'live drift state + update.* event history' },
   { name: 'watchers', type: 'bool', desc: 'one-line liveness + version per project cwd' },
   { name: 'conformance', alias: 'projects', type: 'bool', desc: 'paper S14 metrics: unresolved-mutables + PRD-pending per project; --projects is an alias' },
-  { name: 'projects', type: 'bool', desc: 'alias for --conformance' },
   { name: 'all', type: 'bool', desc: 'with --watchers: include dead watchers too' },
   { name: 'all-dispatch', type: 'bool', desc: 'with --tree: show dispatch.start events too (dropped by default)' },
   { name: 'no-color', type: 'bool', desc: 'disable ANSI color in output' },
-  { name: 'embed-failures', type: 'bool', desc: 'embed_fail/embed_query_failed/memorize_embed_failed events (structured + watcher.log fallback)' },
+  { name: 'embed-failures', type: 'bool', desc: 'embed_fail/embed_query_failed/memorize_embed_failed events' },
   { name: 'recall-misses', type: 'bool', desc: 'recall events with hit=false grouped by query' },
   { name: 'recall-scores', type: 'bool', desc: 'histogram of top-hit recall scores' },
   { name: 'classifier-rejects', type: 'bool', desc: 'memorize_reject events grouped by reason' },
-  { name: 'memory-leverage', type: 'bool', desc: 'memorize_fired vs subsequent recall reuse per session' },
+  { name: 'memory-leverage', type: 'bool', desc: 'recall hit-rate + memorize reject/dedup/embed-fail counts, per project' },
   { name: 'recall-modes', type: 'bool', desc: 'distribution of recall.mode (vector_top_k|fallback_like|kv_query)' },
   { name: 'table-drops', type: 'bool', desc: 'catastrophic table_dropped events with dim deltas' },
   { name: 'discipline-sigil-ignored', type: 'bool', desc: 'discipline_sigil_ignored events (doc-vs-code drift)' },
+  { name: 'agents', alias: 'live', type: 'bool', desc: 'live manager view: every gm agent\'s phase, instruction, elapsed-in-phase, PRD/mutable counts, recent output; add -f to refresh' },
+  { name: 'agent', type: 'string', desc: 'with --agents: drill into one project by cwd or basename (full instruction text + longer output feed)' },
+  { name: 'interval', type: 'number', default: 2000, desc: 'with --agents -f: refresh period in ms (min 250)' },
+  { name: 'output-lines', type: 'number', default: 6, desc: 'with --agents: recent output lines per project (drilldown uses 4x)' },
+  { name: 'idle', type: 'bool', desc: 'with --agents: include idle/COMPLETE agents too (default: working agents first, idle summarized)' },
 ];
+
+// Alias -> canonical flag name, derived from the same FLAG_DEFS rows (each alias lives on its
+// canonical row, never as a duplicate row of its own). parseArgs rewrites an alias to its
+// canonical name before storing, so every downstream read is single-keyed.
+const FLAG_ALIASES = new Map(FLAG_DEFS.filter(f => f.alias && f.alias.length > 1).map(f => [f.alias, f.name]));
 
 const FLAGS = {
   string: FLAG_DEFS.filter(f => f.type === 'string').map(f => f.name),
@@ -84,13 +96,14 @@ const FLAGS = {
   number: FLAG_DEFS.filter(f => f.type === 'number').map(f => f.name),
   bool: FLAG_DEFS.filter(f => f.type === 'bool').map(f => f.name),
 };
-const KNOWN_FLAG_NAMES = new Set(FLAG_DEFS.map(f => f.name));
+const KNOWN_FLAG_NAMES = new Set([...FLAG_DEFS.map(f => f.name), ...FLAG_ALIASES.keys()]);
 
 function schemaObject() {
   return {
     exitCodes: EXIT_CODES,
     flags: FLAG_DEFS.map(f => ({ flag: `--${f.name}`, alias: f.alias ? `--${f.alias}` : undefined, type: f.type, default: f.default, description: f.desc })),
     subcommands: [
+      { name: '--agents', tier: 'quick-start', usage: 'gmsniff --agents [-f] [--agent <cwd|name>] [--idle] [--interval N] [--output-lines N]', desc: 'live manager view: per gm agent phase, served instruction, elapsed-in-phase, PRD/mutable pending, recent output; -f refreshes in place' },
       { name: 'gui', tier: 'daily', usage: 'gmsniff gui [--port N] [--open]', desc: 'launch the browser GUI server' },
       { name: '--prd-edit', tier: 'agent', usage: 'gmsniff --prd-edit <cwd> <id> [--status <s>] [--text <t>]', desc: 'rewrite a PRD row\'s status/text in <cwd>/.gm/prd.yml, atomic write' },
       { name: '--mutable-edit', tier: 'agent', usage: 'gmsniff --mutable-edit <cwd> <id> [--status <s>] [--witness <w>]', desc: 'rewrite a mutable row\'s status/witness in <cwd>/.gm/mutables.yml, atomic write' },
@@ -123,9 +136,10 @@ function parseArgs(argv) {
     if (a === '-h' || a === '--help') { opts.help = true; continue; }
     if (a === '-f') { opts.tail = true; continue; }
     if (!a.startsWith('--')) continue;
-    const key = a.slice(2);
-    if (!KNOWN_FLAG_NAMES.has(key)) {
-      process.stderr.write(`unknown flag: --${key}\nrun 'gmsniff --help' for the flag list, or 'gmsniff --schema' for machine-readable flag descriptions\n`);
+    const raw = a.slice(2);
+    const key = FLAG_ALIASES.get(raw) || raw;
+    if (!KNOWN_FLAG_NAMES.has(raw)) {
+      process.stderr.write(`unknown flag: --${raw}\nrun 'gmsniff --help' for the flag list, or 'gmsniff --schema' for machine-readable flag descriptions\n`);
       process.exit(2);
     }
     if (FLAGS.bool.includes(key)) { opts[key] = true; continue; }
@@ -134,7 +148,7 @@ function parseArgs(argv) {
     if (FLAGS.number.includes(key)) {
       const n = parseInt(val, 10);
       if (val === undefined || Number.isNaN(n)) {
-        process.stderr.write(`--${key} requires an integer value, got: ${val === undefined ? '(missing)' : JSON.stringify(val)}\n`);
+        process.stderr.write(`--${raw} requires an integer value, got: ${val === undefined ? '(missing)' : JSON.stringify(val)}\n`);
         process.exit(2);
       }
       opts[key] = n;
@@ -149,20 +163,28 @@ function printHelp() {
   process.stdout.write(`gmsniff — query, search, and tail gm-log events
 
 QUICK START (daily)
+  gmsniff --agents -f                   LIVE MANAGER VIEW: every running gm agent's phase,
+                                        served instruction, elapsed-in-phase, PRD/mutable
+                                        pending counts, and streaming recent output
+  gmsniff --agents --agent <name>       full instruction text + longer output feed for one project
   gmsniff gui --open                    browser dashboard: project health, phases, deviations at a glance
   gmsniff -f                            live tail, fanned out across every discovered project
   gmsniff --list-deviations             what went wrong recently, grouped by kind
-  gmsniff --list-sessions --since 24h   per-session summary with phase walk
-  gmsniff --tree <sess>                 drill into one session chronologically
+  gmsniff --watchers                    which daemons are alive + the running runtime version
 
 DAILY
+  gmsniff --agents                      one-shot manager snapshot (no refresh)
+  gmsniff --agents --idle               include idle/COMPLETE agents (default: working phases only)
+  gmsniff --agents -f --interval 5000   refresh every 5s instead of the 2s default
   gmsniff [filters] [output]            dump matching events (requires >=1 flag)
   gmsniff -f [filters]                  live tail, fanned out across every discovered project
   gmsniff --list-sessions [filters]     per-session summary with phase walk
   gmsniff --list-deviations             recent deviations grouped by kind, with own/foreign split,
                                         severity, recovery verb, and per-hour rate
-  gmsniff --list-deviations --own-only  only own-session deviations (real defects, not foreign gate-positives)
-  gmsniff --list-deviations --foreign-only  only foreign-session deviations (predictability-regardless-of-LLM)
+  gmsniff --list-deviations --own-only  only deviations from THIS project's cwd (real defects to correct)
+  gmsniff --list-deviations --foreign-only  only deviations from other projects (gate-positives elsewhere)
+                                        own/foreign is decided by cwd -- live events carry no
+                                        session id. Override with GMSNIFF_OWN_CWD=<path>.
   gmsniff --stats [filters]             breakdown by sub / event / sess / day
   gmsniff --tree <sess>                 chronological process tree for one session
   gmsniff --tree <sess> [--all-dispatch] drops dispatch.start unless --all-dispatch
@@ -172,17 +194,18 @@ INVESTIGATION
   gmsniff --list-events [--sub <s>]     event-type histogram
   gmsniff --efficiency <sess>           turn count, dispatch ratio, time-to-COMPLETE
   gmsniff --rollup <out.ndjson>         dump filtered events to file
-  gmsniff --updates                     live drift state + update.* event history
-  gmsniff --watchers                    one-line liveness + version per project cwd
+  gmsniff --updates                     runtime version + real drift (stale markers suppressed)
+  gmsniff --watchers                    one-line liveness per project cwd + machine-global runtime version
   gmsniff --conformance                 paper §14 metrics: ε (unresolved mutables) + PRD-pending per project
   gmsniff --projects                    alias for --conformance: alive/dead, version, PRD-pending, mutable-unknown per discovered project
 
 DIAGNOSTICS (rare: memory/learning forensics)
-  gmsniff --embed-failures [--stats]    rs-learn embed_text step failures (structured + watcher.log fallback)
+  gmsniff --embed-failures [--stats]    embed_fail/embed_query_failed/memorize_embed_failed events
+                                        (structured + .watcher.log text fallback)
   gmsniff --recall-misses [--top N]     recall events with hit=false grouped by query
   gmsniff --recall-scores [--bucket B]  histogram of top-hit recall scores (B default 0.1)
   gmsniff --classifier-rejects [--top N] memorize_reject grouped by reason
-  gmsniff --memory-leverage [--sess id] [--days N] memorize_fired vs subsequent recall reuse per session
+  gmsniff --memory-leverage [--days N]  recall hit-rate + memorize reject/dedup/embed-fail per project
   gmsniff --recall-modes [--stats]      distribution of recall.mode (vector_top_k|fallback_like|kv_query)
   gmsniff --table-drops                 catastrophic table_dropped events with dim deltas
   gmsniff --discipline-sigil-ignored    discipline_sigil_ignored events (doc-vs-code drift)
@@ -202,16 +225,38 @@ EXIT CODES
   (other)                uncaught exception (Node default); never silently mapped to 0
 
 SOURCES
-  default                ~/.gm/gm-log (or GM_LOG_DIR) day/subsystem jsonl files
-  fallback               when gm-log is empty/absent, evt: lines from each discovered
-                         <project>/.gm/exec-spool/.watcher.log (roots: GM_SPOOL_DIRS,
-                         DEV_ROOT, GM_DEV_ROOT, cwd, C:/dev or ~/dev)
+  primary                per-project <project>/.gm/exec-spool/.watcher.log -- "evt: {json}"
+                         lines, the live stream every current-generation agentplug daemon
+                         writes. Discovery seeds from ~/.gm-tools/daemon-registry.txt (the
+                         daemon's own authoritative served-cwd list, worktrees included) plus
+                         a scan of GM_SPOOL_DIRS, DEV_ROOT, GM_DEV_ROOT, cwd, C:/dev or ~/dev.
+  archive (opt-in)       ~/.claude/gm-log day/subsystem jsonl files -- 1,131,698 events across
+                         72 day-dirs, deliberately NOT merged into the default replay: it would
+                         swamp live spool data with history. Reachable only by setting GM_LOG_DIR
+                         explicitly. The daemon no longer writes here, so a query restricted to
+                         it can read empty even while agents are actively running.
+  live state             --agents reads neither: it reads .gm/turn-state.json, .gm/next-step.md,
+                         .gm/exec-spool/.turn-summary.json, .gm/last-prompt.txt and
+                         .gm/exec-spool/.last-gate-fired.json directly, per project.
+  runtime version        ~/.gm-tools/{plugkit,gm-plugkit}.version + .update-check-cache.json --
+                         machine-global under the shared daemon; .status.json no longer carries
+                         a per-project version/wrapper_sha at all.
   --spool <path>         force one project dir (or .watcher.log path) as the source
   -f / --tail            live: both sources run concurrently -- the central log watcher plus
                          a per-project .watcher.log tailer for every discovered project,
                          merged into one stream with cwd attribution preserved; rediscovers
                          new/removed projects every GM_FANOUT_REDISCOVER_MS (default 30000)
                          without restart. --spool with -f pins the fanout to one project.
+                         With --agents, -f instead repaints the manager board every --interval ms.
+
+LIVE MANAGER (--agents)
+  --agents               per-agent phase, instruction heading, elapsed-in-phase, PRD/mutable
+                         pending, and recent output. Alias: --live
+  -f                     repaint in place instead of printing one snapshot
+  --interval <ms>        repaint period (default 2000, min 250)
+  --agent <cwd|name>     drill into one project: full served instruction + longer output feed
+  --output-lines <N>     recent output lines per project (default 6; drilldown uses 4x)
+  --idle                 include idle/COMPLETE agents (default: working phases only)
 
 TIME
   --since <t>            ISO date, epoch ms, or relative Ns/Nm/Nh/Nd/Nw
@@ -246,6 +291,8 @@ OUTPUT
   --no-color             disable ANSI color
 
 EXAMPLES
+  gmsniff --agents -f
+  gmsniff --agents --agent spoint
   gmsniff --since 1h --sub plugkit --event dispatch.end --limit 20
   gmsniff --sub hook --grep "deviation\\." --stats
   gmsniff --list-sessions --since 24h
@@ -562,9 +609,20 @@ function mutableEdit(cwd, id, opts) {
   process.stdout.write(`# updated ${filePath} id=${id}\n${raw}`);
 }
 
+// Validates against registry.js's VERB_ALLOWLIST -- the same list the HTTP /api/lifecycle route
+// gates on, and itself kept in sync with ../gm's real is_orchestrator_verb + verbs.rs match arms.
+// A shape-only check let a typo'd verb write a spool file the daemon would only ever answer with
+// "unknown verb", so the CLI and HTTP surfaces now refuse identically.
 function dispatchVerb(cwd, verb, jsonPayload) {
-  if (!/^[a-zA-Z0-9-]+$/.test(verb)) {
-    process.stderr.write(`--dispatch: verb must be alphanumeric+dash only, got: ${verb}\n`);
+  if (!isUsableVerb(verb)) {
+    const shapeOk = /^[a-zA-Z0-9_-]+$/.test(verb);
+    // A retired verb is recognized by the daemon but its match arm always errors -- name that
+    // distinctly rather than reporting it as unknown, so the caller knows the verb was real.
+    process.stderr.write(!shapeOk
+      ? `--dispatch: verb must be alphanumeric, dash, or underscore only, got: ${verb}\n`
+      : isRetiredVerb(verb)
+        ? `--dispatch: retired verb: ${verb} -- recognized by the daemon but its handler always errors\n`
+        : `--dispatch: unknown verb: ${verb}\nknown verbs: ${[...VERB_ALLOWLIST].filter(v => !isRetiredVerb(v)).sort().join(' ')}\n`);
     process.exit(2);
   }
   let payload = '{}';
@@ -579,11 +637,16 @@ function dispatchVerb(cwd, verb, jsonPayload) {
   process.stdout.write(`# dispatched verb=${verb} -> ${file}\n${colorJson(payload)}\n`);
 }
 
-function listSessions(all) {
+const LIST_SESSIONS_MIN_EVENTS = 5;
+
+function listSessions(all, opts = {}) {
   const m = new Map();
+  // correlationKey ranks real identities sess -> session_id -> cwd#run -> cwd, so genuine
+  // session data (3,134 real events in the corpus) is preserved where it exists and degrades
+  // to the daemon-run boundary where it does not, instead of collapsing everything into one
+  // '(no-session)' bucket. The coverage footer below states which fidelity was actually used.
   for (const e of all) {
-    let k = e.sess;
-    if (!k) k = e.cwd ? `(cwd:${path.basename(e.cwd)})` : '(no-session)';
+    const k = correlationKey(e);
     let s = m.get(k);
     if (!s) {
       s = { sess: k, first: e.ts, last: e.ts, events: 0, phases: new Set(), dispatches: 0, deviations: 0, mut_res: 0, prd_add: 0, prd_res: 0, cwds: new Set() };
@@ -602,7 +665,12 @@ function listSessions(all) {
     }
     if (typeof e.event === 'string' && e.event.startsWith('deviation.')) s.deviations++;
   }
-  const rows = [...m.values()].sort((a, b) => (b.last || '').localeCompare(a.last || ''));
+  const allRows = [...m.values()].sort((a, b) => (b.last || '').localeCompare(a.last || ''));
+  // The daemon respawns constantly, so the cwd#run correlation key fragments into thousands of
+  // 1-event groups (14,475 singletons of 18,467 groups, measured) that bury the real chains.
+  // Hide the trivial ones by default; --all restores the raw grouping.
+  const rows = opts.all ? allRows : allRows.filter(s => s.events >= LIST_SESSIONS_MIN_EVENTS);
+  const hiddenTrivial = allRows.length - rows.length;
   for (const s of rows) {
     const walk = PHASES.map(p => s.phases.has(p) ? color('#', 32) : color('.', 90)).join('');
     const dev = s.deviations ? color(String(s.deviations).padStart(3), 31) : '   ';
@@ -620,45 +688,86 @@ function listSessions(all) {
     }
     process.stdout.write(`${(s.last || '').slice(0, 19)}  ${walk}  ev:${String(s.events).padStart(5)}  disp:${String(s.dispatches).padStart(4)}  prd:${s.prd_add}/${s.prd_res}  mut:${s.mut_res}  dev:${dev}  ${proj}  ${sessShort} ${watcher}\n`);
   }
-  process.stderr.write(`# ${rows.length} sessions - phase walk: P E E V C - watcher: ALIVE/dead per project cwd\n`);
+  const cov = correlationCoverage(all);
+  process.stderr.write(`# ${rows.length} groups shown of ${allRows.length} - phase walk: P E E V C - watcher: ALIVE/dead per project cwd\n`);
+  if (hiddenTrivial) process.stderr.write(`# ${hiddenTrivial} trivial group(s) hidden (<${LIST_SESSIONS_MIN_EVENTS} events): the daemon respawns constantly, so cwd#run fragments into thousands of 1-event groups. Pass --all to show them.\n`);
+  process.stderr.write(cov.has_true_session
+    ? `# correlation: ${cov.counts.sess} sess + ${cov.counts.session_id} session_id real agent sessions; ${cov.counts.run} grouped by daemon run, ${cov.counts.cwd} by cwd only\n`
+    : `# correlation: NO real agent-session ids in this data -- rows are grouped by daemon run (${cov.counts.run}) / cwd (${cov.counts.cwd}), not by agent session\n`);
 }
 
 // Per-deviation-kind metadata: severity governs attention, recover names the verb the chain
 // expects next (every gate denial names its recovery verb — surface it so a reader does not have
-// to remember the mapping).
+// to remember the mapping). `legacy: true` marks a kind no current ../gm source path still
+// emits: it survives here only because replayed history still contains it, and a reader seeing
+// one must not chase a live regression that no longer exists.
+//
+// Derived from the real emitters in ../gm (verify by path -- codesearch does not index it):
+//   rs-plugkit/crates/plugkit-core/src/gates.rs         log_deviation(): await-result-violation,
+//     bash-git-bypass, long-gap-retry-without-instruction, long-gap-no-instruction, gate-deny,
+//     stuck-loop-escalation, unsolicited-doc-created, prd-anti-shape
+//   .../src/wasm_dispatch/verbs.rs  deviation_push(): push-non-main-branch, push-dirty,
+//     push-rebase-conflict, push-remote-outpaces
+//   .../src/orchestrator/prd.rs                       : prd-add-no-id
+//   .../src/orchestrator/instructions/mod.rs  idev()  : complete-chain-poll
+//   .../src/lib.rs   signal_platform_search_drift()   : platform-search-drift
+//   .../src/poll_detect.rs                            : spool-poll
+//   .../src/orchestrator/fsm.rs                       : client-edit-no-witness
+// NOTE the prd.rs/residual.rs `deviation_kind` JSON fields (prd-resolve-no-witness,
+// prd-resolve-duplicate-witness, prd-resolve-unknown-id, residual-premature,
+// residual-dirty-tree) are refusal-BODY payload fields, not `deviation.*` event names -- they
+// never appear as an event and so must not be keyed here.
 const DEVIATION_META = {
-  'deviation.long-gap-no-instruction': { sev: 'warn', recover: 'instruction' },
-  'deviation.long-gap-retry-without-instruction': { sev: 'warn', recover: 'instruction' },
-  'deviation.residual-premature': { sev: 'warn', recover: 'prd-resolve|prd-add' },
-  'deviation.prd-anti-shape': { sev: 'warn', recover: 'prd-add (split into |F|=1 rows)' },
-  'deviation.gate-deny': { sev: 'info', recover: '(named in reason)' },
-  'deviation.prd-resolve-unknown-id': { sev: 'warn', recover: 'prd-add (correct id)' },
-  'deviation.push-dirty': { sev: 'critical', recover: 'git_status + commit' },
-  'deviation.complete-chain-poll': { sev: 'info', recover: 'stop (chain terminal)' },
-  'deviation.bash-git-bypass': { sev: 'warn', recover: 'git verbs' },
+  'deviation.long-gap-no-instruction': { sev: 'warn', recover: 'instruction (chain idle past long_gap_threshold_ms with no re-served prose)' },
+  'deviation.long-gap-retry-without-instruction': { sev: 'warn', recover: 'instruction (stop bare-retrying the same verb across the gap)' },
+  'deviation.gate-deny': { sev: 'info', recover: '(residuals named in the denial reason -- clear each, then re-transition)' },
+  'deviation.stuck-loop-escalation': { sev: 'critical', recover: 'prd-add (name the stuck state) then wfgy-method, never bare-retry the same transition' },
+  'deviation.await-result-violation': { sev: 'critical', recover: 'memorize-continue (pipeline suspended, only this verb advances state)' },
+  'deviation.bash-git-bypass': { sev: 'warn', recover: 'git_* verbs (raw git in a bash body carries no separable witness)' },
+  'deviation.unsolicited-doc-created': { sev: 'warn', recover: '(fs_write to an unlisted top-level doc path -- confirm intentional)' },
+  'deviation.prd-anti-shape': { sev: 'warn', recover: 'prd-resolve with witness_evidence (row closed without evidence)' },
   'deviation.prd-add-no-id': { sev: 'warn', recover: 'prd-add (pass id, or a slugifiable subject/title/description)' },
   'deviation.platform-search-drift': { sev: 'warn', recover: 'codesearch|recall (not raw Grep/Glob mid-chain)' },
-  'deviation.await-result-violation': { sev: 'critical', recover: 'memorize-continue (pipeline suspended, only this verb advances state)' },
-  'deviation.unsolicited-doc-created': { sev: 'warn', recover: '(fs_write to an unlisted top-level doc path -- confirm intentional)' },
-  'deviation.stuck-loop-escalation': { sev: 'critical', recover: 'prd-add (name the stuck state) then wfgy-method, never bare-retry the same transition' },
+  'deviation.spool-poll': { sev: 'warn', recover: 'instruction (spool polling detected -- use plugkit verbs, never sleep+cat loops)' },
+  'deviation.complete-chain-poll': { sev: 'info', recover: 'stop (chain terminal -- a new user prompt reopens it)' },
+  'deviation.client-edit-no-witness': { sev: 'warn', recover: 'browser (page.evaluate the invariant each client-side edit establishes)' },
+  'deviation.push-dirty': { sev: 'critical', recover: 'git_status + git_commit before git_push' },
   'deviation.push-non-main-branch': { sev: 'warn', recover: 'git_branch (consolidate to main per CLAUDE.md invariant)' },
   'deviation.push-rebase-conflict': { sev: 'critical', recover: 'resolving-merge-conflicts then git_push' },
   'deviation.push-remote-outpaces': { sev: 'warn', recover: 'git_fetch + re-resolve before git_push' },
-  'deviation.spool-poll': { sev: 'warn', recover: 'instruction (spool polling detected -- use plugkit verbs, never sleep+cat loops)' },
-  'deviation.prd-resolve-duplicate-witness': { sev: 'warn', recover: 'prd-resolve (write distinct witness per row, never copy-paste)' },
+  // Superseded by the unified consolidate/complete gate: current gm reports these residuals via
+  // deviation.gate-deny ("consolidate-gate residuals=N" / "stop-gate residuals=N") instead of a
+  // dedicated event per missing gate. Still present in replayed history.
+  'deviation.consolidate-without-residual-scan': { sev: 'warn', legacy: true, recover: 'residual-scan before CONSOLIDATE (now surfaced as gate-deny)' },
+  'deviation.complete-without-residual-scan': { sev: 'warn', legacy: true, recover: 'residual-scan before COMPLETE (now surfaced as gate-deny)' },
+  'deviation.complete-without-ci-validation': { sev: 'warn', legacy: true, recover: 'CI validation before COMPLETE (now surfaced as gate-deny)' },
 };
 const SEV_COLOR = { critical: 31, warn: 33, info: 36 };
-// A foreign session is tagged cwd-<hash> by the hook layer; an own session carries a real
-// session id matching the configured GMSNIFF_OWN_SESSION prefix. Foreign deviations are
-// gate-positives (predictability-regardless-of-agent); own deviations are real defects to correct.
+
+// OWN vs FOREIGN, re-grounded on real data. Most live evt lines carry no `sess` field, so the
+// old session-prefix-only test classified every deviation as foreign and --own-only always
+// printed nothing. But `sess` is NOT universally absent: 3,134 events in the real corpus do
+// carry it (measured via correlationCoverage over a full replay), so it must be honoured, not
+// discarded. Precedence: an explicit GMSNIFF_OWN_SESSION match on a real session identity
+// (sess/session_id, via correlationOf) wins; otherwise "own" means the deviation happened in the
+// project gmsniff is running from (GMSNIFF_OWN_CWD overrides).
+const OWN_CWD = canonPath(process.env.GMSNIFF_OWN_CWD || process.cwd());
+function canonPath(p) {
+  if (!p) return null;
+  try { return path.resolve(p).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase(); } catch (_) { return null; }
+}
 function devOrigin(e) {
-  const sess = String(e.sess || e.cwd || '');
   const own = process.env.GMSNIFF_OWN_SESSION;
-  if (own && sess.startsWith(own)) return 'own';
-  if (/^cwd-/.test(sess)) return 'foreign';
+  if (own) {
+    const c = correlationOf(e);
+    if ((c.kind === 'sess' || c.kind === 'session_id') && String(c.key).startsWith(own)) return 'own';
+  }
+  if (OWN_CWD && e.cwd && canonPath(e.cwd) === OWN_CWD) return 'own';
   return 'foreign';
 }
-function devMeta(ev) { return DEVIATION_META[ev] || { sev: 'warn', recover: '?' }; }
+// An unmapped kind is itself signal (gmsniff's table has drifted behind ../gm) -- flag it as
+// such rather than rendering an indistinguishable `recover:?` next to genuinely-mapped rows.
+function devMeta(ev) { return DEVIATION_META[ev] || { sev: 'warn', recover: '(unmapped -- re-derive DEVIATION_META from ../gm source)', unknown: true }; }
 
 function listDeviations(all, opts = {}) {
   let filt = all.filter(e => typeof e.event === 'string' && e.event.startsWith('deviation.'));
@@ -675,11 +784,16 @@ function listDeviations(all, opts = {}) {
   const span = filt.length > 1 ? (Date.parse(filt[filt.length - 1].ts || 0) - Date.parse(filt[0].ts || 0)) : 0;
   const perHr = span > 0 ? (filt.length / (span / 3600000)).toFixed(1) : String(filt.length);
   process.stdout.write(`# total deviations: ${filt.length}  (own:${color(String(own), own ? 31 : 32)} foreign:${foreign})  rate: ${perHr}/hr\n`);
+  process.stdout.write(`# own = cwd ${OWN_CWD || '(unresolved)'}  (override with GMSNIFF_OWN_CWD)\n`);
   process.stdout.write(`# by severity: ${['critical', 'warn', 'info'].map(s => `${color(s, SEV_COLOR[s])}:${bySev.get(s) || 0}`).join('  ')}\n`);
+  let unknownKinds = 0;
   for (const [k, n] of [...byKind.entries()].sort((a, b) => b[1] - a[1])) {
     const m = devMeta(k);
-    process.stdout.write(`  ${String(n).padStart(5)}  ${color(k, SEV_COLOR[m.sev] || 31)}  ${color(`[${m.sev}]`, SEV_COLOR[m.sev])}  recover:${m.recover}\n`);
+    if (m.unknown) unknownKinds++;
+    const tag = m.legacy ? color(' [legacy]', 90) : (m.unknown ? color(' [unmapped]', 90) : '');
+    process.stdout.write(`  ${String(n).padStart(5)}  ${color(k, SEV_COLOR[m.sev] || 31)}  ${color(`[${m.sev}]`, SEV_COLOR[m.sev])}${tag}  recover:${m.recover}\n`);
   }
+  if (unknownKinds) process.stderr.write(`# ${unknownKinds} kind(s) unmapped -- DEVIATION_META has drifted behind ../gm's real emitters; re-derive from ../gm source\n`);
   process.stdout.write('\n# recent (last 20):\n');
   for (const e of filt.slice(-20).reverse()) {
     const o = devOrigin(e);
@@ -736,36 +850,136 @@ function watchers(all, opts = {}) {
   for (const cwd of cwds) {
     const status = readWatcherStatus(cwd);
     if (!status) continue;
-    if (!includeDead && !status.alive) continue;
-    const updateInfo = readUpdateAvailable(cwd);
-    rows.push({ cwd, update: updateInfo, ...status });
+    // Filter on PER-PROJECT activity, not readWatcherStatus().alive: the latter tests the shared
+    // daemon pid, which is the same process for every project, so it never excluded anything.
+    const live = readProjectLiveness(cwd);
+    if (!includeDead && !live.active) continue;
+    rows.push({ cwd, update: readUpdateAvailable(cwd), live, ...status });
   }
   rows.sort((a, b) => {
-    if (a.alive !== b.alive) return a.alive ? -1 : 1;
-    return (a.age_ms || 0) - (b.age_ms || 0);
+    if (a.live.active !== b.live.active) return a.live.active ? -1 : 1;
+    return (a.live.last_activity_age_ms ?? Infinity) - (b.live.last_activity_age_ms ?? Infinity);
   });
-  const aliveCount = rows.filter(r => r.alive).length;
+  const aliveCount = rows.filter(r => r.live.active).length;
   const deadShown = rows.length - aliveCount;
-  const drifted = rows.filter(r => r.update && r.update.latest && r.update.latest !== r.version).length;
-  process.stdout.write(`# ${rows.length} watchers ${includeDead ? '(alive + dead)' : '(alive only -- pass --all for dead)'}${drifted ? ` - ${drifted} drifted` : ''}\n`);
-  const wrapperShas = new Set(rows.filter(r => r.wrapper_sha).map(r => r.wrapper_sha));
-  const wrapperDivergent = wrapperShas.size > 1;
-  process.stdout.write(`STATE   VERSION    WRAPPER  PID    AGE       PROJECT                 UPDATE\n`);
-  for (const r of rows) {
-    const state = r.alive ? color('ALIVE ', 32) : color('dead  ', 31);
-    const age = r.age_ms !== null ? fmtAge(r.age_ms) : '?';
-    const proj = path.basename(r.cwd);
-    let update = '';
-    if (r.update && r.update.latest && r.update.latest !== r.version) {
-      update = color(`-> v${r.update.latest}`, 33);
-    } else if (r.shared_process) {
-      update = color(`shared:${r.pid}`, 36);
+  const gt = readGmToolsVersions();
+  // Drift is a machine-global property under the shared daemon (one runtime serves every cwd),
+  // not a per-project one: compare the real running plugkit version against the daemon's own
+  // last registry probe. A per-project .update-available.json marker is still surfaced per row,
+  // but only when its `latest` is genuinely newer than the running version.
+  const runningVersion = gt.plugkit;
+  // ~/.gm-tools/daemon-status.json is NOT a reliable liveness source: measured live it named a
+  // 71h-old pid 4304 while the actual serving daemon was pid 3364 (per every project's
+  // .status.json, confirmed against the real process table). Trusting it reports "daemon down"
+  // for a fleet that is demonstrably running. The pid the per-project .status.json files name is
+  // the real one -- probe it directly rather than inferring from per-project activity (a fleet
+  // can legitimately be all-idle while the daemon is up, which is not "daemon down").
+  const daemonUp = (() => {
+    for (const r of rows) {
+      if (!r.pid) continue;
+      try { process.kill(r.pid, 0); return true; } catch (_) {}
     }
-    const wsha = r.wrapper_sha ? (wrapperDivergent ? color(r.wrapper_sha, 33) : r.wrapper_sha) : '       ';
-    const verLabel = r.version ? `v${r.version}` : (r.runtime === 'agentplug' ? 'agentplug' : '?');
-    process.stdout.write(`${state}  ${verLabel.padEnd(9)} ${wsha} ${String(r.pid).padStart(6)} ${age.padEnd(9)} ${proj.padEnd(20)}  ${update}\n`);
+    return false;
+  })();
+  const globalDrift = versionIsNewer(gt.latest, runningVersion);
+  const driftedRows = rows.filter(r => r.update && versionIsNewer(r.update.latest, runningVersion));
+  process.stdout.write(`# ${rows.length} watchers ${includeDead ? '(active + idle)' : '(ACTIVE only -- pass --all for idle)'}\n`);
+  process.stdout.write(`# runtime: plugkit v${runningVersion || '?'}  gm-plugkit v${gt.gm_plugkit || '?'}  registry-latest v${gt.latest || '?'}${gt.checked_at_ms ? ` (checked ${fmtAge(Date.now() - gt.checked_at_ms)} ago)` : ''}${globalDrift ? color('  DRIFTED', 33) : ''}\n`);
+  process.stdout.write(`STATE   SERVED     PID    LAST-ACT  QUEUE  PROJECT               NOTE\n`);
+  for (const r of rows) {
+    // ACTIVE is per-project (readProjectLiveness), not "the shared daemon answers" -- the latter
+    // is true for every discovered project whenever the daemon runs at all.
+    const live = r.live;
+    const state = live.active ? color('ACTIVE', 32) : color('idle  ', 90);
+    const age = live.last_activity_age_ms !== null ? fmtAge(live.last_activity_age_ms) : '?';
+    const proj = path.basename(r.cwd);
+    let note = '';
+    if (r.update && versionIsNewer(r.update.latest, runningVersion)) {
+      note = color(`-> v${r.update.latest}`, 33);
+    } else if (!daemonUp) {
+      note = color('daemon down', 31);
+    }
+    const served = readServedVersion(r.cwd);
+    const verLabel = served ? `v${served}` : '?';
+    const q = live.queue_depth ? color(String(live.queue_depth).padStart(5), 33) : '    0';
+    process.stdout.write(`${state}  ${verLabel.padEnd(9)} ${String(r.pid).padStart(6)} ${age.padEnd(9)} ${q}  ${proj.padEnd(20)}  ${note}\n`);
   }
-  process.stderr.write(`# ${aliveCount} alive${includeDead ? ` - ${deadShown} dead shown` : ''}${drifted ? ` - ${drifted} need bootstrap+respawn` : ''}\n`);
+  process.stderr.write(`# ${aliveCount} active${includeDead ? ` - ${deadShown} idle shown` : ''}${globalDrift ? ` - runtime drifted (v${runningVersion} -> v${gt.latest}): bun x gm-plugkit@latest` : ''}${driftedRows.length ? ` - ${driftedRows.length} project marker(s) newer than runtime` : ''}\n`);
+}
+
+// Machine-global version signal. The agentplug shared daemon dropped per-project version /
+// wrapper_sha / idle_limit_ms from .gm/exec-spool/.status.json entirely, so readWatcherStatus's
+// `version` is null for every current-generation project -- comparing an .update-available.json
+// `latest` against that null reported EVERY marked project as drifted. The real running-version
+// signal now lives machine-wide in ~/.gm-tools/{plugkit,gm-plugkit}.version, alongside
+// .update-check-cache.json (the daemon's own last npm-registry probe).
+function readGmToolsVersions() {
+  const installed = readInstalledVersions();
+  let cache = null;
+  try { cache = JSON.parse(fs.readFileSync(path.join(GM_TOOLS_DIR, '.update-check-cache.json'), 'utf-8')); } catch (_) {}
+  return {
+    plugkit: installed.plugkit,
+    gm_plugkit: installed.gm_plugkit,
+    latest: cache && cache.latest ? String(cache.latest) : null,
+    checked_at_ms: cache && Number.isFinite(cache.ts) ? cache.ts : null,
+  };
+}
+
+// The per-project served version, read from the watcher.log's own "plugkit vX.Y.Z (wasm)" banner
+// (3,917 real occurrences). This is the field .status.json's now-absent `version` used to carry;
+// the banner is the only place the real per-project served version still appears.
+//
+// The banner is only written at daemon-boot, so on a busy project it can sit far back in the
+// file -- a small tail window silently reports "no version". Scan backwards in bounded chunks
+// and stop at the first (newest) banner found, so the common case reads only the tail while a
+// quiet project still resolves. Capped at SERVED_VERSION_MAX_BYTES: --watchers calls this once
+// per discovered project (54 real projects, some multi-MB) and an unbounded full read there was
+// slow enough to look like a hang.
+const SERVED_VERSION_MAX_BYTES = 4 * 1024 * 1024;
+const SERVED_VERSION_RE = /plugkit\s+v(\d+\.\d+\.\d+)\s*\(wasm\)/g;
+const _servedVersionCache = new Map();
+function readServedVersion(cwd) {
+  const fp = path.join(cwd, '.gm', 'exec-spool', '.watcher.log');
+  let stat;
+  try { stat = fs.statSync(fp); } catch (_) { return null; }
+  const hit = _servedVersionCache.get(cwd);
+  if (hit && hit.mtime === stat.mtimeMs) return hit.version;
+
+  let version = null;
+  let fd = null;
+  try {
+    fd = fs.openSync(fp, 'r');
+    const chunk = 512 * 1024;
+    const limit = Math.min(stat.size, SERVED_VERSION_MAX_BYTES);
+    for (let read = 0; read < limit && version === null; read += chunk) {
+      const want = Math.min(chunk, limit - read);
+      const pos = stat.size - read - want;
+      const buf = Buffer.alloc(want);
+      fs.readSync(fd, buf, 0, want, pos);
+      const text = buf.toString('utf8');
+      SERVED_VERSION_RE.lastIndex = 0;
+      let m;
+      while ((m = SERVED_VERSION_RE.exec(text)) !== null) version = m[1];
+    }
+  } catch (_) {}
+  finally { if (fd !== null) { try { fs.closeSync(fd); } catch (_) {} } }
+  _servedVersionCache.set(cwd, { mtime: stat.mtimeMs, version });
+  return version;
+}
+
+// Semver-ish compare; returns true only when `latest` is strictly newer than `running`. An
+// unparseable or absent side is never "drifted" -- an unknown running version is the state the
+// old code silently read as "behind".
+function versionIsNewer(latest, running) {
+  if (!latest || !running) return false;
+  const a = String(latest).split('.').map(n => parseInt(n, 10));
+  const b = String(running).split('.').map(n => parseInt(n, 10));
+  if (a.some(Number.isNaN) || b.some(Number.isNaN)) return latest !== running;
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const x = a[i] || 0, y = b[i] || 0;
+    if (x !== y) return x > y;
+  }
+  return false;
 }
 
 function readUpdateAvailable(cwd) {
@@ -792,17 +1006,17 @@ function parseRel(s) {
   return n * { s: 1000, m: 60000, h: 3600000, d: 86400000, w: 604800000 }[unit];
 }
 
+// Resolves the newest correlation group for this cwd. Keyed on correlationKey rather than raw
+// `sess` so it still resolves on projects whose events carry no session id (the majority) --
+// there it returns the cwd#run daemon-run key, which --tree/--efficiency filter on identically.
 function resolveCurrentSession(all) {
-  const here = process.cwd();
-  const canon = (p) => p && path.resolve(p).replace(/\\/g, '/').toLowerCase();
-  const target = canon(here);
+  const target = canonPath(process.cwd());
   let best = null;
   for (const e of all) {
-    if (!e.sess) continue;
-    if (canon(e.cwd) !== target) continue;
-    if (!best || (e.ts || '') > (best.ts || '')) best = { ts: e.ts, sess: e.sess };
+    if (canonPath(e.cwd) !== target) continue;
+    if (!best || (e.ts || '') > (best.ts || '')) best = { ts: e.ts, key: correlationKey(e) };
   }
-  return best ? best.sess : null;
+  return best ? best.key : null;
 }
 
 function tree(all, sess, opts = {}) {
@@ -814,7 +1028,10 @@ function tree(all, sess, opts = {}) {
   }
   if (!sess) { process.stderr.write('--tree requires a session id (or "current" to auto-resolve from cwd)\n'); process.exit(2); }
   const wantEmpty = sess === '(no-session)' || sess === '' || sess === '-';
-  const evs = all.filter(e => wantEmpty ? !e.sess : (e.sess === sess || (e.sess || '').startsWith(sess))).sort((a, b) => (a.ts || '').localeCompare(b.ts || ''));
+  // Matches on the correlation key, so a raw agent `sess` id, a cwd#run daemon-run key, and a
+  // bare cwd all resolve -- otherwise --tree only ever worked for the 1.5% of events that
+  // carry a real sess field.
+  const evs = all.filter(e => { if (wantEmpty) return !e.sess; const k = correlationKey(e); return k === sess || k.startsWith(sess); }).sort((a, b) => (a.ts || '').localeCompare(b.ts || ''));
   let currentPhase = '?';
   let firstInstructionSeen = false;
   const gaps = [];
@@ -852,7 +1069,7 @@ function tree(all, sess, opts = {}) {
 function efficiency(all, sess) {
   if (!sess) { process.stderr.write('--efficiency requires a session id\n'); process.exit(2); }
   const wantEmpty = sess === '(no-session)' || sess === '' || sess === '-';
-  const evs = all.filter(e => wantEmpty ? !e.sess : (e.sess === sess || (e.sess || '').startsWith(sess))).sort((a, b) => (a.ts || '').localeCompare(b.ts || ''));
+  const evs = all.filter(e => { if (wantEmpty) return !e.sess; const k = correlationKey(e); return k === sess || k.startsWith(sess); }).sort((a, b) => (a.ts || '').localeCompare(b.ts || ''));
   if (!evs.length) { process.stderr.write(`# no events for session ${sess}\n`); process.exit(0); }
   let dispatches = 0, transitions = 0, instructions = 0, devs = 0, mutRes = 0;
   const verbs = new Map();
@@ -894,48 +1111,73 @@ function efficiency(all, sess) {
   }
 }
 
-function findUpdateMarkers() {
-  const roots = [];
-  for (const env of ['DEV_ROOT', 'GM_DEV_ROOT']) {
-    if (process.env[env]) roots.push(process.env[env]);
-  }
-  roots.push(process.cwd());
-  if (process.platform === 'win32') roots.push('C:/dev'); else roots.push(path.join(os.homedir(), 'dev'));
+// ~/.gm-tools/daemon-registry.txt is the shared daemon's own authoritative list of every cwd it
+// serves -- the only source that includes worktree-hosted projects (C:\dev\<repo>\.claude\
+// worktrees\wf_*, four levels deep). A one-level readdir of the dev roots structurally cannot
+// reach those, so every discovery path here seeds from the registry first and only then falls
+// back to the root scan for projects the daemon has not (yet) registered.
+function readDaemonRegistry() {
+  try {
+    return fs.readFileSync(path.join(GM_TOOLS_DIR, 'daemon-registry.txt'), 'utf-8')
+      .split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+  } catch (_) { return []; }
+}
+
+// Every gm project cwd on this machine: daemon registry (authoritative, any depth) unioned with
+// a one-level scan of the dev roots, deduped on a canonical path key.
+function discoverProjectCwds() {
+  const out = [];
   const seen = new Set();
-  const markers = [];
+  const add = (p) => { const k = canonPath(p); if (!k || seen.has(k)) return; seen.add(k); out.push(p); };
+  for (const cwd of readDaemonRegistry()) add(cwd);
+  const roots = [];
+  for (const env of ['DEV_ROOT', 'GM_DEV_ROOT']) if (process.env[env]) roots.push(process.env[env]);
+  roots.push(process.cwd());
+  roots.push(process.platform === 'win32' ? 'C:/dev' : path.join(os.homedir(), 'dev'));
   for (const root of roots) {
     try {
       if (!fs.existsSync(root)) continue;
       for (const d of fs.readdirSync(root, { withFileTypes: true })) {
         if (!d.isDirectory()) continue;
         const proj = path.join(root, d.name);
-        if (seen.has(proj)) continue;
-        seen.add(proj);
-        const marker = path.join(proj, '.gm', 'exec-spool', '.update-available.json');
-        try {
-          if (fs.existsSync(marker)) {
-            const content = JSON.parse(fs.readFileSync(marker, 'utf8'));
-            const status = path.join(proj, '.gm', 'exec-spool', '.status.json');
-            let runningVersion = null;
-            try { runningVersion = JSON.parse(fs.readFileSync(status, 'utf8')).version; } catch (_) {}
-            markers.push({ project: path.basename(proj), path: proj, ...content, running: runningVersion });
-          }
-        } catch (_) {}
+        if (fs.existsSync(path.join(proj, '.gm', 'exec-spool'))) add(proj);
       }
+    } catch (_) {}
+  }
+  return out.filter(p => { try { return fs.existsSync(path.join(p, '.gm')); } catch (_) { return false; } });
+}
+
+function findUpdateMarkers() {
+  const markers = [];
+  for (const proj of discoverProjectCwds()) {
+    const marker = path.join(proj, '.gm', 'exec-spool', '.update-available.json');
+    try {
+      if (!fs.existsSync(marker)) continue;
+      const content = JSON.parse(fs.readFileSync(marker, 'utf8'));
+      markers.push({ project: path.basename(proj), path: proj, ...content, running: readGmToolsVersions().plugkit });
     } catch (_) {}
   }
   return markers;
 }
 
 function updates(all, opts) {
-  const markers = findUpdateMarkers();
+  const gt = readGmToolsVersions();
+  const allMarkers = findUpdateMarkers();
+  // A marker whose `latest` is not newer than the actually-running runtime is a stale leftover,
+  // not drift: the shared daemon updates machine-wide and never rewrites each project's marker.
+  const markers = allMarkers.filter(m => versionIsNewer(m.latest, gt.plugkit));
   if (opts.json) {
-    process.stdout.write(JSON.stringify({ live: markers, history: all.filter(e => typeof e.event === 'string' && e.event.startsWith('update.')) }, null, 2) + '\n');
+    process.stdout.write(JSON.stringify({ runtime: gt, live: markers, stale_markers: allMarkers.length - markers.length, history: all.filter(e => typeof e.event === 'string' && e.event.startsWith('update.')) }, null, 2) + '\n');
     return;
+  }
+  process.stdout.write(`# runtime: plugkit v${gt.plugkit || '?'}  gm-plugkit v${gt.gm_plugkit || '?'}  registry-latest v${gt.latest || '?'}${gt.checked_at_ms ? ` (checked ${fmtAge(Date.now() - gt.checked_at_ms)} ago)` : ''}\n`);
+  if (versionIsNewer(gt.latest, gt.plugkit)) {
+    process.stdout.write(`  ${color('!', 31)} runtime drifted: v${gt.plugkit} -> ${color('v' + gt.latest, 33)}\n`);
   }
   process.stdout.write('# live drift state:\n');
   if (!markers.length) {
-    process.stdout.write('  (none — every project is current)\n');
+    const stale = allMarkers.length - markers.length;
+    process.stdout.write(`  (none — every project is current${stale ? `; ${stale} stale marker(s) already superseded by the running runtime` : ''})\n`);
   } else {
     for (const m of markers) {
       const ageMin = m.checked_at_ms ? Math.round((Date.now() - m.checked_at_ms) / 60_000) : null;
@@ -954,37 +1196,11 @@ function updates(all, opts) {
   }
 }
 
-function readWatcherLogEmbedFails(cwd, sinceMs, untilMs) {
-  try {
-    const txt = fs.readFileSync(path.join(cwd, '.gm', 'exec-spool', '.watcher.log'), 'utf-8');
-    const failRe = /embed::embed_text step '([^']+)' failed/;
-    const tsRe = /"ts":(\d{13})/;
-    const raw = [];
-    const pending = [];
-    let lastTs = 0;
-    for (const line of txt.split('\n')) {
-      const tm = line.match(tsRe);
-      if (tm) {
-        lastTs = parseInt(tm[1], 10);
-        for (const p of pending) p.ts = lastTs;
-        pending.length = 0;
-      }
-      const fm = line.match(failRe);
-      if (!fm) continue;
-      const entry = { step: fm[1], _src: 'watcher.log', cwd, ts: lastTs || 0 };
-      raw.push(entry);
-      if (!lastTs) pending.push(entry);
-    }
-    const out = [];
-    for (const e of raw) {
-      if (sinceMs && (!e.ts || e.ts < sinceMs)) continue;
-      if (untilMs && e.ts && e.ts > untilMs) continue;
-      e._day = e.ts ? new Date(e.ts).toISOString().slice(0, 10) : undefined;
-      out.push(e);
-    }
-    return out;
-  } catch (_) { return []; }
-}
+// The former hand-rolled `embed::embed_text step '<x>' failed` free-text scraper lived here. It
+// is gone: src/watcher-log.js is the single unified parser for this file, and that pattern has
+// zero occurrences across every registered project's real watcher.log (verified by direct scan)
+// -- the current runtime emits structured embed_fail/embed_query_failed/memorize_embed_failed
+// events instead, which the structured path below already reads.
 
 function embedFailures(all, opts) {
   // Matches on event name alone -- rs-learn (the crate that used to tag these _sub:'rs_learn')
@@ -992,16 +1208,7 @@ function embedFailures(all, opts) {
   // memorize_embed_failed events carry no explicit sub tag (default through to 'plugkit') or
   // are tagged sub:'memory' by recall.rs -- filtering _sub==='rs_learn' would silently match
   // nothing against a current-generation project's real log.
-  const structured = all.filter(e => e.event === 'embed_fail' || e.event === 'embed_query_failed' || e.event === 'memorize_embed_failed');
-  let fallback = [];
-  if (!structured.length) {
-    const sinceMs = parseTime(opts.since || opts.after);
-    const untilMs = parseTime(opts.until || opts.before);
-    const cwds = new Set();
-    for (const e of all) if (e.cwd) cwds.add(e.cwd);
-    for (const c of cwds) fallback.push(...readWatcherLogEmbedFails(c, sinceMs, untilMs));
-  }
-  const evs = [...structured, ...fallback];
+  const evs = all.filter(e => e.event === 'embed_fail' || e.event === 'embed_query_failed' || e.event === 'memorize_embed_failed');
   if (opts.stats) {
     const byStep = new Map(), byDay = new Map(), byProj = new Map();
     for (const e of evs) {
@@ -1011,7 +1218,7 @@ function embedFailures(all, opts) {
       const proj = e.cwd ? path.basename(e.cwd) : '?';
       byProj.set(proj, (byProj.get(proj) || 0) + 1);
     }
-    process.stdout.write(`# embed failures: ${evs.length} (${structured.length} structured, ${fallback.length} watcher.log)\n`);
+    process.stdout.write(`# embed failures: ${evs.length} (structured events)\n`);
     const dump = (label, m) => { process.stdout.write(`\n# ${label}\n`); [...m.entries()].sort((a,b)=>b[1]-a[1]).slice(0,20).forEach(([k,v]) => process.stdout.write(`  ${String(v).padStart(6)}  ${k}\n`)); };
     dump('by step', byStep); dump('by day', byDay); dump('by project', byProj);
     return;
@@ -1025,7 +1232,7 @@ function embedFailures(all, opts) {
     const tsNum = typeof e.ts === 'number' ? e.ts : (e.ts ? Date.parse(e.ts) : 0);
     if (tsNum && tsNum > s.last_ts) s.last_ts = tsNum;
   }
-  process.stdout.write(`# embed failures: ${evs.length} (${structured.length} structured, ${fallback.length} watcher.log fallback)\n`);
+  process.stdout.write(`# embed failures: ${evs.length} (structured events)\n`);
   process.stdout.write(`COUNT   LAST                 STEP\n`);
   for (const s of [...byStep.values()].sort((a,b)=>b.count-a.count).slice(0,20)) {
     const lastStr = s.last_ts ? new Date(s.last_ts).toISOString() : '';
@@ -1102,34 +1309,44 @@ function memoryLeverage(all, opts) {
   const cutoff = Date.now() - days * 86400000;
   const filt = (e) => { const t = e.ts ? Date.parse(e.ts) : 0; return t >= cutoff && (!opts.sess || (e.sess && e.sess.startsWith(opts.sess))); };
   const evs = all.filter(filt);
-  const bySess = new Map();
+  // Re-grounded on what the real emitters actually produce (verified in ../gm):
+  //   * There is NO memorize-success event. `memorized` in code_index.rs is a RESPONSE field,
+  //     not an event name; the old `memorize_fired`/`memorize.fired` filter matched 0 of every
+  //     sampled project's real log. The observable memorize surface is its failure/no-op side:
+  //     memorize_reject, memorize_deduped, memorize_embed_failed.
+  //   * recall's real payload (orchestrator/recall.rs emit_recall) is
+  //     {sub, query, hit, mode, n_hits, namespace, top_score} -- it carries NO hits[] array and
+  //     NO key, so the old memorized-key <-> recalled-key join was structurally impossible and
+  //     could only ever print 0. Hit-rate is the leverage signal the data can actually support.
+  // Live evt lines also carry no `sess` field at all, so grouping falls back to cwd -- the only
+  // attribution a live event carries -- and the metric is reported per project chain.
+  const byKey = new Map();
+  const keyOf = (e) => correlationKey(e);
+  const bump = (e, field) => {
+    const k = keyOf(e);
+    let s = byKey.get(k);
+    if (!s) { s = { key: k, recalls: 0, hits: 0, rejects: 0, deduped: 0, embed_failed: 0 }; byKey.set(k, s); }
+    s[field]++;
+    return s;
+  };
   for (const e of evs) {
-    const k = e.sess || '(no-session)';
-    let s = bySess.get(k);
-    if (!s) { s = { sess: k, memorized: 0, memorized_keys: new Set(), recalled_back: 0 }; bySess.set(k, s); }
-    if (e.event === 'memorize_fired' || e.event === 'memorize.fired') {
-      s.memorized++;
-      if (e.key) s.memorized_keys.add(String(e.key));
-    }
+    if (e.event === 'recall') { const s = bump(e, 'recalls'); if (e.hit === true || (Number.isFinite(e.n_hits) && e.n_hits > 0)) s.hits++; }
+    else if (e.event === 'memorize_reject') bump(e, 'rejects');
+    else if (e.event === 'memorize_deduped') bump(e, 'deduped');
+    else if (e.event === 'memorize_embed_failed') bump(e, 'embed_failed');
   }
-  for (const e of evs) {
-    // recall events are tagged sub:'memory' by rs-plugkit orchestrator/recall.rs (confirmed
-    // live), not 'rs_learn' -- the retired crate's old tag would never match current data.
-    if (e._sub !== 'memory' || e.event !== 'recall') continue;
-    const k = e.sess || '(no-session)';
-    const s = bySess.get(k);
-    if (!s) continue;
-    const hitKeys = [];
-    if (Array.isArray(e.hits)) for (const h of e.hits) if (h && h.key) hitKeys.push(String(h.key));
-    if (e.key) hitKeys.push(String(e.key));
-    for (const hk of hitKeys) if (s.memorized_keys.has(hk)) { s.recalled_back++; break; }
-  }
+  const rows = [...byKey.values()].filter(s => s.recalls || s.rejects || s.deduped || s.embed_failed);
   process.stdout.write(`# memory leverage (last ${days}d${opts.sess ? `, sess=${opts.sess}` : ''})\n`);
-  process.stdout.write(`SESS                      MEMORIZED  RECALLED_BACK  LEVERAGE%\n`);
-  for (const s of [...bySess.values()].sort((a,b)=>b.memorized-a.memorized)) {
-    if (!s.memorized && !s.recalled_back) continue;
-    const lev = s.memorized ? ((s.recalled_back / s.memorized) * 100).toFixed(1) : '0.0';
-    process.stdout.write(`${s.sess.slice(0,24).padEnd(24)}  ${String(s.memorized).padStart(9)}  ${String(s.recalled_back).padStart(13)}  ${lev.padStart(8)}\n`);
+  if (!rows.length) {
+    process.stdout.write('# no recall/memorize events in window\n');
+    return;
+  }
+  process.stdout.write(`# recall hit-rate + memorize no-op rate. Current gm emits no memorize-success\n`);
+  process.stdout.write(`# event and no per-hit keys, so a memorized-key -> recalled-key join is not derivable.\n`);
+  process.stdout.write(`PROJECT/SESS              RECALLS   HITS  HIT%   REJECT  DEDUP  EMBED_FAIL\n`);
+  for (const s of rows.sort((a, b) => b.recalls - a.recalls)) {
+    const pct = s.recalls ? ((s.hits / s.recalls) * 100).toFixed(1) : '-';
+    process.stdout.write(`${s.key.slice(0, 24).padEnd(24)}  ${String(s.recalls).padStart(7)}  ${String(s.hits).padStart(5)}  ${pct.padStart(5)}  ${String(s.rejects).padStart(6)}  ${String(s.deduped).padStart(5)}  ${String(s.embed_failed).padStart(10)}\n`);
   }
 }
 
@@ -1178,6 +1395,269 @@ function disciplineSigilIgnored(all) {
   for (const e of evs.slice(-50).reverse()) {
     process.stdout.write(formatRow(e, { truncate: 300 }));
   }
+}
+
+// ---------------------------------------------------------------------------
+// Live manager view (--agents): CLI parity with the GUI's Skill Layout panel.
+//
+// Reads live per-project state from the real files the daemon writes, never from replayed
+// gm-log history (which is a different, laggier surface):
+//   .gm/turn-state.json               {phase, session_id, last_skill, updated_at_ms}
+//   .gm/next-step.md                  the served instruction prose (heading + body)
+//   .gm/exec-spool/.turn-summary.json {phase, prd_pending_count, mutables_pending_count,
+//                                      last_instruction_ts, long_gap_threshold_ms}
+//   .gm/last-prompt.txt               the user prompt that opened the current chain
+//   .gm/exec-spool/.last-gate-fired.json {key, ts}
+//   .gm/exec-spool/.watcher.log       tailed for recent evt: output
+// ---------------------------------------------------------------------------
+
+const WORKING_PHASES = new Set(['PLAN', 'EXECUTE', 'EMIT', 'VERIFY', 'CONSOLIDATE']);
+
+function readJsonFile(p) {
+  try { return JSON.parse(fs.readFileSync(p, 'utf-8')); } catch (_) { return null; }
+}
+
+// Tails the last N events via the shared watcher-log parser (src/watcher-log.js), so the manager
+// view sees the SAME event universe as replay -- including the lines that carry no upstream
+// `evt:` record at all and are synthesized by the parser: dispatch.start (51,203 real events,
+// derived from "[dispatch] -> verb=..." lines), watcher/daemon spawn, plugkit.version banners,
+// lock.stale-takeover and instruction.handle-start. An evt-only scan (the previous shape here)
+// missed all of them, which is exactly the in-flight-verb signal this view most needs.
+function tailWatcherEvents(cwd, n, { bytes = 256 * 1024 } = {}) {
+  const fp = path.join(cwd, '.gm', 'exec-spool', '.watcher.log');
+  try {
+    const { text } = readTail(fp, bytes);
+    const ctx = { epoch: null, epoch_ts: null, lastTs: '', version: null, spawns: [], versions: [] };
+    const out = [];
+    for (const line of text.split('\n')) {
+      const ev = parseLine(line, { cwd, fp, ctx });
+      if (ev) out.push(ev);
+    }
+    return n ? out.slice(-n) : out;
+  } catch (_) { return []; }
+}
+
+// In-flight verbs: a dispatch.start with no later matching dispatch.end for the same verb is
+// running RIGHT NOW. This is the strongest liveness signal available -- it distinguishes "agent
+// is mid-verb" from "agent stopped between verbs", which no .gm state file can express.
+//
+// Bounded by IN_FLIGHT_MAX_MS because the pairing is only as complete as the tail window: a
+// dispatch.start whose matching end fell outside the bytes we read looks permanently open.
+// Unbounded, that reported rs-plugkit as "RUNNING codesearch for 217h" -- a parse artifact, not
+// a live verb. Anything older than the bound is treated as unpaired history, not in-flight.
+const IN_FLIGHT_MAX_MS = 15 * 60 * 1000;
+
+function inFlightVerbs(events, { now = Date.now(), maxAgeMs = IN_FLIGHT_MAX_MS } = {}) {
+  const open = [];
+  for (const e of events) {
+    if (e.event === 'dispatch.start') open.push(e);
+    else if (e.event === 'dispatch.end') {
+      const i = open.findIndex(o => o.verb === e.verb && (!e.task || !o.task || o.task === e.task));
+      if (i >= 0) open.splice(i, 1);
+      else if (open.length) open.shift();
+    }
+  }
+  return open.filter(o => {
+    const t = o.ts ? Date.parse(o.ts) : NaN;
+    return Number.isFinite(t) && now - t <= maxAgeMs;
+  });
+}
+
+function readAgentState(cwd) {
+  // Shared readers (registry.js) rather than local re-parsers, so this view and the GUI agree
+  // on shape -- including readTurnState's legacy-shape handling (a real .gm/turn-state.json in
+  // C:/dev/test carries no `phase` at all and must not read as "phase: null but current").
+  const turnState = readTurnState(cwd) || {};
+  const summary = readTurnSummary(cwd) || {};
+  const gate = readJsonFile(path.join(cwd, '.gm', 'exec-spool', '.last-gate-fired.json'));
+  const status = readWatcherStatus(cwd);
+  const liveness = readProjectLiveness(cwd);
+
+  let heading = null, instruction = '', updatedTs = null;
+  try {
+    const text = fs.readFileSync(path.join(cwd, '.gm', 'next-step.md'), 'utf-8');
+    const um = text.match(/^Updated:\s*(\d+)$/m);
+    updatedTs = um ? Number(um[1]) : null;
+    // The file's own "# Next step" preamble precedes the `---` separator. Without a separator
+    // (observed on rs-codeinsight's real file) the preamble heading would be reported as the
+    // instruction heading -- take the first heading AFTER the preamble, never the preamble.
+    const bodyIdx = text.indexOf('\n---\n');
+    instruction = bodyIdx >= 0 ? text.slice(bodyIdx + 5).trimStart() : text.replace(/^#\s*Next step\s*$/mi, '').trimStart();
+    const hm = instruction.match(/^#\s*(.+?)\s*$/m);
+    heading = hm && !/^next step$/i.test(hm[1].trim()) ? hm[1].trim() : null;
+  } catch (_) {}
+
+  let prompt = '';
+  try { prompt = fs.readFileSync(path.join(cwd, '.gm', 'last-prompt.txt'), 'utf-8').trim(); } catch (_) {}
+
+  // The three state files each lag differently and routinely DISAGREE -- measured live on this
+  // machine: gmsniff turn-state=EXECUTE@11:30 while next-step.md=PLAN@10:07 and summary=PLAN;
+  // spoint turn-state=PLAN@11:28 while next-step.md/summary=EXECUTE. turn-state.json is written
+  // on every phase transition and is the freshest, so it wins for `phase`; next-step.md's
+  // heading is the instruction actually on disk and is reported separately (with its own age)
+  // rather than being silently conflated with the current phase.
+  const phase = turnState.phase || summary.phase || null;
+  const phaseSince = Number.isFinite(turnState.updated_at_ms) ? turnState.updated_at_ms : updatedTs;
+  const threshold = Number.isFinite(summary.long_gap_threshold_ms) ? summary.long_gap_threshold_ms : 300000;
+
+  // Real liveness comes from readProjectLiveness: min age across watcher.log mtime, turn-summary
+  // ts and turn-state ts. Critically it EXCLUDES .status.json's `ts`, which the shared daemon
+  // rewrites for every registered project every ~200ms whether or not that project is doing
+  // anything -- trusting it marks the entire 174-project fleet permanently active.
+  const idleMs = liveness.last_activity_age_ms;
+  const instructionAgeMs = updatedTs ? Date.now() - updatedTs : null;
+
+  // Recent parsed events power both the output feed and in-flight verb detection; read once.
+  const recent = tailWatcherEvents(cwd, 400);
+  const inFlight = inFlightVerbs(recent);
+
+  return {
+    cwd,
+    name: path.basename(cwd),
+    phase,
+    instruction_phase: heading && heading !== phase ? heading : null,
+    skill: turnState.last_skill || null,
+    heading,
+    instruction,
+    instruction_age_ms: instructionAgeMs,
+    prompt,
+    phase_since_ms: phaseSince,
+    phase_elapsed_ms: phaseSince ? Date.now() - phaseSince : null,
+    idle_ms: idleMs,
+    stalled: idleMs !== null && idleMs > threshold,
+    prd_pending: Number.isFinite(summary.prd_pending_count) ? summary.prd_pending_count : null,
+    mut_pending: Number.isFinite(summary.mutables_pending_count) ? summary.mutables_pending_count : null,
+    last_gate: gate && gate.key ? gate.key : null,
+    last_gate_ts: gate && Number.isFinite(gate.ts) ? gate.ts : null,
+    recent,
+    in_flight: inFlight,
+    queue_depth: liveness.queue_depth,
+    daemon_alive: liveness.daemon_alive,
+    // Per-project activity, NOT "the shared daemon responds" -- readWatcherStatus().alive is
+    // machine-wide and true for all 174 discovered projects, which is no signal at all.
+    alive: liveness.active,
+    pid: status ? status.pid : null,
+    // "Working" needs BOTH a non-terminal phase and genuinely recent activity. Phase alone is
+    // not enough: 22 projects sit in a working phase but most last emitted an event days ago --
+    // their chain was abandoned mid-phase, not left running. An in-flight verb also counts as
+    // working regardless of phase age: a long-running verb is exactly the case where every
+    // state file goes quiet while the agent is in fact busy.
+    working: (WORKING_PHASES.has(phase) && idleMs !== null && idleMs <= threshold) || inFlight.length > 0,
+  };
+}
+
+function collectAgents() {
+  const rows = [];
+  for (const cwd of discoverProjectCwds()) {
+    try {
+      if (!fs.existsSync(path.join(cwd, '.gm', 'turn-state.json'))) continue;
+      rows.push(readAgentState(cwd));
+    } catch (_) {}
+  }
+  // Working agents first, then genuinely-most-recently-active (watcher.log mtime, not the
+  // laggy state files). An observer wants "who is running right now" at the top of the screen,
+  // never alphabetical order.
+  rows.sort((a, b) => (b.working ? 1 : 0) - (a.working ? 1 : 0)
+    || (a.idle_ms === null ? 1 : b.idle_ms === null ? -1 : a.idle_ms - b.idle_ms));
+  return rows;
+}
+
+const PHASE_COLOR = { PLAN: 36, EXECUTE: 32, EMIT: 32, VERIFY: 33, CONSOLIDATE: 33, COMPLETE: 90 };
+
+function fmtEventLine(e) {
+  const ts = typeof e.ts === 'number' ? new Date(e.ts).toISOString().slice(11, 19)
+    : (typeof e.ts === 'string' ? e.ts.slice(11, 19) : '--:--:--');
+  const detail = e.detail || e.reason || e.verb || e.phase || e.id || e.key || e.query || '';
+  const evC = String(e.event).startsWith('deviation.') ? 31 : 0;
+  return `${color(ts, 90)} ${color(escapeControlChars(String(e.event)), evC)} ${escapeControlChars(String(detail)).replace(/\s+/g, ' ').slice(0, 90)}`;
+}
+
+function renderAgentDrilldown(a, outputLines) {
+  process.stdout.write(`${color('='.repeat(78), 90)}\n`);
+  process.stdout.write(`${color(a.name, 1)}  ${a.cwd}\n`);
+  process.stdout.write(`phase:      ${color(a.phase || '?', PHASE_COLOR[a.phase] || 0)}  for ${a.phase_elapsed_ms !== null ? fmtAge(a.phase_elapsed_ms) : '?'}  (skill: ${a.skill || '?'})\n`);
+  process.stdout.write(`instruction:${a.heading || '(none)'} served ${a.instruction_age_ms !== null ? fmtAge(a.instruction_age_ms) : '?'} ago${a.instruction_phase ? color(`  [next-step.md still on ${a.instruction_phase}, turn-state has moved to ${a.phase}]`, 33) : ''}\n`);
+  process.stdout.write(`daemon:     ${a.alive ? color('ALIVE', 32) : color('dead', 31)} pid=${a.pid || '?'}   last event: ${a.idle_ms !== null ? fmtAge(a.idle_ms) : '?'} ago${a.stalled ? color('  IDLE', 31) : ''}\n`);
+  process.stdout.write(`pending:    prd=${a.prd_pending ?? '?'}  mutables=${a.mut_pending ?? '?'}\n`);
+  if (a.last_gate) process.stdout.write(`last gate:  ${a.last_gate}${a.last_gate_ts ? ` (${fmtAge(Date.now() - a.last_gate_ts)} ago)` : ''}\n`);
+  if (a.prompt) process.stdout.write(`\n${color('# prompt that opened this chain', 90)}\n${escapeControlChars(a.prompt)}\n`);
+  process.stdout.write(`\n${color('# served instruction', 36)}\n`);
+  process.stdout.write(a.instruction ? escapeControlChars(a.instruction).replace(/\n{3,}/g, '\n\n') + '\n' : '(none)\n');
+  process.stdout.write(`\n${color('# recent output', 36)}\n`);
+  for (const f of a.in_flight) {
+    const since = f.ts ? fmtAge(Date.now() - Date.parse(f.ts)) : '?';
+    process.stdout.write(`  ${color('>> RUNNING', 32)} ${color(f.verb || '?', 1)} for ${since}${f.task ? ` task=${f.task}` : ''}\n`);
+  }
+  const evs = a.recent.slice(-outputLines);
+  if (!evs.length) process.stdout.write('  (no recent events)\n');
+  for (const e of evs) process.stdout.write(`  ${fmtEventLine(e)}\n`);
+}
+
+function renderAgents(rows, opts) {
+  const outputLines = opts['output-lines'] ?? 6;
+  const showIdle = !!opts.idle;
+  const shown = showIdle ? rows : rows.filter(a => a.working);
+  const hidden = rows.length - shown.length;
+
+  process.stdout.write(`${color('AGENTS', 1)}  ${new Date().toISOString().slice(11, 19)}  -  ${shown.length} shown / ${rows.length} discovered\n\n`);
+  if (!shown.length) {
+    process.stdout.write(`  (no agent actively working${hidden ? `; ${hidden} idle/COMPLETE -- pass --idle to show` : ''})\n`);
+  }
+  process.stdout.write(`${color('  S NAME             PHASE       IN-PHASE  LAST-EVT  PENDING           INSTRUCTION', 90)}\n`);
+  for (const a of shown) {
+    const phase = (a.phase || '?').padEnd(11);
+    const elapsed = (a.phase_elapsed_ms !== null ? fmtAge(a.phase_elapsed_ms) : '?').padStart(8);
+    const lastEvt = (a.idle_ms !== null ? fmtAge(a.idle_ms) : '?').padStart(8);
+    const state = a.alive ? color('*', 32) : color('x', 31);
+    const stall = a.stalled ? color(' IDLE', 31) : '';
+    const counts = `prd:${String(a.prd_pending ?? '?').padStart(3)} mut:${String(a.mut_pending ?? '?').padStart(2)}`;
+    // instruction_phase is only set when next-step.md's heading disagrees with turn-state's
+    // phase -- surfacing the served-vs-current split instead of hiding one behind the other.
+    const instr = a.heading ? (a.instruction_phase ? `${a.heading} (served ${a.instruction_age_ms !== null ? fmtAge(a.instruction_age_ms) : '?'} ago)` : a.heading) : '(no instruction)';
+    process.stdout.write(`${state} ${color(a.name.padEnd(16).slice(0, 16), 1)} ${color(phase, PHASE_COLOR[a.phase] || 0)} ${elapsed}  ${lastEvt}  ${counts}  ${color(instr, 36)}${stall}\n`);
+    // A dispatch.start with no matching dispatch.end is a verb executing right now.
+    for (const f of a.in_flight) {
+      const since = f.ts ? fmtAge(Date.now() - Date.parse(f.ts)) : '?';
+      process.stdout.write(`      ${color('>> RUNNING', 32)} ${color(f.verb || '?', 1)} for ${since}${f.task ? ` task=${f.task}` : ''}\n`);
+    }
+    if (a.queue_depth) process.stdout.write(`      ${color(`queued: ${a.queue_depth} spool request(s)`, 33)}\n`);
+    for (const e of a.recent.slice(-outputLines)) process.stdout.write(`      ${fmtEventLine(e)}\n`);
+    process.stdout.write('\n');
+  }
+  if (hidden) process.stdout.write(`${color(`  + ${hidden} idle/abandoned/COMPLETE agent(s) hidden -- pass --idle to show`, 90)}\n`);
+  process.stdout.write(`${color('  IN-PHASE = since turn-state.json phase change; LAST-EVT = since the last real .watcher.log event', 90)}\n`);
+  process.stdout.write(`${color('  --agent <name> for the full instruction text of one project', 90)}\n`);
+}
+
+async function liveAgents(opts) {
+  const one = opts.agent;
+  const outputLines = opts['output-lines'] ?? 6;
+
+  const render = () => {
+    const rows = collectAgents();
+    if (one) {
+      const target = canonPath(one);
+      const a = rows.find(r => canonPath(r.cwd) === target) || rows.find(r => r.name.toLowerCase() === String(one).toLowerCase());
+      if (!a) {
+        process.stderr.write(`--agent: no discovered gm project matching ${JSON.stringify(one)}\nknown: ${rows.map(r => r.name).join(' ')}\n`);
+        process.exit(2);
+      }
+      renderAgentDrilldown(a, outputLines * 4);
+      return;
+    }
+    renderAgents(rows, opts);
+  };
+
+  if (!opts.tail) { render(); return; }
+
+  const interval = Math.max(250, opts.interval || 2000);
+  // Clear-and-repaint refresh: the manager view is a fixed-height snapshot, not a scrolling
+  // stream, so appending would push the top of the board off screen every tick.
+  const paint = () => { process.stdout.write('\x1b[2J\x1b[H'); render(); process.stdout.write(color(`\n(refreshing every ${interval}ms -- Ctrl-C to exit)\n`, 90)); };
+  paint();
+  const timer = setInterval(paint, interval);
+  process.on('SIGINT', () => { clearInterval(timer); process.stdout.write('\n'); process.exit(0); });
+  process.stdin.resume();
 }
 
 async function rollup(out, all, filter) {
@@ -1271,12 +1751,24 @@ if (argv[0] === 'gui') {
 
   const filter = buildFilter(opts);
 
-  if (opts.tail) {
+  // --agents reads live .gm state directly; it never needs the (multi-second, multi-100k-event)
+  // gm-log replay, so it short-circuits ahead of both the tail and replay paths.
+  if (opts.agents) {
+    await liveAgents(opts);
+    if (!opts.tail) process.exit(0);
+  } else if (opts.tail) {
     await liveTail(filter, opts);
   } else {
     const all = replayAll(DEFAULT_LOG_DIR, { spool: opts.spool });
+    // Loudly warn when the newest event in the whole replayed source is old: a silently stale
+    // source makes every count, rate and "0 matches" below look like a healthy finding when it
+    // actually means the CLI is reading a dead log.
+    const staleness = sourceStaleness(all);
+    if (staleness.stale) {
+      process.stderr.write(color(`# WARNING: source is STALE (${staleness.reason}) -- results below describe historical data, not live state. Run 'gmsniff --agents' for live per-project state.\n`, 33));
+    }
 
-    if (opts['list-sessions']) { listSessions(all.filter(filter)); process.exit(0); }
+    if (opts['list-sessions']) { listSessions(all.filter(filter), opts); process.exit(0); }
     if (opts['list-deviations']) { listDeviations(all.filter(filter), opts); process.exit(0); }
     if (opts['list-events']) { listEvents(all.filter(filter), opts.sub); process.exit(0); }
     if (opts.updates) { updates(all, opts); process.exit(0); }
@@ -1297,9 +1789,15 @@ if (argv[0] === 'gui') {
     if (opts.efficiency) { efficiency(all, opts.efficiency); process.exit(0); }
     if (opts.rollup) { await rollup(opts.rollup, all, filter); process.exit(0); }
 
-    const matched = all.filter(filter);
-    const ctx = applyContext(matched.map((_, i) => i).filter(i => filter(matched[i])), matched, opts.ctx || 0);
-    let rows = ctx.length === matched.length ? matched : ctx;
+    // --ctx must widen around each match within the UNFILTERED stream -- indexing into the
+    // already-filtered array (the previous shape) could only ever re-select rows that already
+    // passed, making the flag a silent no-op. Match indices are collected against `all` so the
+    // surrounding N events are real neighbours in the source stream, filter or not.
+    const ctxN = opts.ctx || 0;
+    const matchedIdxs = [];
+    for (let i = 0; i < all.length; i++) if (filter(all[i])) matchedIdxs.push(i);
+    const matched = matchedIdxs.map(i => all[i]);
+    let rows = ctxN ? applyContext(matchedIdxs, all, ctxN) : matched;
     rows = sortRows(rows, opts.sort || 'ts', opts.reverse);
     if (opts['tail-n']) rows = rows.slice(-opts['tail-n']);
     const limit = opts.limit || opts.head || 0;
