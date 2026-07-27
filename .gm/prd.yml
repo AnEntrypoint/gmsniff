@@ -122,41 +122,6 @@
   text: AGENTS.md documents the old gm-log-primary model, the removed subsystem list and panels that this rework changes. Rewrite present-tense to the new architecture.
   witness: AGENTS.md information-tiering and SUBSYSTEMS sections
   status: pending
-- id: residual-check-fired-is-empty
-  text: .gm/residual-check-fired is 0 bytes on every project -- it is a presence marker, not a content file. Code reading it for a value gets an empty string; only existence and mtime are meaningful.
-  witness: 'Real stat across gm and gmsniff: .gm/residual-check-fired is 0 bytes on both, so it is a presence marker whose existence and mtime are the whole signal. Confirmed distinct from claim-audit-fired, which carries a 5-byte clean verdict.'
-  status: completed
-  commit_comment: Read residual-check-fired as a zero-byte presence marker
-- id: empty-spool-queue-is-normal
-  text: All four live projects show a pending in/ queue depth of zero, so /api/spool-queue only ever returning nonzero queues means the panel is empty in the normal case. Confirm the surface communicates healthy-and-empty rather than looking broken.
-  witness: Live /api/spool-queue returns its queue list with empty depths as the ordinary case rather than reading as broken or missing, so a healthy quiet spool is distinguishable from an unreported one.
-  status: completed
-  commit_comment: Report an empty spool queue as the healthy state
-- id: bound-prd-parse-cost
-  text: spoint .gm/prd.yml is 2.1MB and gm mutables.yml is 260KB; readPrd/readMutables parse the full file and /api/prd returns every row. Bound, paginate or stream these rather than parsing megabytes per request, and confirm the mtime cache actually prevents repeat parses under SSE-driven refresh.
-  witness: Live /api/prd?cwd=C:/dev/spoint returns 250 rows with total 816 and truncated true, so a 2.1MB store is paged rather than parsed and returned whole on every request -- and the true total travels with the page so a caller cannot mistake the page size for the count.
-  status: completed
-  commit_comment: Page the large PRD stores and report the true total alongside
-- id: last-gate-fired-is-stale-not-current
-  text: last-gate-fired.json on C:/dev/gmsniff points at a gate fired at 1784888665055, days before the current session, while spoint has one from minutes ago. The marker is last-ever, NOT currently-blocking, so the UI must show its age and never imply a live block from a stale marker.
-  witness: The drilldown renders the last gate with its age inline (witnessed as "gates/long-gap-no-instruction (5h29m ago)"), and AGENTS.md records that .last-gate-fired.json is the last-ever gate rather than a currently-blocking one, so a days-old marker cannot be misread as a live block.
-  status: completed
-  commit_comment: Show the last-gate marker as last-ever, with its age
-- id: handle-missing-prd-yml
-  text: C:/dev/gm has NO .gm/prd.yml at all while carrying a 260KB mutables.yml, so any surface assuming both files exist must degrade honestly. Also prd.yml sizes vary enormously (spoint 2.1MB, casey 138KB, gmsniff 38KB) -- a 2MB YAML parsed per request is a real cost.
-  witness: Live /api/prd?cwd=C:/dev/gm returns present false with zero rows rather than throwing or 404-ing. C:/dev/gm genuinely has no prd.yml while carrying a 260KB mutables.yml, so absent and empty are distinguishable states rather than one silent zero.
-  status: completed
-  commit_comment: Degrade honestly when a project has no prd.yml at all
-- id: idle-vs-dead-agent-distinction
-  text: Real dispatch ages span 143s (gmsniff, active), 213s (spoint, active), 8016s (casey, idle ~2h), 173718s (gm, idle ~2 days). A live manager must visibly distinguish actively-dispatching, idle-but-alive, and abandoned, using last-dispatch-ts age rather than the shared daemon pid which reports all four identically.
-  witness: Live /api/project-signals reports activity across the fleet as dispatching 3, idle 2, abandoned 104, unknown 52 -- three distinct live states plus an honest unknown, rather than the single shared-daemon boolean that once reported all 161 projects identically.
-  status: completed
-  commit_comment: Distinguish dispatching from idle from abandoned per project
-- id: rs-learn-db-only-in-gm
-  text: .gm/rs-learn.db exists ONLY in C:/dev/gm (434176 bytes) and nowhere else, confirming it as a fossil of the retired crate rather than a live surface. Any code stating it is universally present is wrong.
-  witness: 'Real stat: .gm/rs-learn.db exists only in C:/dev/gm and nowhere else, so it is a retired fossil rather than a universal store. memoryStoreHealth reports the live gm.db as the store and carries the fossil as a separate labelled field that is null on every other project.'
-  status: completed
-  commit_comment: Treat rs-learn.db as a fossil present in one project, not a store
 - id: honest-empty-and-degraded-states
   text: Across every panel, distinguish genuinely-empty from not-yet-loaded from source-is-broken. Today a dead filter, a stale source and a truly quiet agent all render as the same silent zero -- the exact failure this rework exists to end.
   witness: recallStats returns zeros over 753 live events; live-state recent_events empty for every real project
