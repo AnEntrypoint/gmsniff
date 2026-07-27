@@ -207,18 +207,24 @@ function switchToProject(cwd) {
 const HEALTH_BANNER_PROJECTS_SHOWN = 6;
 const SEC_PER_MIN = 60;
 
-// The three measurements the health route actually reports, each rendered as its
-// own number with its own age. No sum, no score, no label standing in for them:
-// "watcher not running" plus "silent 198m" is what the reader needs, and
-// collapsing that pair into the word "stalled" throws away both halves.
+// Each measurement rendered as its own number with its own age. No sum, no
+// score, no label standing in for them: "idle" plus "silent 198m" is what the
+// reader needs, and collapsing the pair into "stalled" throws away both halves.
+//
+// `watcherAlive` is readProjectLiveness().active -- whether THIS PROJECT is
+// working -- while `daemonPidAlive` is the machine-wide shared daemon. Rendering
+// the former as "watcher not running" reported a dead daemon for every idle
+// project while one agentplug-runner served all of them, and contradicted the
+// cards below in the same paint.
 function healthMeasurements(r) {
   const silence = r.staleSeconds == null
     ? 'no events ever recorded'
     : `silent ${Math.round(r.staleSeconds / SEC_PER_MIN)}m`;
+  const daemon = r.daemonPidAlive === false ? ', daemon down' : '';
   return [
-    `watcher ${r.watcherAlive ? 'running' : 'not running'}`,
+    r.watcherAlive ? 'dispatching' : 'idle',
     silence,
-    `${(r.deviationRate || 0).toFixed(1)} deviations/min`,
+    `${(r.deviationRate || 0).toFixed(1)} deviations/min${daemon}`,
   ].join(', ');
 }
 
@@ -234,21 +240,23 @@ function healthMeasurements(r) {
 // otherwise flash during exactly the slow-boot window.
 function healthScopedToWorkingAgents() {
   const workingCwds = new Set((liveState.rows || []).map(r => r.cwd));
+  const rows = (ui.health || []).filter(r => workingCwds.has(r.cwd));
   return {
-    rows: (ui.health || []).filter(r => workingCwds.has(r.cwd)),
+    rows,
     total: workingCwds.size,
+    dispatching: rows.filter(r => r.watcherAlive).length,
   };
 }
 
 function HealthBanner() {
-  const { rows, total } = healthScopedToWorkingAgents();
+  const { rows, total, dispatching } = healthScopedToWorkingAgents();
   if (!rows.length) return null;
   const longestSilent = [...rows].sort(longestSilentFirst);
   const shown = longestSilent.slice(0, HEALTH_BANNER_PROJECTS_SHOWN);
   const omitted = longestSilent.length - shown.length;
   return h('div', { class: 'gm-health-banner', role: 'status', 'aria-live': 'polite' },
     h('span', { class: 'gm-health-label' },
-      `${total} working agent${total === 1 ? '' : 's'}, longest-silent first`),
+      `${dispatching} dispatching · ${total - dispatching} idle, longest-silent first`),
     h('span', { class: 'gm-health-list' }, ...shown.map(r => h('button', {
       type: 'button',
       key: 'health-' + r.cwd,

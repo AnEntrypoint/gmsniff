@@ -555,8 +555,15 @@ export function readLivePhaseState(cwd) {
     const updatedMatch = text.match(/^Updated:\s*(\d+)$/m);
     const bodyIdx = text.indexOf('\n---\n');
     const body = bodyIdx >= 0 ? text.slice(bodyIdx + 5).trimStart() : '';
-    const headingMatch = body.match(/^#\s*(.+?)\s*$/m);
-    const heading = headingMatch ? headingMatch[1].trim().toUpperCase() : null;
+    // gm concatenates the constant ORCHESTRATOR preamble ahead of the
+    // phase-specific section, so the first `#` heading is ORCHESTRATOR on every
+    // project and carries nothing -- measured identical across gm, spoint,
+    // gmsniff and aloop. The operative instruction is the last TOP-LEVEL
+    // heading (spoint: ORCHESTRATOR then EMIT). `^#\s` excludes `##` subsection
+    // headings: matching those made every project report "DISPATCH", trading one
+    // constant for another and breaking the skill lookup.
+    const topLevelHeadings = [...body.matchAll(/^#[ \t]+(.+?)[ \t]*$/gm)].map(m => m[1].trim().toUpperCase());
+    const heading = topLevelHeadings.length ? topLevelHeadings[topLevelHeadings.length - 1] : null;
     const prosePhase = phaseMatch ? phaseMatch[1].trim() : heading;
     const structuredPhaseAvailable = !!(turnState && turnState.phase);
     const phase = structuredPhaseAvailable ? turnState.phase : prosePhase;

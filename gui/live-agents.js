@@ -679,6 +679,16 @@ function pendingLabel(p) {
   return `prd ${proj.prd_pending}/${proj.prd_total} · mut ${proj.mut_unknown}`;
 }
 
+// gm's next-step.md leads with a constant ORCHESTRATOR preamble before the
+// phase section, so this heading read "ORCHESTRATOR" on every project until
+// registry.js started taking the LAST top-level heading. It is instruction
+// provenance, not a phase, and says so.
+function servedSectionLabel(p, divergence) {
+  const served = p.instruction_heading || p.instruction_key;
+  if (!served) return null;
+  return divergence ? `serving ${served} (phase moved on)` : `serving ${served}`;
+}
+
 function toCard(a) {
   const p = a.row;
   const f = a.feed;
@@ -690,7 +700,12 @@ function toCard(a) {
     sid: agentKey(p),
     title: basename(p.cwd),
     agent: p.skill || 'gm',
-    model: p.instruction_heading || p.instruction_key || null,
+    // The ds card renders this slot as a bare word beside the phase. It must say
+    // what the word IS, because the served prose legitimately lags
+    // turn-state.json -- measured live, casey served PLAN while its phase was
+    // COMPLETE -- so an unlabelled "PLAN" beside "COMPLETE" reads as two
+    // contradictory phases rather than as provenance plus authoritative state.
+    model: servedSectionLabel(p, phaseDivergence(p)),
     cwd: p.cwd,
     phase: authoritativePhase(p),
     phases: phaseUniverse(p),
