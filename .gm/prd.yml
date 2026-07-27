@@ -302,11 +302,6 @@
   text: Two places re-check typeof e.ts === number, unreachable after normalizeTs converts at parse time, while four others do plain string comparison -- dual-path dead code.
   witness: server.js:1004,1119 vs :527,608,743,1045
   status: pending
-- id: verify-sync-ds-zero-drift
-  text: After any upstream design-system change, run sync:ds then sync:ds:check to confirm zero drift before committing, per the vendoring rule.
-  witness: 'Real run of npm run sync:ds:check after all vendoring and every subsequent change reports "sync-ds --check: gui/ds/ matches C:devanentrypoint-design" and exits 0, so the vendored tree is byte-identical to its upstream source and no hand-edit has crept in.'
-  status: completed
-  commit_comment: Confirm the vendored design system is byte-identical to upstream
 - id: changelog-entry
   text: One CHANGELOG entry per commit landed this session with a one-sentence why.
   witness: CHANGELOG.md convention
@@ -443,16 +438,6 @@
   text: If a user explicitly points gmsniff at a log source whose newest event is far older than now, say so loudly in both CLI and GUI rather than rendering stale numbers as current. The current failure mode is silent.
   witness: gm-log newest day dir 2026-07-23, four days stale, rendered today as if current
   status: pending
-- id: no-external-cdn-in-gui
-  text: 'gmsniff GUI is a LOCAL observability tool that must work with no network. Upstream highlight.js:9 sets DEFAULT_PRISM_BASE to cdn.jsdelivr.net and fetches Prism at runtime. Any vendored markdown/highlight path must be offline-clean: either vendor Prism locally, repoint the base at a local path, or ship markdown without syntax highlighting. Assert this as a standing constraint for gui/ds.'
-  witness: 'The upstream markdown/highlight chain was deliberately not vendored because highlight.js pulls Prism from cdn.jsdelivr.net and markdown.js pulls marked and DOMPurify. gmsniff instead carries its own offline gui/markdown.js (4.5KB, in the published tarball) with no external fetch. Verified by the same whole-tree sweep: zero external origins in the served GUI.'
-  status: completed
-  commit_comment: Keep the GUI offline by shipping a local markdown renderer instead of the CDN-backed upstream chain
-- id: audit-gui-offline-cleanliness
-  text: Beyond Prism, sweep the whole served GUI (gui/** including vendored ds) for any runtime fetch to an external origin -- fonts, CDNs, telemetry -- and remove or localize each. An observability tool that degrades when the network is down fails exactly when it is most needed.
-  witness: 'Real sweep of the entire served gui/ tree (all .js, .css and .html including the whole vendored gui/ds/) for external origins: zero hits after excluding 127.0.0.1/localhost and the www.w3.org SVG namespace identifiers, which are XML namespace URIs and never fetched. Confirms no CDN script, remote font or remote stylesheet is reachable at runtime, so the GUI works with no network -- the condition under which an observability tool is most needed.'
-  status: completed
-  commit_comment: Verify the served GUI makes zero external-origin runtime fetches
 - id: confirm-session-id-null-at-source
   text: turn-state.json carries a session_id field but it is null on every LIVE project (gmsniff, spoint, casey) and only non-null on the idle C:/dev/gm (claude-loop-iter17). This confirms sess-absence originates at the runtime, not in gmsniffs parsing. Any UI or API field named session must render this honestly as absent rather than showing an empty string or a fabricated id.
   witness: 'real read of 4 projects turn-state.json: 3 live have session_id:null, only stale gm has a value'
@@ -573,11 +558,6 @@
   text: Upstream SessionCard gained an optional lifecycle strip driven by session.phases/phase/phasesSeen/phaseGaps via PhaseWalk, with phasesSeen as an authoritative VISITED SET rather than index math -- correctly modeling gm re-plan edges where EXECUTE->PLAN must not render as a regression. gmsniff must feed phasesSeen from real transition history rather than a current-phase index.
   witness: 'design-system agent proved it: a re-planned session shows 2 reached where index math gives 1'
   status: pending
-- id: protect-zero-dependency-property
-  text: gmsniff has ZERO dependencies and zero devDependencies -- a real strength for an observability tool that must run anywhere and work offline. Make this an explicit, guarded invariant so a future change cannot casually add one.
-  witness: The extracted tarball ran with no npm install step and no node_modules present at all -- help, schema and the full --agents live view all worked from core Node modules only, confirming the zero-dependency property holds for a real installed user rather than only in the repo.
-  status: completed
-  commit_comment: Confirm the zero-dependency property holds for a real installed package
 - id: document-new-architecture-in-readme
   text: 'README is 82 lines describing the old gm-log-primary model. It must describe the real current architecture: watcher.log as the live source, the agentplug shared daemon, per-project state files, and the live-agent manager as the primary use case.'
   witness: README.md 82 lines predating the source inversion
@@ -594,11 +574,6 @@
   text: AGENTS.md still documents gm-log defaults, the removed subsystem list, the SUBSYSTEMS seed rationale, and the panel/nav tiering that this rework changes. Every rule in it is meant to be present-tense truth about the code as it is now, so it needs a real rewrite rather than an append.
   witness: AGENTS.md information-tiering, SUBSYSTEMS and GM_LOG_DIR sections
   status: pending
-- id: ship-readme-in-package
-  text: package.json files lists only src/ and gui/, so README.md is not explicitly included. Confirm what npm actually ships and that the package presents correctly on the registry.
-  witness: 'Real npm pack of the repo into a clean temp dir produced gmsniff-1.0.57.tgz containing exactly 71 package/ entries, which extracted and ran standalone: node package/src/cli.js --help printed the tiered help with QUICK START leading on the live manager view, and node package/src/cli.js --agents rendered the real live view (2 shown / 66 discovered, gmsniff EXECUTE 4h23m, prd:185, queued 11 spool requests) streaming this sessions own git.commit / git.push / dispatch.end events as they happened. An installed user gets exactly this.'
-  status: completed
-  commit_comment: Verify the published tarball extracts and runs the live manager standalone
 - id: publish-workflow-guards
   text: Pushing to main auto-bumps the patch version and publishes to npm. With this much changing at once, confirm the workflow still passes and that a broken build cannot publish -- ideally the single root test must gate the publish.
   witness: .github/workflows/publish-npm.yml auto-bump-and-publish on push to main
