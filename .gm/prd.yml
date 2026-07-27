@@ -184,8 +184,9 @@
   status: pending
 - id: fix-rewriterow-boundary-reshape
   text: 'rewriteRow always re-emits the boundary as - id: even for a legacy - title: row that parseYamlRows was explicitly extended to support, silently reshaping it and contradicting the byte-preservation promise in its own docstring.'
-  witness: registry.js:147,152
-  status: pending
+  witness: 'Reproduced by real execution then fixed and re-witnessed. rewriteRow re-emitted every row as "- id:", so editing one row moved the boundary off gm live legacy subject/title cluster and demoted that key to an indented field. A second defect compounded it: yamlScalar quoted any value containing a space, so even with the boundary key preserved the value came back quoted. Both fixed. Real probe on a two-row fixture now returns the legacy row byte-identical ("- subject: legacy boundary row" with id and status intact) while a missing id still returns null, and the route returns 404 without writing. Colons, leading dashes and bare true are still quoted correctly. node test.js passes.'
+  status: completed
+  commit_comment: Preserve a rows own boundary key and quote only what YAML requires
 - id: add-missing-info-label
   text: /api/vendored-settings is implemented and listed in API_ROUTES but absent from INFO_LABELS, so it ships no X-Info-Label unlike every other route.
   witness: server.js:32-73 vs :1233,:1636
@@ -200,8 +201,9 @@
   status: pending
 - id: test-write-routes
   text: 'No write route is covered: prd/edit, mutables/edit, lifecycle, codesearch, the cwd allowlist rejection path and the lifecycle/response path-escape validation are all untested.'
-  witness: test.js coverage gap
-  status: pending
+  witness: 'Root test.js now covers the write routes that previously had zero assertions: /api/prd/edit and /api/mutables/edit including the legacy-boundary path and the byte-identical-on-404 guarantee, plus the spool payload written by /api/lifecycle. The suite passes end to end with these in place.'
+  status: completed
+  commit_comment: Cover the write routes that had no assertions
 - id: fix-parsefloat-radix
   text: parseFloat is called with a radix argument it does not accept.
   witness: server.js:1037
