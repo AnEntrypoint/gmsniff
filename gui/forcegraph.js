@@ -1,18 +1,13 @@
-// Minimal O(n^2) force-directed layout: Coulomb repulsion between every node
-// pair + Hooke spring along edges + velocity damping, driven by a
-// requestAnimationFrame loop. No dependencies -- plain physics on node.x/y/vx/vy.
-//
-// runForceLayout(nodes, edges, {width, height}) mutates node.x/node.y in place
-// every frame and invokes onTick(nodes) so the caller can re-paint SVG
-// positions. Returns a handle { stop() } -- callers MUST call stop() on
-// unmount/hide to cancel the RAF loop and avoid a leaked timer.
+// Mutates node.x/y in place every frame; the returned stop() must be called on
+// unmount or the requestAnimationFrame loop leaks for the life of the page.
 
-const REPULSION = 2600;     // Coulomb-like repulsion constant
-const SPRING_K = 0.02;      // Hooke spring constant along edges
-const SPRING_LEN = 90;      // rest length for spring edges
-const DAMPING = 0.85;       // velocity damping per tick
-const MIN_DIST = 1;         // avoid division blowups at near-zero distance
-const CENTER_PULL = 0.002;  // gentle pull toward container center to avoid drift
+const REPULSION = 2600;
+const SPRING_K = 0.02;
+const SPRING_REST_LENGTH = 90;
+const DAMPING = 0.85;
+const MIN_DIST_GUARDING_DIVISION_BY_ZERO = 1;
+const CENTER_PULL = 0.002;
+const EDGE_MARGIN = 10;
 
 export function runForceLayout(nodes, edges, { width = 800, height = 600, onTick } = {}) {
   const byId = new Map();
@@ -28,17 +23,14 @@ export function runForceLayout(nodes, edges, { width = 800, height = 600, onTick
   let rafId = null;
   let stopped = false;
 
-  function tick() {
-    if (stopped) return;
-
-    // Coulomb repulsion, all pairs
+  function applyRepulsionBetweenEveryNodePair() {
     for (let i = 0; i < nodes.length; i++) {
       const a = nodes[i];
       for (let j = i + 1; j < nodes.length; j++) {
         const b = nodes[j];
         let dx = a.x - b.x, dy = a.y - b.y;
         let distSq = dx * dx + dy * dy;
-        if (distSq < MIN_DIST) distSq = MIN_DIST;
+        if (distSq < MIN_DIST_GUARDING_DIVISION_BY_ZERO) distSq = MIN_DIST_GUARDING_DIVISION_BY_ZERO;
         const dist = Math.sqrt(distSq);
         const force = REPULSION / distSq;
         const fx = (dx / dist) * force, fy = (dy / dist) * force;
@@ -46,32 +38,40 @@ export function runForceLayout(nodes, edges, { width = 800, height = 600, onTick
         if (!b.pinned) { b.vx -= fx; b.vy -= fy; }
       }
     }
+  }
 
-    // Hooke spring along edges
+  function applySpringForceAlongEdges() {
     for (const e of edges) {
       const a = byId.get(e.source);
       const b = byId.get(e.target);
       if (!a || !b) continue;
       let dx = b.x - a.x, dy = b.y - a.y;
-      let dist = Math.sqrt(dx * dx + dy * dy) || MIN_DIST;
-      const diff = dist - SPRING_LEN;
+      let dist = Math.sqrt(dx * dx + dy * dy) || MIN_DIST_GUARDING_DIVISION_BY_ZERO;
+      const diff = dist - SPRING_REST_LENGTH;
       const force = SPRING_K * diff;
       const fx = (dx / dist) * force, fy = (dy / dist) * force;
       if (!a.pinned) { a.vx += fx; a.vy += fy; }
       if (!b.pinned) { b.vx -= fx; b.vy -= fy; }
     }
+  }
 
-    // Gentle center pull + damping + integrate
+  function applyCenterPullThenDampThenIntegrate() {
     for (const n of nodes) {
       if (n.pinned) { n.vx = 0; n.vy = 0; continue; }
       n.vx += (cx - n.x) * CENTER_PULL;
       n.vy += (cy - n.y) * CENTER_PULL;
       n.vx *= DAMPING; n.vy *= DAMPING;
       n.x += n.vx; n.y += n.vy;
-      n.x = Math.max(10, Math.min(width - 10, n.x));
-      n.y = Math.max(10, Math.min(height - 10, n.y));
+      n.x = Math.max(EDGE_MARGIN, Math.min(width - EDGE_MARGIN, n.x));
+      n.y = Math.max(EDGE_MARGIN, Math.min(height - EDGE_MARGIN, n.y));
     }
+  }
 
+  function tick() {
+    if (stopped) return;
+    applyRepulsionBetweenEveryNodePair();
+    applySpringForceAlongEdges();
+    applyCenterPullThenDampThenIntegrate();
     if (onTick) onTick(nodes);
     rafId = requestAnimationFrame(tick);
   }

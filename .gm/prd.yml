@@ -770,3 +770,11 @@
   text: 'Comment pass over gui/: app.js 187/764, live-agents.js 199/897, panels.js 163/1194, shared.js 131/363, honest-state.js 30/87, markdown.js 21/116, data.js 11/63, forcegraph.js 11/88.'
   witness: measured per-file comment ratios across gui/
   status: pending
+- id: forcegraph-comment-pass
+  text: 'gui/forcegraph.js still carries 11 comment lines that the rule says should be code: three step comments (Coulomb repulsion all pairs / Hooke spring along edges / Gentle center pull + damping + integrate) each label a loop that should be a named function, and six constants carry trailing comments that belong in their identifiers (SPRING_LEN -> SPRING_REST_LENGTH, MIN_DIST -> MIN_DIST_GUARDING_DIVISION_BY_ZERO, the bare 10 -> EDGE_MARGIN). The header physics description is recoverable once the functions are named; the callers MUST call stop() contract is not and must survive. A first attempt at this was reverted by the concurrent owner of gui/, so it belongs to whoever owns that file.'
+  witness: measured 11 comment lines; three of them label loops, six annotate constants
+  status: pending
+- id: single-writer-collision-on-gui-forcegraph
+  text: 'Real single-writer collision observed: edits to gui/forcegraph.js were overwritten wholesale by the concurrent agent that owns gui/, reverting a completed comment pass (named functions, renamed constants, trimmed header). Confirms the discipline -- per-file ownership must be respected even for a small isolated file, and a second writer should hand the change to the owner rather than applying it directly.'
+  witness: gui/forcegraph.js mtime 18:48 with zero occurrences of the extracted function name written minutes earlier
+  status: pending

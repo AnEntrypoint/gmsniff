@@ -3,90 +3,70 @@ import fs from 'fs';
 // Single parser for the per-project .gm/exec-spool/.watcher.log format, shared by index.js's
 // replay + tail paths and exported for cli.js so the two never drift apart.
 //
-// The file is NOT "evt: {json} lines plus noise". Measured across three real live projects
-// (gmsniff 13,718 evt of 33,511 lines; spoint 10,040 of 85,170; casey 3,108 of 19,544 -- 20%
-// overall), the ~80% that is not an evt: record carries the highest-value live-manager signal
-// in the whole file, and discarding it was the actual data loss:
-//
-//   [dispatch] -> verb=V task=N body=Nb   the dispatch-START stream. There is NO dispatch.start
-//                                         evt record anywhere -- this line is the only source of
-//                                         what a verb is doing right now. Pairs with the
-//                                         dispatch.end evt record for real in-flight duration.
-//   [dispatch] <- verb=V task=N ms=N out=Nb  dispatch close (the arrow form; also evt-sourced)
-//   [plugkit-wasm] plugkit vX.Y.Z (wasm)  the REAL per-project served version. .status.json
-//                                         dropped its `version` field entirely, so this banner
-//                                         is now the only per-project version signal that exists.
-//   --- watcher spawn <iso> supervisor=<pid> reason=<r> ---   the per-boot EPOCH boundary
-//   --- daemon spawn <iso> parent=<pid> ...   process lineage (rarer: 5/1/0 across the three)
-//   [plugkit-wasm] stale lock (holder pid=N dead, age=Nms); taking over   contention/recovery
-//   [plugkit-wasm:warn] instruction::handle start body_len=N   true turn-entry boundary
-//   [wrapper-drift-check] error: ...      installation-integrity failure
-//   [retention] swept N out/ files older than Nh   spool churn
-//
-// Lines synthesized from these shapes are emitted as real events carrying _src:'watcher.log'
-// and _origin:'line' (evt-sourced records carry _origin:'evt'), so a consumer can always tell
-// provenance and never mistakes a synthesized dispatch.start for an upstream-emitted record.
+// MEASURED across three real live projects (gmsniff 13,718 evt of 33,511 lines; spoint 10,040 of
+// 85,170; casey 3,108 of 19,544 -- 20% overall): the ~80% of lines that are NOT evt: records
+// carry the highest-value live-manager signal in the whole file, and discarding them was the
+// actual data loss. Two facts drive that: there is NO upstream dispatch.start evt record
+// anywhere, so the [dispatch] -> line is the only source of what a verb is doing right now; and
+// .status.json dropped its `version` field entirely, so the wasm banner is the only per-project
+// version signal that still exists.
 export const EVT_RE = /evt:\s*(\{.*\})\s*$/;
-// Both arrow generations are matched. The wrapper that wrote this line changed its arrow glyph
-// from Unicode U+2192/U+2190 to ASCII ->/<- around 2026-05-30; measured across 60 discovered
-// projects, 29,029 Unicode-form dispatch lines exist in real history (zel 10,295, thebird 6,649,
-// streaming-gltf 1,854, 247420 1,313...) and SEVEN projects -- cj, findphone, fsbrowse, kitten,
-// portabox, stream-glb, streamtts -- wrote the Unicode form EXCLUSIVELY, so matching only ASCII
-// made those projects' entire dispatch stream invisible while reporting no error. Both forms
-// carry an identical field grammar, so one alternation covers both rather than a second parser.
+
+// MEASURED: the wrapper changed its dispatch arrow glyph from Unicode U+2192/U+2190 to ASCII
+// ->/<- around 2026-05-30. Across 60 discovered projects 29,029 Unicode-form dispatch lines exist
+// in real history (zel 10,295, thebird 6,649, streaming-gltf 1,854, 247420 1,313...) and SEVEN
+// projects -- cj, findphone, fsbrowse, kitten, portabox, stream-glb, streamtts -- wrote the
+// Unicode form EXCLUSIVELY, so matching only ASCII made those projects' entire dispatch stream
+// invisible while reporting no error. Both generations share one field grammar, hence one
+// alternation rather than a second parser.
 //
-// Neither form is emitted by the current agentplug-runner: it logs dispatch.end as an `evt`
-// record instead. These lines are therefore a HISTORICAL stream, still the only dispatch-start
-// signal that exists for any log written before the cutover, and still present in logs as recent
-// as 3 days old (casey, diagen) that predate a given project's runtime upgrade.
-const DISPATCH_ARROW_OPEN = '(?:->|\\u2192)';
-const DISPATCH_ARROW_CLOSE = '(?:<-|\\u2190)';
-const DISPATCH_OPEN_RE = new RegExp(`^(?:\\[[^\\]]+\\]\\s*)?\\[dispatch\\]\\s*${DISPATCH_ARROW_OPEN}\\s*verb=(\\S+)\\s+task=(\\S+)(?:\\s+body=(\\d+)b)?`);
-const DISPATCH_CLOSE_RE = new RegExp(`^(?:\\[[^\\]]+\\]\\s*)?\\[dispatch\\]\\s*${DISPATCH_ARROW_CLOSE}\\s*verb=(\\S+)\\s+task=(\\S+)(?:\\s+ms=(\\d+))?(?:\\s+out=(\\d+)b)?`);
+// Neither form is emitted by the current agentplug-runner, which logs dispatch.end as an evt
+// record instead. These lines are a HISTORICAL stream, still the only dispatch-start signal for
+// any log written before the cutover, and still present in logs as recent as 3 days old (casey,
+// diagen) that predate a given project's runtime upgrade.
+const ARROW_EITHER_GENERATION_OPEN = '(?:->|\\u2192)';
+const ARROW_EITHER_GENERATION_CLOSE = '(?:<-|\\u2190)';
+
+const DISPATCH_OPEN_RE = new RegExp(`^(?:\\[[^\\]]+\\]\\s*)?\\[dispatch\\]\\s*${ARROW_EITHER_GENERATION_OPEN}\\s*verb=(\\S+)\\s+task=(\\S+)(?:\\s+body=(\\d+)b)?`);
+const DISPATCH_CLOSE_RE = new RegExp(`^(?:\\[[^\\]]+\\]\\s*)?\\[dispatch\\]\\s*${ARROW_EITHER_GENERATION_CLOSE}\\s*verb=(\\S+)\\s+task=(\\S+)(?:\\s+ms=(\\d+))?(?:\\s+out=(\\d+)b)?`);
 const WATCHER_SPAWN_RE = /^---\s*watcher spawn\s+(\S+)(?:\s+supervisor=(\d+))?(?:\s+reason=(\S+))?/;
-// The supervisor banner is the same epoch-boundary shape as the watcher/daemon ones and was the
-// single largest unmodeled non-dispatch class (1,579 lines) before being modeled here.
+// MEASURED: the single largest unmodeled non-dispatch class (1,579 lines) before being modeled.
 const SUPERVISOR_SPAWN_RE = /^---\s*supervisor spawn\s+(\S+)(?:\s+parent=(\d+))?/;
 const DAEMON_SPAWN_RE = /^---\s*daemon spawn\s+(\S+)(?:\s+parent=(\d+))?/;
-const VERSION_RE = /plugkit\s+v(\d+\.\d+\.\d+)\s*\(wasm\)/;
-const STALE_LOCK_RE = /stale lock \(holder pid=(\d+) dead, age=(\d+)ms\)/;
-const INSTRUCTION_START_RE = /instruction::handle start(?:\s+body_len=(\d+))?/;
+const PLUGKIT_WASM_VERSION_RE = /plugkit\s+v(\d+\.\d+\.\d+)\s*\(wasm\)/;
+const STALE_LOCK_TAKEOVER_RE = /stale lock \(holder pid=(\d+) dead, age=(\d+)ms\)/;
+const INSTRUCTION_HANDLE_START_RE = /instruction::handle start(?:\s+body_len=(\d+))?/;
 const WRAPPER_DRIFT_RE = /^\[wrapper-drift-check\]\s*(?:(error|warn):\s*)?(.*)$/;
-const RETENTION_RE = /^\[retention\]\s*swept\s+(\d+)\s+(\S+)\s+files older than\s+(\S+)/;
-// Retention does not only succeed: a locked browser profile makes the sweep fail with EPERM
-// repeatedly (1,221 real lines), which is spool growth going unreclaimed -- the opposite signal
-// from a successful sweep and previously unmodeled.
-const RETENTION_FAIL_RE = /^\[retention\]\s*failed to sweep\s+(\S+?):\s*(.*)$/;
-// An available-update banner carries the installed and latest versions. This is the only place a
-// per-project "you are behind" signal appears in the log stream.
-const UPDATE_RE = /^\[update\]\s*available:\s*installed=(\S+)\s+latest=(\S+)/;
-// The stale-sweep auto-fails a spool request whose response never arrived -- a real dispatch
-// failure, and the only record that the request was abandoned rather than answered.
+const RETENTION_SWEPT_RE = /^\[retention\]\s*swept\s+(\d+)\s+(\S+)\s+files older than\s+(\S+)/;
+// MEASURED: a locked browser profile makes the sweep fail with EPERM repeatedly (1,221 real
+// lines) -- spool growth going unreclaimed, the opposite signal from a successful sweep.
+const RETENTION_FAILED_RE = /^\[retention\]\s*failed to sweep\s+(\S+?):\s*(.*)$/;
+const UPDATE_AVAILABLE_RE = /^\[update\]\s*available:\s*installed=(\S+)\s+latest=(\S+)/;
 const STALE_SWEEP_RE = /^\[stale-sweep\]\s*(auto-failed|failed to write error for)\s+(\S+)(?:\s+\(age=(\d+)ms\))?/;
-// gm's own turn-state deserializer rejecting the file and backing it up. This is the on-disk
-// corruption path AGENTS.md's turn-state notes depend on, visible only here.
-const TURN_STATE_FAIL_RE = /^turn-state\.json parse failed\s*\((.*?)\)/;
-// A spool request the runtime could not process at all. This is the terminal record for a
-// dispatch that opened and never closed -- see MALFORMED_VERB_RE.
-const PROCESS_ERROR_RE = /^\[plugkit-wasm(?::\w+)?\]\s*error processing\s+(\S+):\s*(.*)$/;
-// A verb name containing a path separator is not a verb. Real cause (confirmed in C:\dev\zel,
-// 8,911 lines): an old wrapper derived verb/task by splitting a spool FILENAME on '-', so
-// `prd-resolve\.gm\exec-spool\.status.json` was parsed as verb=`prd-resolve\.gm\exec-spool`
-// task=`.status`. Every one of these is immediately followed by an ENOENT "error processing"
-// line -- the dispatch genuinely never completed, so it has no close line and never can.
-// These are tagged rather than dropped: they are real evidence of an upstream defect, and
-// silently discarding them would also silently discard that evidence. They are excluded from
-// dispatch pairing, because counting 6,637 permanently-unclosable starts as "in flight" is what
-// inflated the orphan-start rate to 11% and would have been read as live work that never landed.
-const MALFORMED_VERB_RE = /[\\/]/;
-// Runtime lines are routinely wrapped in ANSI SGR sequences by the wrapper's own colorizer, which
-// defeated the anchored [plugkit-wasm] prefix test and dropped them into 'other'. Stripped before
-// classification rather than matched around, so every prefix-anchored rule below sees clean text.
-const ANSI_RE = /[[0-9;]*m/g;
+const TURN_STATE_PARSE_FAILED_RE = /^turn-state\.json parse failed\s*\((.*?)\)/;
+const SPOOL_PROCESS_ERROR_RE = /^\[plugkit-wasm(?::\w+)?\]\s*error processing\s+(\S+):\s*(.*)$/;
+const PLUGKIT_RUNTIME_PREFIX_RE = /^\[plugkit-(wasm|supervisor)(:warn)?\]/;
+const NODE_WRAPPER_NOISE_RE = /^\(node:\d+\)|^\(Use \`node --trace-/;
+const NODE_MODULE_WARNING_RE = /^Reparsing as ES module|^To eliminate this warning, add/;
+const STACK_FRAME_RE = /^\s*at /;
+const ERROR_HEADER_RE = /^[A-Za-z]*Error: /;
 
-// Strips ANSI SGR wrappers and leading whitespace so prefix-anchored rules see the real text.
+// UPSTREAM DEFECT (confirmed in C:\dev\zel, 8,911 lines): an old wrapper derived verb/task by
+// splitting a spool FILENAME on '-', so `prd-resolve\.gm\exec-spool\.status.json` was parsed as
+// verb=`prd-resolve\.gm\exec-spool` task=`.status`. Every one is immediately followed by an
+// ENOENT "error processing" line -- the dispatch genuinely never completed, so it has no close
+// line and never can. Tagged rather than dropped, because these lines ARE the evidence of the
+// defect; excluded from pairing, because counting 6,637 permanently-unclosable starts as
+// "in flight" is what inflated the orphan-start rate to 11%.
+const VERB_NAME_CONTAINING_PATH_SEPARATOR_RE = /[\\/]/;
+
+// MEASURED: the wrapper's own colorizer wraps runtime lines in ANSI SGR sequences, which defeated
+// the anchored [plugkit-wasm] prefix test and dropped those lines into 'other'.
+const ANSI_SGR_RE = /\[[0-9;]*m/g;
+const ANSI_ESCAPE_INTRODUCER = '';
+
 export function stripAnsi(raw) {
-  return raw.indexOf('') >= 0 ? raw.replace(ANSI_RE, '') : raw;
+  return raw.indexOf(ANSI_ESCAPE_INTRODUCER) >= 0 ? raw.replace(ANSI_SGR_RE, '') : raw;
 }
 
 export function classifyLine(raw) {
@@ -96,23 +76,27 @@ export function classifyLine(raw) {
   if (DISPATCH_OPEN_RE.test(s) || DISPATCH_CLOSE_RE.test(s)) return 'dispatch';
   if (WATCHER_SPAWN_RE.test(s) || DAEMON_SPAWN_RE.test(s) || SUPERVISOR_SPAWN_RE.test(s)) return 'spawn';
   if (WRAPPER_DRIFT_RE.test(s)) return 'drift';
-  if (RETENTION_RE.test(s) || RETENTION_FAIL_RE.test(s)) return 'retention';
-  if (UPDATE_RE.test(s)) return 'update';
+  if (RETENTION_SWEPT_RE.test(s) || RETENTION_FAILED_RE.test(s)) return 'retention';
+  if (UPDATE_AVAILABLE_RE.test(s)) return 'update';
   if (STALE_SWEEP_RE.test(s)) return 'sweep';
-  if (TURN_STATE_FAIL_RE.test(s)) return 'statefail';
-  if (PROCESS_ERROR_RE.test(s)) return 'procerror';
-  if (VERSION_RE.test(s)) return 'version';
-  if (STALE_LOCK_RE.test(s)) return 'lock';
-  if (INSTRUCTION_START_RE.test(s)) return 'turn';
-  if (/^\[plugkit-(wasm|supervisor)(:warn)?\]/.test(s)) return 'runtime';
-  // Host-process noise from the Node wrapper the daemon spawns, deliberately classified rather
-  // than left unmodeled: these lines say nothing about gm and are never synthesized into events,
-  // but counting them separately keeps unmodeled_ratio meaningful as "format we don't understand"
-  // instead of being dominated by node's own deprecation warnings and stack frames.
-  if (/^\(node:\d+\)/.test(s) || /^\(Use `node --trace-/.test(s)) return 'hostnoise';
-  if (/^Reparsing as ES module|^To eliminate this warning, add/.test(s)) return 'hostnoise';
-  if (/^\s*at /.test(raw) || /^[A-Za-z]*Error: /.test(s)) return 'hostnoise';
+  if (TURN_STATE_PARSE_FAILED_RE.test(s)) return 'statefail';
+  if (SPOOL_PROCESS_ERROR_RE.test(s)) return 'procerror';
+  if (PLUGKIT_WASM_VERSION_RE.test(s)) return 'version';
+  if (STALE_LOCK_TAKEOVER_RE.test(s)) return 'lock';
+  if (INSTRUCTION_HANDLE_START_RE.test(s)) return 'turn';
+  if (PLUGKIT_RUNTIME_PREFIX_RE.test(s)) return 'runtime';
+  if (isNodeHostNoise(raw, s)) return 'hostnoise';
   return 'other';
+}
+
+// Chatter from the Node wrapper process the daemon spawns -- not gm telemetry at all. Classified
+// rather than left unmodeled so unmodeled_ratio keeps meaning "an upstream format we do not
+// understand" instead of being dominated by Node's own deprecation warnings and stack frames.
+function isNodeHostNoise(raw, ansiStripped) {
+  return NODE_WRAPPER_NOISE_RE.test(ansiStripped)
+    || NODE_MODULE_WARNING_RE.test(ansiStripped)
+    || STACK_FRAME_RE.test(raw)
+    || ERROR_HEADER_RE.test(ansiStripped);
 }
 
 export function parseDispatchLine(raw) {
@@ -136,7 +120,7 @@ export function parseSpawnLine(raw) {
 const SPAWN_EVENT = { watcher: 'watcher.spawn', daemon: 'daemon.spawn', supervisor: 'supervisor.spawn' };
 
 export function parseVersionLine(raw) {
-  const m = raw.match(VERSION_RE);
+  const m = raw.match(PLUGKIT_WASM_VERSION_RE);
   return m ? m[1] : null;
 }
 
@@ -146,18 +130,16 @@ export function normalizeTs(ts) {
   return '';
 }
 
-// Per-line-class counters. Keys are deliberately suffixed _lines so that spreading a stats
-// object alongside real per-project fields (version, epoch) cannot silently overwrite them with
-// a counter -- a collision that really did replace the served version string with a line count.
-// 'hostnoise' is modeled-but-not-signal: node's own deprecation warnings and stack frames from
-// the wrapper process, which are not gm telemetry at all. It counts as modeled (we recognize the
-// shape exactly and deliberately emit no event) so that unmodeled_ratio keeps meaning "an
-// upstream format we do not understand" rather than being dominated by Node's chatter.
+// Counter keys are suffixed _lines because a stats object is routinely spread alongside real
+// per-project fields (version, epoch); an unsuffixed `version` counter really did overwrite the
+// served version string with a line count.
 export const LINE_CLASSES = ['event', 'dispatch', 'spawn', 'version', 'lock', 'turn', 'drift', 'retention', 'update', 'sweep', 'statefail', 'procerror', 'runtime', 'hostnoise', 'other'];
 
-// Classes we recognize but deliberately synthesize no event from. Reported separately so a
-// consumer can see that coverage is high because lines are understood, not because they were
-// quietly swept into a catch-all.
+const UNMODELED_LINE_CLASS = 'other';
+
+// Recognized exactly, and deliberately synthesized into no event. Counted as modeled, and
+// reported separately, so coverage reads as "lines are understood" rather than "lines were
+// quietly swept into a catch-all".
 export const IGNORED_LINE_CLASSES = ['runtime', 'hostnoise'];
 
 export function newParseStats() {
@@ -166,29 +148,24 @@ export function newParseStats() {
   return s;
 }
 
-// Coverage accounting. `drop_ratio` is deliberately NOT presented as a severity signal on its
-// own: most dropped lines are genuine runtime chatter, and a high ratio is normal. What matters
-// is `unmodeled_ratio` -- lines that matched no known shape at all ('other'), which is the only
-// number that indicates a real upstream format the parser does not yet understand.
 export function parseCoverage(stats) {
   const considered = stats.total - stats.blank;
-  const modeled = LINE_CLASSES.reduce((n, c) => n + (c === 'other' ? 0 : stats[`${c}_lines`] || 0), 0);
-  const r = (n) => (considered > 0 ? Number((n / considered).toFixed(4)) : null);
-  const ignored = IGNORED_LINE_CLASSES.reduce((n, c) => n + (stats[`${c}_lines`] || 0), 0);
+  const linesIn = (cls) => stats[`${cls}_lines`] || 0;
+  const modeled = LINE_CLASSES.reduce((n, c) => n + (c === UNMODELED_LINE_CLASS ? 0 : linesIn(c)), 0);
+  const ignored = IGNORED_LINE_CLASSES.reduce((n, c) => n + linesIn(c), 0);
+  const ratioOfConsidered = (n) => (considered > 0 ? Number((n / considered).toFixed(4)) : null);
   return {
     ...stats,
     considered,
     modeled,
-    // Lines whose shape we recognize and deliberately emit no event for (see
-    // IGNORED_LINE_CLASSES). Separated from `modeled` so the coverage figure is interpretable.
     ignored,
     signal: modeled - ignored,
-    parsed_ratio: r(stats.event_lines),
-    drop_ratio: r(considered - stats.event_lines),
-    modeled_ratio: r(modeled),
-    ignored_ratio: r(ignored),
-    signal_ratio: r(modeled - ignored),
-    unmodeled_ratio: r(stats.other_lines),
+    parsed_ratio: ratioOfConsidered(stats.event_lines),
+    drop_ratio: ratioOfConsidered(considered - stats.event_lines),
+    modeled_ratio: ratioOfConsidered(modeled),
+    ignored_ratio: ratioOfConsidered(ignored),
+    signal_ratio: ratioOfConsidered(modeled - ignored),
+    unmodeled_ratio: ratioOfConsidered(stats.other_lines),
   };
 }
 
@@ -197,50 +174,41 @@ function mkEvent(event, extra, { cwd, fp, schema, ts, epoch }) {
     event, ts: ts || '', cwd, _sub: 'plugkit', _day: (ts || '').slice(0, 10),
     _fp: fp, _src: 'watcher.log', _origin: 'line', ...extra,
   };
-  // A synthesized line-event inherits ctx.lastTs, but lines preceding the file's FIRST evt record
-  // have no preceding ts to inherit -- measured live, 102 of 203,970 events across 6 projects
-  // (thebird 66, tv8 24, zel 7) sit in that head region, worst case 3,291 lines deep before the
-  // first evt line. Left with ts:'' they are silently dropped or misplaced by every surface that
-  // sorts, day-buckets, ages or windows by time. They are flagged here and backfilled from the
-  // first following known ts by backfillUntimed, which is sound precisely because the file is
-  // append-ordered: an event before the first timestamp cannot be later than that timestamp.
+  // MEASURED: lines preceding a file's FIRST evt record have no ctx.lastTs to inherit, and 102 of
+  // 203,970 events across 6 projects (thebird 66, tv8 24, zel 7) sit in that head region -- worst
+  // case 3,291 lines deep before the first evt line. Left with ts:'' they are silently dropped or
+  // misplaced by every surface that sorts, day-buckets, ages or windows by time.
   if (!ev.ts) ev._untimed = true;
   if (epoch) ev._run = epoch;
   if (schema) ev._schema = schema;
   return ev;
 }
 
-// Backfills ts onto head-region events that had no preceding timestamp, carrying the first
-// FOLLOWING known ts backwards. `_untimed` is retained on every event it touches so a consumer
-// can always tell a real upstream timestamp from an order-derived one, and `_ts_source:'backfill'`
-// names the derivation. Events still untimed after this pass (a file with no timestamp anywhere)
-// keep ts:'' and _untimed, and must be excluded from time-based views rather than sorted as epoch 0.
-export function backfillUntimed(events) {
-  let next = '';
+// Carries the first FOLLOWING known ts backwards onto head-region events. Sound precisely
+// because the file is append-ordered: an event before the first timestamp cannot be later than
+// that timestamp. `_untimed` is retained on every event it touches so a consumer can always tell
+// a real upstream timestamp from an order-derived one.
+export function backfillUntimedFromNextKnownTs(events) {
+  let nextKnownTs = '';
   for (let i = events.length - 1; i >= 0; i--) {
     const e = events[i];
-    if (e.ts) { next = e.ts; continue; }
-    if (!next) continue;
-    e.ts = next;
-    e._day = next.slice(0, 10);
+    if (e.ts) { nextKnownTs = e.ts; continue; }
+    if (!nextKnownTs) continue;
+    e.ts = nextKnownTs;
+    e._day = nextKnownTs.slice(0, 10);
     e._ts_source = 'backfill';
   }
   return events;
 }
+export { backfillUntimedFromNextKnownTs as backfillUntimed };
 
-// Parses one raw line into a structured event, or null.
-//
-// cwd is always supplied by the caller (the discovered project directory), never taken from the
-// line's own JSON body -- trusting log content for attribution would let a crafted watcher.log
-// claim an arbitrary cwd outside the discovered project registry.
-//
-// ctx is a mutable per-file cursor carrying { epoch, lastTs, version }: non-JSON lines carry no
-// timestamp of their own, so they inherit the most recent evt-sourced ts, and every line is
-// tagged with the watcher-spawn epoch it falls under.
 export function newParseContext() {
   return { epoch: null, epoch_ts: null, lastTs: '', version: null, spawns: [], versions: [] };
 }
 
+// cwd is always the caller's discovered project directory, never o.cwd from the line's own JSON
+// body: trusting log content for attribution would let a crafted watcher.log claim an arbitrary
+// cwd outside the discovered project registry.
 export function parseLine(raw, { cwd, fp, schema, stats, ctx } = {}) {
   const cls = classifyLine(raw);
   if (stats) {
@@ -268,9 +236,9 @@ export function parseLine(raw, { cwd, fp, schema, stats, ctx } = {}) {
 
   const ts = c ? c.lastTs : '';
   const base = { cwd, fp, schema, ts, epoch };
-  // Every non-evt branch below matches against the ANSI-stripped, left-trimmed text, exactly as
-  // classifyLine did -- matching the raw form here would classify a colorized line correctly and
-  // then fail to extract its fields, dropping the event silently.
+  // Every non-evt branch below must match this, not `raw`, for the same reason classifyLine does:
+  // matching the raw form would classify a colorized line correctly and then fail to extract its
+  // fields, dropping the event silently.
   const line = stripAnsi(raw).trimStart();
 
   if (cls === 'spawn') {
@@ -294,7 +262,7 @@ export function parseLine(raw, { cwd, fp, schema, stats, ctx } = {}) {
     const d = parseDispatchLine(line);
     if (!d) return null;
     if (stats) stats.synthesized++;
-    const malformed = MALFORMED_VERB_RE.test(d.verb) || undefined;
+    const malformed = VERB_NAME_CONTAINING_PATH_SEPARATOR_RE.test(d.verb) || undefined;
     if (d.dir === 'open') {
       return mkEvent('dispatch.start', { verb: d.verb, task: d.task, body_bytes: d.body_bytes, _malformed_verb: malformed }, base);
     }
@@ -310,14 +278,14 @@ export function parseLine(raw, { cwd, fp, schema, stats, ctx } = {}) {
   }
 
   if (cls === 'lock') {
-    const m = line.match(STALE_LOCK_RE);
+    const m = line.match(STALE_LOCK_TAKEOVER_RE);
     if (!m) return null;
     if (stats) stats.synthesized++;
     return mkEvent('lock.stale-takeover', { holder_pid: Number(m[1]), age_ms: Number(m[2]) }, base);
   }
 
   if (cls === 'turn') {
-    const m = line.match(INSTRUCTION_START_RE);
+    const m = line.match(INSTRUCTION_HANDLE_START_RE);
     if (!m) return null;
     if (stats) stats.synthesized++;
     return mkEvent('instruction.handle-start', { body_len: m[1] ? Number(m[1]) : null }, base);
@@ -331,19 +299,19 @@ export function parseLine(raw, { cwd, fp, schema, stats, ctx } = {}) {
   }
 
   if (cls === 'retention') {
-    const m = line.match(RETENTION_RE);
+    const m = line.match(RETENTION_SWEPT_RE);
     if (m) {
       if (stats) stats.synthesized++;
       return mkEvent('retention.swept', { swept: Number(m[1]), dir: m[2], older_than: m[3] }, base);
     }
-    const f = line.match(RETENTION_FAIL_RE);
+    const f = line.match(RETENTION_FAILED_RE);
     if (!f) return null;
     if (stats) stats.synthesized++;
     return mkEvent('retention.failed', { dir: f[1], detail: (f[2] || '').trim() }, base);
   }
 
   if (cls === 'update') {
-    const m = line.match(UPDATE_RE);
+    const m = line.match(UPDATE_AVAILABLE_RE);
     if (!m) return null;
     if (stats) stats.synthesized++;
     return mkEvent('update.available', { installed: m[1], latest: m[2] }, base);
@@ -360,14 +328,14 @@ export function parseLine(raw, { cwd, fp, schema, stats, ctx } = {}) {
   }
 
   if (cls === 'statefail') {
-    const m = line.match(TURN_STATE_FAIL_RE);
+    const m = line.match(TURN_STATE_PARSE_FAILED_RE);
     if (!m) return null;
     if (stats) stats.synthesized++;
     return mkEvent('turn-state.parse-failed', { detail: m[1] }, base);
   }
 
   if (cls === 'procerror') {
-    const m = line.match(PROCESS_ERROR_RE);
+    const m = line.match(SPOOL_PROCESS_ERROR_RE);
     if (!m) return null;
     if (stats) stats.synthesized++;
     return mkEvent('spool.process-error', { request: m[1], detail: (m[2] || '').trim() }, base);
@@ -521,7 +489,7 @@ export function replayWatcherLogWithStats(fp, cwd, schema, opts = {}) {
     const ev = parseLine(line, { cwd, fp, schema, stats, ctx });
     if (ev) events.push(ev);
   }
-  backfillUntimed(events);
+  backfillUntimedFromNextKnownTs(events);
   return {
     events, stats: parseCoverage(stats), ctx, truncated, size,
     epoch: ctx.epoch, version: ctx.version,

@@ -1,11 +1,9 @@
-// Fetch/state helpers shared by every panel. Single source of the "current
-// project cwd" the switcher controls; every API call routes through here so
-// changing project re-scopes every panel uniformly.
-
 import { toast as dsToast } from 'ds/components/editor-primitives.js';
 
+export const SERVER_DEFAULT_OWN_ROOT = null;
+
 export const state = {
-  cwd: null,           // null = server default (own root)
+  cwd: SERVER_DEFAULT_OWN_ROOT,
   projects: [],
 };
 
@@ -50,14 +48,9 @@ export async function loadProjects() {
   return state.projects;
 }
 
-// Thin adapter over the design SDK's toast() (ds/components/editor-primitives.js):
-// callers here keep the existing toast(msg, isErr) shape (17 call sites across
-// panels.js/app.js), but the actual DOM/lifecycle work -- a single fixed-position
-// flex-column host (.ds-ep-toast-host) that concurrent toasts append into and
-// leave from independently -- comes from the SDK, so multiple concurrent toasts
-// stack visibly instead of every gm-toast rendering at the same fixed
-// bottom-right coordinate and clobbering each other. isErr maps to kind:'error'
-// (SDK also distinguishes 'warn'/'success'/'info', unused via this legacy shape).
+// Routed through the ds toast host because the previous local implementation
+// rendered every gm-toast at the same fixed bottom-right coordinate, so
+// concurrent toasts clobbered each other instead of stacking.
 export function toast(msg, isErr) {
   return dsToast({ message: msg, kind: isErr ? 'error' : 'info', duration: 4000 });
 }

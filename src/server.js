@@ -7,8 +7,9 @@ import {
   GmLogWatcher, MultiProjectWatcher, replayAll, SUBSYSTEMS, DEFAULT_LOG_DIR, EVENT_SCHEMA_VERSION,
   correlationOf, correlationCoverage, GM_TOOLS_DIR, replayAllAudited, sourceStaleness,
 } from './index.js';
+import { pairDispatches } from './watcher-log.js';
 import {
-  readPrd, readMutables, rewriteRow, atomicWriteFile, discoverProjects, isKnownVerb, isAllowedProjectCwd,
+  readPrd, readMutables, rewriteRow, atomicWriteFile, discoverProjects, isKnownVerb, isRetiredVerb, isAllowedProjectCwd,
   readWatcherStatus, VERB_ALLOWLIST, readLivePhaseState, resolveInstructionTier, discoverVendoredSettings,
   readProjectLiveness as registryProjectLiveness, readTurnState, readTurnSummary, readProjectMarkers,
   readDaemonStatus, readInstalledVersions,
@@ -851,7 +852,6 @@ class Store {
     this._outputPending = new Map();
     this._outputFlushTimer = null;
     this._heartbeatTimer = null;
-    this._openDispatch = new Map(); // `${cwd}|${verb}|${task}` -> {ts, body_bytes}
     this._lastLiveTs = new Map(); // cwd -> last live event ts (ms), for _run continuity
     this._liveRun = new Map(); // cwd -> current daemon-boot epoch id
     this.source = { selected: 'none', include_archive: false, window_ms: REPLAY_WINDOW_MS, live_total: 0 };
@@ -938,6 +938,8 @@ class Store {
         : audited.archive_used ? 'legacy gm-log archive tree'
         : 'every project with a discoverable .gm/exec-spool/.watcher.log',
       project_count: (audited.projects || []).length,
+      projects: audited.projects || [],
+      stats: audited.stats || null,
       loaded_at: new Date().toISOString(),
     };
     this._snapshotCache = null;
@@ -968,6 +970,9 @@ class Store {
   }
 
   // How stale the selected source is, as a first-class warning rather than a silent zero.
+  // Per-project parse rows and their totals live on this.source for /api/parse-health; they are
+  // dropped here because sourceHealth is embedded in several large payloads (live-state, snapshot)
+  // where a 161-project array would dominate the response.
   sourceHealth() {
     let newest = 0;
     for (let i = this.events.length - 1; i >= 0 && i > this.events.length - 500; i--) {
@@ -976,8 +981,9 @@ class Store {
     }
     const age = newest ? Date.now() - newest : null;
     const stale = age === null || age > SOURCE_STALE_MS;
+    const { projects: _perProjectParseRows, stats: _parseTotals, ...sourceWithoutParseDetail } = this.source;
     return {
-      ...this.source,
+      ...sourceWithoutParseDetail,
       event_count: this.events.length,
       newest_event_ts: newest ? new Date(newest).toISOString() : null,
       newest_age_ms: age,
@@ -2036,7 +2042,7 @@ const API_ROUTES = [
   { path: '/api/export', method: 'GET', params: ['cwd'], response: 'file download: {snapshot, sessions, deviations, prd, mutables, exportedAt, cwd}' },
   { path: '/api/prd/edit', method: 'POST', params: ['body: {cwd, id, since?, status?, text?}'], response: '{ok, cwd, id, row, mtimeMs} | 409 conflict {error, mtimeMs, currentRow}' },
   { path: '/api/mutables/edit', method: 'POST', params: ['body: {cwd, id, since?, status?, witness?}'], response: '{ok, cwd, id, row, mtimeMs} | 409 conflict {error, mtimeMs, currentRow}' },
-  { path: '/api/lifecycle', method: 'POST', params: ['body: {cwd, verb, payload}'], response: '{ok, cwd, verb, file}; verb must be in the known-verb allowlist (see verbAllowlist in this same response)' },
+  { path: '/api/lifecycle', method: 'POST', params: ['body: {cwd, verb, payload}'], response: '{ok, cwd, verb, file}; verb must be in the known-verb allowlist (see verbAllowlist in this same response) AND not retired. A retired verb (learn/wait/sleep) is a real match arm in verbs.rs whose handler always errors, so it is rejected 400 {retired:true} rather than written to the spool where it could only ever fail -- matching the CLI --dispatch contract.' },
   { path: '/api/rs-tools', method: 'GET', params: ['cwd', 'top', 'bucket', 'days', 'sess'], response: '{cwd, eventCount, embedFailures, recallMisses, recallScores, classifierRejects, memoryLeverage, recallModes, disciplines}' },
   { path: '/api/codeinsight', method: 'GET', params: ['cwd'], response: '{cwd, summary, entries, items} | 404 if .codeinsight absent' },
   { path: '/api/memory-graph', method: 'GET', params: ['cwd'], response: '{cwd, nodes, edges, note?}' },
@@ -2047,6 +2053,7 @@ const API_ROUTES = [
   { path: '/api/projects/instruction', method: 'GET', params: ['cwd'], response: '{cwd, present, phase, skill, instruction_key, instruction_heading, instruction_excerpt (FULL body), instruction_hash, instruction_tier, instruction_source_file, instruction_source_repo, instruction_auto_provisioned, updated_ts, stale, unparseable, last_prompt}. The drilldown source — live-state list mode deliberately omits the multi-KB body.' },
   { path: '/api/source', method: 'GET', params: [], response: '{selected, archive_used, explicit_log_dir, log_dir, window_ms, window_start, total_in_window, sources, warnings, population, project_count, event_count, newest_event_ts, newest_age_ms, stale, warning, daemon}. Provenance + window bound for every aggregate number.' },
   { path: '/api/daemon', method: 'GET', params: [], response: '{present, pid, pid_alive, ts, active_projects, age_ms, stale, stale_threshold_ms, alert}. Machine-global shared-daemon heartbeat (~/.gm-tools/daemon-status.json); its ts is observed days stale while dispatches fire, hence the explicit alert.' },
+  { path: '/api/parse-health', method: 'GET', params: [], response: '{totals, correlation, dispatch_totals, projects: [{cwd, name, size, truncated, version, epoch, considered, modeled, signal, ignored, modeled_ratio, ignored_ratio, signal_ratio, unmodeled_ratio, other_lines, malformed_json, dispatch}], project_count, source, schemaVersion}. Parse coverage, dispatch pairing and correlation fidelity for EVERY project -- nothing filtered, no ratio compared against a threshold, no field collapsed into a word. ignored_ratio/signal_ratio split modeled_ratio: coverage built entirely from host noise (node deprecation warnings, Bun crash dumps) is a different state from coverage built from gm telemetry, and only that split distinguishes them. dispatch.malformed_verb_starts counts starts excluded from pairing because an upstream filename-split bug made the verb a path fragment -- they can never close, so they are kept apart from orphan_starts (benign in-flight/window-clipping) rather than inflating it. correlation.dominant_kind/dominant_ratio report what the grouping is really worth, since a handful of sess-carrying events makes best_kind "sess" while the rest of the set is run-keyed.' },
   { path: '/api/gates', method: 'GET', params: ['cwd?'], response: 'with cwd: {cwd, gates: [{gate, state: "pass"|"fail"|"unknown", detail, ts}], blockers, phase, fsm_graph, outgoing_edges: [{from, to, gates, blocked, blockers}], blocked, open_edges, blocked_edges, last_gate_fired: {key, ts, age_ms, is_current_block:false}, gate_deviation_repeats, gate_deviation_repeat_count}. Without cwd: {projects: [...]}. All 8 FSM gates; "unknown" is an honest verdict, never collapsed into "fail". last_gate_fired is the last-EVER firing, not a current block — always carries age_ms.' },
   { path: '/api/embed-health', method: 'GET', params: ['cwd?'], response: '{cwd, byEvent, query_failures, vector_failures, last_failure_ts, recent, note}. Raw failure counts, no verdict: when both counts are non-zero `note` names the causal chain (embed_query_failed cascading into rssearch_vector_hits_failed, so codesearch returns success while answering from bm25 only and silently missing semantic results).' },
   { path: '/api/fsm-graph', method: 'GET', params: ['cwd'], response: '{cwd, present, source, phases, states, edges: [{from, to, gates}], gatesByEdge}. The project\'s own .gm/instructions/fsm/graph.json where one exists (real override live on this machine); present:false means the default six-phase walk applies.' },
@@ -2367,6 +2374,12 @@ export function createServer({ logDir, port = 0, host = '127.0.0.1' } = {}) {
           catch (e) { return send(res, 400, { error: 'body must be JSON', detail: e.message }); }
           const { cwd: cwdParam, verb, payload: verbPayload } = payload;
           if (!isKnownVerb(verb)) return send(res, 400, { error: 'unknown or invalid verb', verb });
+          if (isRetiredVerb(verb)) {
+            return send(res, 400, {
+              error: 'retired verb: recognized by the daemon but its handler always returns an error',
+              verb, retired: true,
+            });
+          }
           const scope = resolveScopedCwd(store, cwdParam);
           if (!scope.ok) return send(res, 403, { error: scope.error });
           const verbDir = path.join(scope.cwd, '.gm', 'exec-spool', 'in', verb);
@@ -2651,6 +2664,47 @@ export function createServer({ logDir, port = 0, host = '127.0.0.1' } = {}) {
       // "live spool, 26,866 events, 7d window" instead of an unlabelled total.
       if (p === '/api/source') {
         return send(res, 200, { ...store.sourceHealth(), daemon: readDaemonStatusGlobal() }, 'application/json', p);
+      }
+
+      if (p === '/api/parse-health') {
+        const PER_PROJECT_PARSE_FIELDS = [
+          'considered', 'modeled', 'signal', 'ignored', 'modeled_ratio',
+          'ignored_ratio', 'signal_ratio', 'unmodeled_ratio', 'other_lines', 'malformed_json',
+        ];
+        const eventsByCwd = new Map();
+        for (const ev of store.events) {
+          if (!ev.cwd) continue;
+          if (!eventsByCwd.has(ev.cwd)) eventsByCwd.set(ev.cwd, []);
+          eventsByCwd.get(ev.cwd).push(ev);
+        }
+        const projects = (store.source.projects || []).map(perProjectStats => {
+          const row = {
+            cwd: perProjectStats.cwd,
+            name: path.basename(perProjectStats.cwd),
+            size: perProjectStats.size ?? null,
+            truncated: !!perProjectStats.truncated,
+            version: perProjectStats.version ?? null,
+            epoch: perProjectStats.epoch ?? null,
+            dispatch: pairDispatches(eventsByCwd.get(perProjectStats.cwd) || []),
+          };
+          for (const field of PER_PROJECT_PARSE_FIELDS) row[field] = perProjectStats[field] ?? null;
+          delete row.dispatch.pairs;
+          return row;
+        });
+        const SUMMABLE_DISPATCH_FIELDS = ['starts', 'ends', 'paired', 'orphan_starts', 'orphan_ends', 'malformed_verb_starts'];
+        const dispatchTotals = {};
+        for (const field of SUMMABLE_DISPATCH_FIELDS) {
+          dispatchTotals[field] = projects.reduce((sum, pr) => sum + (pr.dispatch[field] || 0), 0);
+        }
+        return send(res, 200, {
+          totals: store.source.stats || null,
+          correlation: correlationCoverage(store.events),
+          dispatch_totals: dispatchTotals,
+          projects,
+          project_count: projects.length,
+          source: store.sourceHealth(),
+          schemaVersion: EVENT_SCHEMA_VERSION,
+        }, 'application/json', p);
       }
 
       // -- Machine-global shared daemon heartbeat --
