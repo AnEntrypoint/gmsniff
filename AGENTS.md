@@ -18,6 +18,14 @@ Roughly 15% of watcher-log lines are `evt: {json}`; the remaining structured-tex
 
 Parse coverage is reported, not assumed: every replay carries `parse_stats` with `modeled_ratio` / `unmodeled_ratio`. A change that drops modeled coverage is a regression even if nothing throws. Do not "simplify" the parser to the JSON path only.
 
+## Report measurements, never bake in a verdict
+
+gmsniff observes; the reader judges. Do not add a route, field, or panel that decides something is an error and then acts on that decision — no invented severity scores, no threshold that omits a project from a result set, no `ok`/`degraded`/`critical` label standing in for the numbers behind it.
+
+The failure this rule exists to prevent is concrete: `stuck-projects` once decided 15min was "stale", 10 rows a "backlog" and 5 deviations/min "high", summed invented weights into a severity, and returned only projects scoring above zero. An issue those thresholds did not anticipate was not merely unranked — it was invisible, and a project one minute under a cutoff looked identical to a healthy one.
+
+So: report the measurement **and how old it is**, for **every** project, and let the caller sort or threshold. A threshold that only affects *presentation* is fine (the health banner, the CLI's working-only default) provided the underlying numbers stay reachable and the reason is always named alongside the flag — a bare word with no measurement behind it is exactly what this forbids. Naming a real causal chain the data implies (`embed_query_failed` cascading into dropped vector hits, so codesearch silently answers from bm25 only) is an observation, not a verdict, and is encouraged.
+
 ## Liveness has three distinct meanings
 
 Keep them separate; substituting one for another is the recurring bug.

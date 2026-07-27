@@ -16,7 +16,6 @@ import {
 
 const MAX_QUERY_LEN = 4096;
 const HEALTH_WINDOW_MS = 15 * 60 * 1000; // rolling deviation-rate window
-const HEALTH_STALE_MS = 5 * 60 * 1000; // stale-heartbeat threshold
 const CODESEARCH_POLL_MS = 10000;
 const CODESEARCH_POLL_INTERVAL_MS = 200;
 const VERB_FILE_SHAPE = /^[a-zA-Z0-9-]+$/;
