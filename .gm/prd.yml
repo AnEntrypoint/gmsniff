@@ -210,65 +210,10 @@
   text: parseFloat is called with a radix argument it does not accept.
   witness: server.js:1037
   status: pending
-- id: parse-dispatch-start-lines
-  text: 'HIGHEST-VALUE MISSING SIGNAL. The non-evt watcher.log lines gmsniff discards contain the dispatch-start stream: lines of form "[dispatch] -> verb=<v> task=<n> body=<n>b" (34358 in C:/dev/spoint alone). This is literally what an agent is doing RIGHT NOW and it pairs with the existing dispatch.end {ms,verb} evt record to give real in-flight verb tracking with duration. The live-manager goal cannot be met without it. Add a structured non-JSON line parser alongside EVT_RE.'
-  witness: 'Real replayAllAudited over the live fleet: 63,101 dispatch.start events, synthesized from the [dispatch] -> text lines. There is no upstream evt record for a dispatch starting, so this line is the only source, and it is what makes in-flight verb tracking possible.'
-  status: completed
-  commit_comment: Parse the dispatch-start lines that are the only record of a dispatch beginning
-- id: parse-instruction-handle-lines
-  text: Non-evt line "[plugkit-wasm:warn] instruction::handle start body_len=N" (15048 in spoint) marks instruction dispatch entry, giving the true start boundary of each turn. Currently dropped.
-  witness: 'Real replayAllAudited over the live fleet: 5,905 instruction.handle-start events, marking the true turn-entry boundary.'
-  status: completed
-  commit_comment: Parse the instruction-handle lines
-- id: parse-wasm-version-banner
-  text: Non-evt line "[plugkit-wasm] plugkit v0.1.417 (wasm)" (11922 in gmsniff) carries the REAL per-project served wasm version -- exactly the signal that went null when .status.json dropped its version field. Repoint the version/drift surface at this line rather than returning null.
-  witness: 'Real replayAllAudited over the live fleet: 3,845 plugkit.version events carrying the real per-project served version, which is the signal that replaced .status.json version after it was dropped.'
-  status: completed
-  commit_comment: Parse the wasm version banner that carries the real per-project version
-- id: parse-wrapper-drift-errors
-  text: 'Non-evt line "[wrapper-drift-check] error: ENOENT ... plugkit-wasm-wrapper.js" (7 in spoint) is a real installation-integrity failure currently invisible.'
-  witness: 'Real replayAllAudited over the live fleet: 4 wrapper.drift events, a real installation-integrity failure that was previously unmodeled.'
-  status: completed
-  commit_comment: Parse the wrapper-drift errors
 - id: filter-daemon-registry-by-existence
   text: 'daemon-registry.txt is append-only and never self-prunes: 9 of its 12 entries do not exist on disk (8 spoint worktree paths plus C:/dev/test). Union it with filesystem discovery but filter every candidate by real existence and watcher.log mtime -- never trust it as a liveness list.'
   witness: 'real stat of all 12 registry paths: only casey, spoint, gmsniff have a .watcher.log'
   status: pending
-- id: model-daemon-boot-epochs
-  text: With sess confirmed absent, segment each project stream into daemon-boot epochs using the daemon spawn line, so an observer can distinguish this run from prior runs and gmsniff can bound replay to the current epoch instead of reading years of history.
-  witness: 'Real replayAllAudited over the live fleet: 19,320 distinct _run epoch values across the fleet, so every event is attributed to the daemon boot that produced it and two runs of one project cannot merge into one apparent session.'
-  status: completed
-  commit_comment: Segment the event stream by daemon-boot epoch
-- id: parse-daemon-spawn-lineage
-  text: Non-evt line "--- daemon spawn <ISO> parent=<pid> ---" (4703 in gmsniff) carries real process lineage and a per-boot boundary -- a genuine correlation anchor now that sess is confirmed absent. Use it to segment the event stream into daemon-boot epochs.
-  witness: 'Real replayAllAudited over the live fleet: 18,309 spawn events (daemon and watcher combined), giving process lineage and the per-boot epoch boundary.'
-  status: completed
-  commit_comment: Parse the spawn lines that mark boot epochs
-- id: parse-retention-sweeps
-  text: Non-evt line "[retention] swept N out/ files older than 1h" (275 gmsniff, 5071 spoint) quantifies spool churn and would make out/ growth observable.
-  witness: 'Real replayAllAudited over the live fleet: 15,024 retention.swept events, quantifying spool churn that was previously invisible.'
-  status: completed
-  commit_comment: Parse the retention-sweep lines
-- id: bound-replay-window
-  text: watcher.log reaches 6.1MB (spoint) and 81144 lines; replayAll currently has no window bound. Reading full history on every CLI invocation and GUI boot is wasteful and will worsen. Bound replay by epoch or time window with an explicit flag to widen it.
-  witness: 'Real replayAllAudited over the live fleet: 231,023 events returned under the default bounded window rather than the full unbounded history, with the window declared in the source block.'
-  status: completed
-  commit_comment: Bound the default replay window
-- id: correct-drop-ratio-severity
-  text: 'The parse-coverage gap is far worse than the original audit estimated: real measurement is 26836 evt of 132387 lines = 20% overall (gmsniff 42%, spoint 12%, casey 17%). Four fifths of the telemetry stream is discarded, and it is the half containing dispatch starts and version banners.'
-  witness: 'Real replayAllAudited over the live fleet: parse_stats reports modeled_ratio 0.9995 and unmodeled_ratio 0.0005, up from roughly 0.15 modeled when only the evt JSON path existed. The signal_ratio 0.6532 is reported separately so deliberately-ignored runtime chatter does not inflate the coverage figure.'
-  status: completed
-  commit_comment: Report parse coverage with signal and ignored split out
-- id: parse-stale-lock-takeover
-  text: Non-evt line "[plugkit-wasm] stale lock (holder pid=N dead, age=Nms); taking over" (16157 in spoint) is a real contention/recovery signal an observability tool must surface -- it indicates a watcher died holding a lock.
-  witness: 'Real replayAllAudited over the live fleet: 2,495 lock.stale-takeover events -- a real contention signal meaning a watcher died holding a lock.'
-  status: completed
-  commit_comment: Parse the stale-lock takeover lines
-- id: purge-or-archive-stale-gmlog
-  text: 'The dead ~/.claude/gm-log holds 959386 events across 71 day dirs (2026-05-11 to 2026-07-23) and is what gmsniff currently reads. Beyond inverting priority, decide the honest disposition: ignore it by default, expose it only behind an explicit historical/archive flag, and never silently blend it with live data. Blending would make live rates and counts wrong in a way no user could detect.'
-  witness: 'Real replayAllAudited over the live fleet: source reports spool with archive_used false, so the 1.1M-event dead archive contributes nothing to a normal call. It is reachable only on an explicit archive request or an operator-set GM_LOG_DIR.'
-  status: completed
-  commit_comment: Keep the dead archive out of every normal result set
 - id: warn-on-stale-source-selection
   text: If a user explicitly points gmsniff at a log source whose newest event is far older than now, say so loudly in both CLI and GUI rather than rendering stale numbers as current. The current failure mode is silent.
   witness: gm-log newest day dir 2026-07-23, four days stale, rendered today as if current
