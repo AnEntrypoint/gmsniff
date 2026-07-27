@@ -778,29 +778,14 @@
   text: 'Real single-writer collision observed: edits to gui/forcegraph.js were overwritten wholesale by the concurrent agent that owns gui/, reverting a completed comment pass (named functions, renamed constants, trimmed header). Confirms the discipline -- per-file ownership must be respected even for a small isolated file, and a second writer should hand the change to the owner rather than applying it directly.'
   witness: gui/forcegraph.js mtime 18:48 with zero occurrences of the extracted function name written minutes earlier
   status: pending
-- id: double-ingest-replay-plus-tailer
-  text: 'CONFIRMED BUG. Every event from a discovered project watcher.log is ingested TWICE: once by the boot replay and again by the live MultiProjectWatcher tailer, which starts reading the same file from offset 0 rather than from the offset replay already consumed. Real reproduction: a fixture spool containing one watcher spawn line, one wasm_panic evt record and one spool.process-error line yields 6 events for that cwd, each name appearing exactly twice with identical _src=watcher.log and identical _fp. This inflates every count, rate and per-project total gmsniff reports by 2x for any project present at boot, and it is what makes the new runtime-failure assertion read 2 where the fixture wrote 1. The tailer must start at the offset replay finished at (or replay must be skipped for files the tailer will own).'
-  witness: 'Root cause isolated by real execution: replay alone sees a fixture marker once while the server store sees it twice, so the tailer re-delivers content replay already consumed. Fixed in src/index.js by giving ProjectLogTailer a skipExistingContent option that seeks to EOF, and MultiProjectWatcher a replayHasConsumedExistingContent option applied only on the FIRST sync so projects discovered later still receive their full history. Witnessed after the fix: with the flag set the tailer re-emitted the already-replayed marker 0 times (want 0), and after a genuinely new append it emitted it 1 time (want 1), proving live tailing still works. The server-side one-line call change is handed to the agent that owns src/server.js.'
-  status: completed
-  commit_comment: Stop the live tailer re-delivering log content the boot replay already ingested
 - id: test-asserts-exact-counts-catches-double-ingest
   text: 'The runtime-failure test asserting countHere(wasm_panic) === 1 is correct and should NOT be relaxed to a >= or a dedupe: it is what surfaced double-ingest-replay-plus-tailer. Keep exact-count assertions scoped to a fixture cwd; they are the only thing that catches a duplication that otherwise just looks like larger, more credible numbers.'
   witness: the assertion failed 2 !== 1 against a fixture that writes exactly one panic line
   status: pending
-- id: node-check-misses-renames
-  text: node --check parses but does not resolve identifiers, so it cannot see an undeclared name left behind by a partial rename -- exactly the silent break a comment pass risks. Only executing the module catches it. Any rename must be verified by running the code, not by a syntax check.
-  witness: 'Confirmed by two independent real cases this session: a partial rename of MIN_DIST left an undeclared identifier that node --check reported as clean, and only executing the module surfaced the ReferenceError. Recorded as a standing method requirement -- a rename is verified by running the code, never by a syntax check.'
-  status: completed
-  commit_comment: Record that node --check cannot catch a partial rename
 - id: concurrent-agent-write-clobber
   text: A scripted whole-file rewrite from a stale in-memory copy silently reverted another writers completed edits, twice, with no error. Read-back verification after every scripted edit is mandatory -- grep for the identifiers the edit was supposed to introduce, and treat their absence as a clobber rather than assuming the write landed.
   witness: 'observed twice this session: gui/forcegraph.js reverted, and the GUI agent caught its own rename pass reverted the same way'
   status: pending
-- id: chrome-module-cache-defeats-witness
-  text: A browser witness that merely navigates can re-run STALE ES modules from Chrome memory cache, producing a false unchanged result that looks like a passing verification. This silently invalidated a real witness this session. Every browser witness must force Page.reload with ignoreCache true (or an equivalent cache-defeating load) before reading the DOM, otherwise the witness proves nothing about the code just edited.
-  witness: 'Confirmed real: a browser witness that merely navigates re-ran a stale cached panels.js and produced a false unchanged result, silently invalidating one witness this session. Any browser witness must force a cache-defeating reload before reading the DOM.'
-  status: completed
-  commit_comment: Record that a browser witness must defeat the module cache to prove anything
 - id: orphan-css-classes
   text: gui-extra.css declares gm-bar-visual, gm-center-mt-14, gm-conflict, gm-flex-2, gm-graph-node and gm-muted-12 with no consumer anywhere. Note gm-health-amber and gm-health-red are NOT orphans despite appearing so -- they are built by string concatenation, which a naive grep misses.
   witness: GUI agent verified consumers for each; the two false positives are concatenated at their use site
