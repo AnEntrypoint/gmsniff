@@ -72,6 +72,20 @@ export function ageMs(ts, now = Date.now()) {
   return ageSinceTs < 0 ? 0 : ageSinceTs;
 }
 
+// A nullable measurement inverts its own meaning under default numeric
+// coercion: `staleSeconds == null` means "no events EVER recorded", and letting
+// it coerce to 0 sorted the most-suspicious project last, exactly where a
+// reader stops looking. Absent is Infinity here -- the most silent -- and that
+// decision is made explicitly rather than left to the comparator.
+//
+// Lives here rather than in app.js because app.js imports `webjsx` and the
+// `ds/` importmap alias and touches `document` at module scope, so it is
+// structurally unloadable outside a browser and nothing in it can be asserted.
+export function longestSilentFirst(a, b) {
+  const silenceOf = (r) => (r.staleSeconds == null ? Infinity : r.staleSeconds);
+  return (silenceOf(b) - silenceOf(a)) || ((b.deviationRate || 0) - (a.deviationRate || 0));
+}
+
 // Discovery walks the machine and finds 63 directories; 7 carry no phase at all
 // and 4 have no next-step.md (esp-idf-link, test, ai-data-extraction, codex,
 // measured live). Rendering those as agents in an unknown phase would make

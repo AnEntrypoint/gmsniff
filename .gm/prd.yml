@@ -8,8 +8,9 @@
   status: pending
 - id: notify-on-state-change
   text: An observer cannot watch continuously. Provide an opt-in signal (visual pulse, title-bar count, optional sound) for phase transitions, deviations and gate denials so the manager is useful while unattended.
-  witness: no notification surface exists in gui/app.js today
-  status: pending
+  witness: 'Real browser witness: the panel renders a "signal state changes" toggle labelled "phase transitions - deviations - gate denials", off by default (the localStorage key is unset until the reader opts in) and persisted under gmsniff.notify.stateChanges alongside the existing nav preference. It signals what happened with its measurement rather than a severity word, and uses a title-bar count and visual pulse rather than the Notification API, which would demand a permission prompt for a local tool. Ten agent cards continued rendering with the toggle present.'
+  status: completed
+  commit_comment: Signal phase changes, deviations and gate denials, opt-in and persisted
 - id: gui-has-no-test-coverage-asymmetry
   text: 'test.js pins /api/project-signals against ever attaching a severity, but NO test covers the GUI side -- and that asymmetry is exactly how a ten-term attention score and a row-dropping filter survived client-side while the server was locked down. The server is guarded by assertions; the client is guarded only by whoever happens to look. Closing it needs a DOM, which the zero-dependency no-test-framework constraint makes non-trivial, so the design question is real: either assert against the served module exports without a DOM, or accept that the browser witness is the only client guard and make that explicit rather than implicit.'
   witness: server agent added the project-signals no-severity assertion; the same class of defect then appeared unguarded in gui/app.js and gui/live-agents.js

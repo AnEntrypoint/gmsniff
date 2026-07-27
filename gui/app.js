@@ -16,7 +16,7 @@ import {
   LiveAgents, liveState, appendLiveEvent, appendOutputBatch, applyAutoscroll, loadAgentContext,
   openDrilldown, closeDrilldown, agentKey,
 } from './live-agents.js';
-import { loadCapabilities, subsystemList, basename } from './shared.js';
+import { loadCapabilities, subsystemList, basename, longestSilentFirst } from './shared.js';
 
 const h = webjsx.createElement;
 const root = document.getElementById('root');
@@ -220,14 +220,6 @@ function healthMeasurements(r) {
     silence,
     `${(r.deviationRate || 0).toFixed(1)} deviations/min`,
   ].join(', ');
-}
-
-// Sorts by silence, then by deviation rate, so a project with no events ever
-// (staleSeconds == null) sorts to the top rather than reading as zero seconds
-// silent -- the absence of a measurement is not a measurement of zero.
-export function longestSilentFirst(a, b) {
-  const silenceOf = (r) => (r.staleSeconds == null ? Infinity : r.staleSeconds);
-  return (silenceOf(b) - silenceOf(a)) || ((b.deviationRate || 0) - (a.deviationRate || 0));
 }
 
 // A stopped watcher on a project that FINISHED or was abandoned months ago is
