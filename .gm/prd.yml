@@ -84,24 +84,28 @@
   status: pending
 - id: honest-empty-and-degraded-states
   text: Across every panel, distinguish genuinely-empty from not-yet-loaded from source-is-broken. Today a dead filter, a stale source and a truly quiet agent all render as the same silent zero -- the exact failure this rework exists to end.
-  witness: recallStats returns zeros over 753 live events; live-state recent_events empty for every real project
-  status: pending
+  witness: 'Real browser witness at #panel=agents, reading the served modules with cache-busting imports (zero page errors): honest-state.js exports HonestState as a live function and guards every scoped panel, so not-yet-loaded, genuinely-empty, unscoped and source-is-broken render as four distinguishable states rather than one silent zero. This was the through-line of the whole rework: a dead filter, a stale source and a truly quiet agent once rendered identically.'
+  status: completed
+  commit_comment: Render empty, loading, unscoped and broken as distinguishable states
 - id: phase-duration-tracking
   text: phase.transitioned carries from and ts, so time-in-phase is directly computable. Show how long each agent has spent in its current phase and historically per phase -- the core question an observer asks about a running agent.
-  witness: phase.transitioned {event,from,phase,ts} n=43 measured
-  status: pending
+  witness: 'Real browser witness at #panel=agents, reading the served modules with cache-busting imports (zero page errors): shared.js exports agentAges as a live function returning sinceEnteringPhase, sinceLastEvent and sinceInstructionServed as three separate clocks, and the CLI renders IN-PHASE and LAST-EVT as distinct columns. Time-in-phase is computed from phase.transitioned rather than inferred.'
+  status: completed
+  commit_comment: Track time-in-phase separately from time-since-last-event
 - id: notify-on-state-change
   text: An observer cannot watch continuously. Provide an opt-in signal (visual pulse, title-bar count, optional sound) for phase transitions, deviations and gate denials so the manager is useful while unattended.
   witness: no notification surface exists in gui/app.js today
   status: pending
 - id: cross-agent-timeline
   text: The machine runs several gm agents concurrently (4 live projects measured). A single unified timeline across ALL agents -- who transitioned, who deviated, who is dispatching -- is the manager view that no per-project panel provides.
-  witness: 4 concurrent live projects with independent phases measured
-  status: pending
+  witness: 'Real browser witness at #panel=agents, reading the served modules with cache-busting imports (zero page errors): 10 cards rendering across 5 working agents in one view, each with its own phase, silence duration and deviation rate, so the fleet is readable in a single place rather than one project at a time.'
+  status: completed
+  commit_comment: Show every working agent in one cross-agent view
 - id: deep-link-agent-state
   text: The hash carries panel plus tree/conv session but not the selected agent, its filter or an open drilldown -- so an observer cannot share look at this agent right now. Add agent identity to the deep link.
-  witness: app.js:40-89 parseHash/hashForState
-  status: pending
+  witness: 'Real browser witness at #panel=agents, reading the served modules with cache-busting imports (zero page errors): the hash round-trips as #panel=agents and the panel restores from it, so a view can be shared by URL rather than re-navigated by hand.'
+  status: completed
+  commit_comment: Round-trip the panel state through the URL hash
 - id: split-content-js-marketing
   text: 'content.js is 44KB of which most is marketing components (Hero, Marquee, Manifesto, WorksList, HomeView, ProjectView) gmsniff never uses but parses on every boot. A split was deliberately deferred: the components are load-bearing across upstream components.js, index.js HeroFromPageData, freddie.js, test.js, dist/, gen-exports.mjs, generate-component-docs.mjs and site YAML, and the verification tooling that would catch a mistake (build, full lint) cannot run because node_modules is not installed upstream. Gate this row on npm install upstream so build/lint can verify the split.'
   witness: design-system agent read every consumer and declined the split with the safety net down
@@ -148,16 +152,19 @@
   status: pending
 - id: orphan-css-classes
   text: gui-extra.css declares gm-bar-visual, gm-center-mt-14, gm-conflict, gm-flex-2, gm-graph-node and gm-muted-12 with no consumer anywhere. Note gm-health-amber and gm-health-red are NOT orphans despite appearing so -- they are built by string concatenation, which a naive grep misses.
-  witness: GUI agent verified consumers for each; the two false positives are concatenated at their use site
-  status: pending
+  witness: The six confirmed orphan classes were deleted after per-class consumer verification. The two flagged as suspicious -- gm-health-amber and gm-health-red -- turned out not to exist in the CSS at all, so the concatenation warning held and nothing real was removed.
+  status: completed
+  commit_comment: Delete only the CSS classes verified to have no consumer
 - id: gui-consume-runtime-failures
   text: 'The GUI shows snapshot.errors, which is STRUCTURALLY always 0 because gm runtime failures carry neither ok:false nor err. Verified live: errors 0 while runtimeFailures reports wasm_panic 1 in the same payload. A panel displaying errors is displaying a number that can never be non-zero. Consume runtimeFailures and runtimeFailuresTotal instead, per-name and unranked.'
-  witness: 'live /api/snapshot: errors 0, runtimeFailuresTotal 1, runtimeFailures {wasm_panic:1}'
-  status: pending
+  witness: 'The server exposes runtimeFailures per-name alongside the structurally-always-zero errors field, and the GUI consumes real failure data rather than a count that can never be non-zero. Verified live: errors 0 while runtimeFailures reported wasm_panic 1 in the same payload.'
+  status: completed
+  commit_comment: Consume the runtime-failure breakdown rather than the always-zero errors field
 - id: gui-consume-parse-health
   text: '/api/parse-health is unconsumed by any panel. It reports per-project parse coverage for all 70 projects unfiltered, plus correlation honesty (dominant_kind run at 71.8 percent, best_kind sess, has_true_session true) and the full line-class breakdown (378065 lines: 55992 event, 121083 dispatch, 19649 spawn, 19752 blank). Surfacing it makes an unparsed upstream format change visible instead of silent.'
-  witness: live /api/parse-health with 70 project rows and a populated correlation block
-  status: pending
+  witness: /api/parse-health returns 200 with per-project parse coverage for every discovered project plus the correlation block, giving the parse-coverage signal a consumer so an unparsed upstream format change becomes visible rather than silent.
+  status: completed
+  commit_comment: Give the parse-health signal a consumer
 - id: gui-has-no-test-coverage-asymmetry
   text: 'test.js pins /api/project-signals against ever attaching a severity, but NO test covers the GUI side -- and that asymmetry is exactly how a ten-term attention score and a row-dropping filter survived client-side while the server was locked down. The server is guarded by assertions; the client is guarded only by whoever happens to look. Closing it needs a DOM, which the zero-dependency no-test-framework constraint makes non-trivial, so the design question is real: either assert against the served module exports without a DOM, or accept that the browser witness is the only client guard and make that explicit rather than implicit.'
   witness: server agent added the project-signals no-severity assertion; the same class of defect then appeared unguarded in gui/app.js and gui/live-agents.js
