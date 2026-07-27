@@ -898,7 +898,16 @@ class Store {
     this.source = {
       selected: audited.source,
       archive_used: audited.archive_used,
+      // ONE fact, stated once: did the operator name a source tree? True only for GM_LOG_DIR or a
+      // genuinely non-default path (see createServer). `sources.gm_log.explicit` reports the
+      // narrower env-var-only half of the same fact; previously this flag also counted our own
+      // CLI's resolved default, so the two disagreed about one directory and neither was
+      // trustworthy. `explicit_reason` names which input made it explicit so no reader has to
+      // infer it from two booleans.
       explicit_log_dir: !!this.explicitLogDir,
+      explicit_reason: this.explicitLogDir
+        ? (process.env.GM_LOG_DIR ? 'GM_LOG_DIR' : 'caller-supplied non-default logDir')
+        : null,
       log_dir: this.logDir,
       include_archive: !!(opts.archive),
       window_ms: windowMs,
@@ -2051,11 +2060,20 @@ const API_ROUTES = [
 export { parseCodeInsight };
 
 export function createServer({ logDir, port = 0, host = '127.0.0.1' } = {}) {
-  // A caller-supplied logDir is an explicit source request and is honored end-to-end: the store
-  // loads from it and the live watcher tails it, instead of being overridden by fleet-wide
-  // spool discovery.
-  const explicitLogDir = logDir !== undefined || !!process.env.GM_LOG_DIR;
-  const store = new Store(logDir || DEFAULT_LOG_DIR, { explicitLogDir });
+  // "Explicit" means THE OPERATOR NAMED A TREE -- GM_LOG_DIR set, or a caller passing a
+  // genuinely non-default path (test.js's temp dir, `--log-dir`). It must NOT mean "some caller
+  // handed us a value", because our own CLI passes the resolved DEFAULT_LOG_DIR unconditionally:
+  // treating that as explicit made every default `gmsniff gui` launch select the legacy gm-log
+  // archive (`archive_used: true`, 958,616 dead events, live spool unused) and compute every
+  // aggregate over dead history -- the precise failure AGENTS.md's "spool is primary, archive is
+  // opt-in" invariant exists to prevent, and invisible because bigger numbers look more credible.
+  // Comparing against DEFAULT_LOG_DIR keeps BOTH behaviors: a default launch falls through to
+  // fleet-wide spool discovery, while a genuinely non-default path still wins end-to-end.
+  const resolvedLogDir = logDir || DEFAULT_LOG_DIR;
+  const namedNonDefault = logDir !== undefined
+    && path.resolve(logDir) !== path.resolve(DEFAULT_LOG_DIR);
+  const explicitLogDir = namedNonDefault || !!process.env.GM_LOG_DIR;
+  const store = new Store(resolvedLogDir, { explicitLogDir });
   store.load();
   store.startLive();
 

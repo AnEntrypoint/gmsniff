@@ -17,7 +17,7 @@ import { api, apiPost, esc, fmtTs, state, toast } from './data.js';
 import {
   basename, verbAllowlist, phaseUniverse, liveness, LIVENESS_LABEL, ageMs,
   currentDispatch, resolveInflight, verbDurations, prdBurndown, deviationTrend,
-  attentionScore, agentAges, phaseDivergence,
+  attentionScore, agentAges, phaseDivergence, authoritativePhase,
 } from './shared.js';
 import { renderMarkdown } from './markdown.js';
 import { HonestState } from './honest-state.js';
@@ -668,9 +668,12 @@ function toCard(a) {
     // Pending pressure, the CLI's "prd:441 mut:0" column. state.projects carries
     // it for every discovered project even when live-state does not.
     counter: pendingLabel(p) || (f.rows.length ? f.rows.length + ' events' : null),
+    // SessionCard renders this as "last <value>" itself (ds sessions.js:261), so
+    // the value must NOT repeat the word -- witnessed in the real DOM as
+    // "last last event 30s ago".
     lastActivity: ages.lastEvt != null
-      ? `last event ${fmtDuration(ages.lastEvt)} ago`
-      : (live === 'none' ? 'no gm state' : 'no events observed'),
+      ? `event ${fmtDuration(ages.lastEvt)} ago`
+      : (live === 'none' ? 'gm state: none' : 'event: none observed'),
     currentTool: a.inflight
       ? (a.inflight.abandoned ? `${a.inflight.verb} never completed` : `${a.inflight.verb}${a.inflight.ageMs != null ? ' ' + fmtDuration(a.inflight.ageMs) : ''}`)
       : (blocked ? 'blocked: ' + a.gates.blockers[0].gate : null),

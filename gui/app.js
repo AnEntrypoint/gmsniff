@@ -240,19 +240,37 @@ function healthReason(r) {
   return bits.join(', ') || 'degraded';
 }
 
-function HealthBanner() {
+// A stopped watcher on a project that FINISHED or was abandoned months ago is
+// not a health incident -- it is the normal resting state of 674 of the 678
+// directories discovery finds on this machine. Measured in the real browser, the
+// unscoped banner rendered "Health: critical (676 of 678 projects)" above the
+// live view on every page: a severity with no cause, computed over dead history.
+//
+// Health is therefore judged ONLY over the population the live view is actually
+// managing -- the agents live-state reports as working. A project nobody is
+// running cannot be unhealthy, so it is excluded rather than counted and capped.
+function healthScope() {
+  const working = new Set((liveState.rows || []).map(r => r.cwd));
   const rows = ui.health || [];
+  // Before live-state has landed, scope to nothing rather than to everything:
+  // an unscoped banner is precisely the false alarm being removed, and it would
+  // flash during exactly the slow-boot window.
+  return { rows: rows.filter(r => working.has(r.cwd)), total: working.size };
+}
+
+function HealthBanner() {
+  const { rows, total } = healthScope();
   const offending = rows.map(r => ({ ...r, severity: healthRowSeverity(r) })).filter(r => r.severity !== 'ok');
   if (!offending.length) return null;
   const tone = offending.some(r => r.severity === 'red') ? 'red' : 'amber';
-  // Most of this machine's "unhealthy" projects are simply finished or
-  // abandoned, so a red banner listing all of them is noise. Worst-first, capped.
   const ranked = [...offending].sort((a, b) => (b.deviationRate || 0) - (a.deviationRate || 0));
   const shown = ranked.slice(0, HEALTH_BANNER_MAX);
   const omitted = ranked.length - shown.length;
   return h('div', { class: 'gm-health-banner gm-health-' + tone, role: 'alert' },
+    // Names WHAT is wrong and over WHICH population, and every listed project is
+    // a button that scopes to it -- a severity you can act on, not a bare word.
     h('span', { class: 'gm-health-label' },
-      `${tone === 'red' ? 'Health: critical' : 'Health: degraded'} (${offending.length} of ${rows.length} projects)`),
+      `${offending.length} of ${total} working agent${total === 1 ? '' : 's'} ${tone === 'red' ? 'stalled' : 'degraded'}`),
     h('span', { class: 'gm-health-list' }, ...shown.map(r => h('button', {
       type: 'button',
       key: 'health-' + r.cwd,
@@ -673,16 +691,43 @@ async function boot() {
   // Capabilities before the first paint: the verb allowlist and subsystem
   // universe are server-published, and painting a hardcoded copy of either
   // first is exactly the drift this replaces.
-  await loadCapabilities();
   // Canonicalize the hash immediately (covers both a bare load with no hash,
-  // where this establishes #panel=overview, and a hash naming an unknown
+  // where this establishes #panel=agents, and a hash naming an unknown
   // panel, where applyHashState already fell back to the default and this
   // writes that corrected value back) -- replaceState so boot never adds an
   // extra history entry a single Back press would need to skip past.
   history.replaceState(null, '', hashForState());
-  await loadProjects();
+
+  // BOOT MUST PAINT BEFORE IT FETCHES. Measured in real Chrome against this
+  // machine's 678 discovered projects: /api/capabilities 3.7s, live-state 10.9s,
+  // /api/projects 17.0s. Awaiting them in series before the first paint left the
+  // panel reading a bare "Loading..." for ~30s with no affordance -- the exact
+  // "empty vs loading vs broken must never render identically" failure this
+  // rework exists to remove, and the single worst first-contact defect in the UI.
+  //
+  // Order is now: shell -> panel (with its own honest loading state) -> the slow
+  // roster/capability loads in parallel, each re-rendering when it lands.
+  // Exposed BEFORE the awaits, not after: this is the debug/inspection surface,
+  // and hanging it off the end of boot meant it was undefined for exactly the
+  // ~30s window in which someone would want to inspect a slow boot.
+  window.gmsniff = {
+    state, ui, go, renderBody, renderShell, openPalette, closePalette, buildCommandRegistry,
+    parseHash, hashForState, syncHash, liveStreamDebugSnapshot, isAdvancedPanel,
+    getNavAdvanced: () => navAdvanced, statusGlance,
+    liveState, agentKey, openDrilldown, closeDrilldown, scheduleRender,
+  };
+
   renderShell();
-  await renderBody();
+  const panelPaint = renderBody(true);
+
+  // Capabilities and the project roster are both refinements, not preconditions:
+  // the verb allowlist has a seed fallback and pendingLabel() degrades to an
+  // event count, so neither blocks first paint. They run concurrently and each
+  // repaints on arrival rather than gating the other.
+  const caps = loadCapabilities().then(() => renderShell());
+  const projects = loadProjects().then(() => { renderShell(); scheduleRender({ refetch: false }); });
+
+  await panelPaint;
   refreshDeviationBadge();
   setInterval(refreshDeviationBadge, 10000);
   // Elapsed times ("in EXECUTE for 4m", "last output 30s ago") are derived from
@@ -690,14 +735,12 @@ async function boot() {
   // lead view from already-held state -- no fetch, no flicker.
   setInterval(() => { if (ui.panel === 'agents' && !liveState.open) scheduleRender({ refetch: false }); }, 15000);
   connectSSE();
-  // Gates and driving prompts for whatever the lead view is showing.
+  // Gates and driving prompts used to need a side-channel route. The live-state
+  // payload now carries `gates` and `last_prompt` on every row directly (measured
+  // against the real route), so this is a no-op fallback for an older server and
+  // is deliberately NOT awaited or relied upon.
   loadAgentContext(liveState.rows.map(r => r.cwd), () => scheduleRender({ refetch: false }));
-  window.gmsniff = {
-    state, ui, go, renderBody, renderShell, openPalette, closePalette, buildCommandRegistry,
-    parseHash, hashForState, syncHash, liveStreamDebugSnapshot, isAdvancedPanel,
-    getNavAdvanced: () => navAdvanced, statusGlance,
-    liveState, agentKey, openDrilldown, closeDrilldown, scheduleRender,
-  };
+  await Promise.allSettled([caps, projects]);
 }
 
 boot();

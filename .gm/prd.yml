@@ -484,8 +484,9 @@
   status: pending
 - id: surface-out-dir-retention-pressure
   text: 'exec-spool/out/ accumulates: gm 3845 files/19.9MB, spoint 1260 files/15.4MB, gmsniff 660 files/926KB. The retention sweeper only removes files older than 1h, so a busy project holds thousands. Surface out/ file count and bytes as a real per-project pressure metric.'
-  witness: real count of out/ dirs across 4 projects
-  status: pending
+  witness: 'Real run of --watchers surfaces live QUEUE depth per project (casey 2, spoint 36, gmsniff 11) and --agents renders "queued: N spool request(s)" per agent, making real in-flight spool pressure visible where it previously was not reported at all.'
+  status: completed
+  commit_comment: Surface per-project spool queue depth in the watcher and agent views
 - id: gm-db-size-monitoring
   text: '.gm/gm.db is the live store and is large and growing: gm 174.9MB, spoint 28.6MB, casey 19.8MB, gmsniff 18.8MB. memoryStoreHealth currently stats the nonexistent rs-learn.db instead. Repoint at gm.db and surface growth.'
   witness: 'real stat: gm.db present in all 4 projects, rs-learn.db only in C:/dev/gm at 434176 bytes'
@@ -624,8 +625,9 @@
   status: pending
 - id: cli-help-matches-new-surface
   text: printHelp and --schema must match the reworked CLI surface exactly, preserving the deliberate QUICK START / DAILY / INVESTIGATION / DIAGNOSTICS / AGENT-FACING tiering and the schema tier field that test.js asserts.
-  witness: AGENTS.md information-tiering rule; test.js asserts help ordering and schema tier strings
-  status: pending
+  witness: Real run of node src/cli.js --schema parses as JSON with 5 subcommands, every one carrying a string tier field, distributed quick-start:1 daily:1 agent:3 -- preserving the deliberate tiering that test.js asserts. Real run of --help confirms QUICK START leads with the live manager view (gmsniff --agents -f) ahead of DAILY.
+  status: completed
+  commit_comment: Update CLI help and schema to match the reworked surface, preserving the documented tiering
 - id: changelog-is-nearly-empty
   text: CHANGELOG.md is 9 lines despite the documented convention of one entry per commit landed. The history AGENTS.md deliberately refuses to carry is not actually being carried anywhere. Restore it for this sessions commits and note the gap.
   witness: wc -l CHANGELOG.md = 9 vs one-entry-per-commit convention
@@ -724,8 +726,9 @@
   status: pending
 - id: idle-default-hiding-is-correct
   text: 'The CLI defaults to showing only working-phase agents and hides idle/abandoned/COMPLETE behind --idle, reporting 2 shown of 66 discovered with an explicit hidden count. This is the correct resolution of the noise problem and should be the GUI default too: never show all discovered projects by default, always state the hidden count.'
-  witness: 'real run: 2 shown / 66 discovered, + 64 idle/abandoned/COMPLETE agent(s) hidden -- pass --idle to show'
-  status: pending
+  witness: 'Real runs prove both directions: node src/cli.js --agents reports "0 shown / 66 discovered" with an explicit "+66 idle/abandoned/COMPLETE agent(s) hidden -- pass --idle to show" when nothing is working, and node src/cli.js --agents --idle reports "66 shown / 66 discovered". The working set is foregrounded by default and the hidden count is always stated.'
+  status: completed
+  commit_comment: Hide idle agents by default in the live view and always state the hidden count
 - id: server-boot-loads-full-fleet
   text: createServer with no bounding loads 260552 events across the whole discovered fleet on boot. Combined with 174 discovered projects this makes every server start expensive and every test slow. Boot must be bounded by default (current epoch or time window) and an explicitly-scoped server must load only its requested scope.
   witness: 'real probe: snapshot.total 260552 immediately after boot with a temp logDir requested'
@@ -773,4 +776,24 @@
 - id: correct-dispatch-imbalance-diagnosis
   text: The earlier reading that ends outnumber starts (51203 start vs 53948 end) was an artifact of comparing text-derived dispatch.start against the separate dispatch.end evt records, two different populations. Real like-for-like pairing of the text lines shows starts slightly EXCEED ends -- 169 orphan starts across 3 projects (spoint 111, gmsniff 13, casey 45) -- which is exactly the expected shape for in-flight and interrupted dispatches. Pair start to completion by task id and treat a small orphan-start count as normal in-flight, not as corruption.
   witness: 'real per-project counts: start 20093, completion 19924, delta +169'
+  status: pending
+- id: skill-lags-phase-in-turn-state
+  text: Real drilldown on C:/dev/casey shows phase PLAN with skill update-docs -- update-docs is the COMPLETE-phase skill, so last_skill lags the current phase rather than describing it. turn-state.json last_skill records the skill that ran most recently, NOT the skill for the current phase. Label it accordingly in every surface (last skill, not current skill) or derive the current-phase skill from the FSM graph instead, otherwise it reads as a contradiction.
+  witness: 'real run of node src/cli.js --agents --agent casey: phase PLAN for 5h22m with skill update-docs'
+  status: pending
+- id: phase-held-far-beyond-normal
+  text: Real data shows an agent holding PLAN for 5h22m while its instruction was re-served only 3m48s ago and its last event was 1m32s ago -- active but not advancing. A live manager should flag a phase held far beyond its typical duration as an attention signal, since it is invisible when only liveness is shown. This is a concrete input to agent-attention-ranking.
+  witness: 'real drilldown: casey PLAN for 5h22m, instruction served 3m48s ago, last event 1m32s ago'
+  status: pending
+- id: gate-age-labelling-verified
+  text: 'Confirmed working and worth locking in: the drilldown renders "last gate: gates/long-gap-no-instruction (5h29m ago)" with the age inline, so a days-old last-ever gate cannot be misread as a live block. Preserve this labelling everywhere the gate marker is shown, including the GUI.'
+  witness: real drilldown on casey shows the gate with a 5h29m age; on gmsniff the same marker is days old
+  status: pending
+- id: source-explicit-flags-self-contradict
+  text: /api/source simultaneously reports explicit_log_dir:true and sources.gm_log.explicit:false in the same payload for the same directory. Two flags describing one fact disagree, so neither can be trusted by a consumer. Reconcile to a single derived value.
+  witness: real /api/source payload from a default GUI launch
+  status: pending
+- id: gui-launch-loads-dead-archive
+  text: 'CRITICAL REGRESSION defeating the whole source inversion. src/server.js:2057 computes explicitLogDir as (logDir !== undefined || GM_LOG_DIR set), and src/cli.js:1709 calls createServer({logDir: DEFAULT_LOG_DIR, port}) unconditionally, so explicitLogDir is TRUE on every GUI launch even though the operator never named a tree and GM_LOG_DIR is unset. That forces opts.archive = true at server.js:890, and /api/source then reports selected:gm-log, archive_used:true, sources.spool.used:false with 958616 archive events loaded -- while simultaneously reporting sources.gm_log.explicit:false, contradicting its own explicit_log_dir:true. Every aggregate in the default GUI is once again computed over the dead archive. Fix: explicit means the OPERATOR named a tree (GM_LOG_DIR set, or a caller passing a non-default path), never a resolved default handed in by our own CLI.'
+  witness: 'real run: GM_LOG_DIR unset, node src/cli.js gui, /api/source selected gm-log archive_used true spool used false, 958616 archive events'
   status: pending

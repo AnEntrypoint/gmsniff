@@ -110,9 +110,27 @@ export function isAgent(row) {
 //
 // last_dispatch_ts is the precise signal but is not in the payload yet (0 of 63
 // rows carry it today), so updated_ts is the fallback until it lands.
+// The server now classifies this itself and publishes `activity`, computed from
+// last_activity_age_ms over the real watcher-log tail -- measured values on this
+// machine: dispatching 3, idle 1, abandoned 138, unknown 536. That classification
+// is authoritative (it is the same one the route filters on, so client and server
+// cannot disagree about which agents are "working"). `alive` is deliberately NOT
+// consulted: it is the shared-daemon signal and reports unrelated projects
+// identically.
+const ACTIVITY_TO_LIVENESS = {
+  dispatching: 'active', active: 'active', idle: 'idle',
+  abandoned: 'dead', dead: 'dead', unknown: 'unknown',
+};
+
 export function liveness(row, now = Date.now()) {
   if (!isAgent(row)) return 'none';
-  const age = ageMs(row && (row.last_dispatch_ts ?? row.updated_ts), now);
+  if (row && typeof row.activity === 'string' && ACTIVITY_TO_LIVENESS[row.activity]) {
+    return ACTIVITY_TO_LIVENESS[row.activity];
+  }
+  // Fallback for an older server: age since the last real event.
+  const age = (typeof row.last_event_ms === 'number' && Number.isFinite(row.last_event_ms))
+    ? Math.max(0, row.last_event_ms)
+    : ageMs(row && (row.last_dispatch_ts ?? row.updated_ts), now);
   if (age == null) return 'unknown';
   if (age <= ACTIVE_MAX_MS) return 'active';
   if (age <= IDLE_MAX_MS) return 'idle';
@@ -130,11 +148,35 @@ export const LIVENESS_LABEL = {
 //   lastEvt : since the last real .watcher.log event     -> "is it still emitting anything"
 // An agent can be 44m in-phase but 1m since its last event (working steadily), or
 // 8m in-phase and 3h since its last event (wedged). One number hides that.
+// The server now PRE-COMPUTES all three as durations (`in_phase_ms`,
+// `last_event_ms`, `instruction_served_ms`, measured on the real route), because
+// only it can read turn-state.json's mtime and the watcher-log tail. Those are
+// authoritative when present. The timestamp forms remain as the fallback for an
+// older server, and the live feed's own newest ts wins for lastEvt because it is
+// fresher than the snapshot the list was built from.
+function nonNegative(n) {
+  return typeof n === 'number' && Number.isFinite(n) ? Math.max(0, n) : null;
+}
+
 export function agentAges(row, feedTs, now = Date.now()) {
+  const feedAge = ageMs(feedTs, now);
+  const servedMs = nonNegative(row && row.in_phase_ms) == null && row && row.turn_state && row.turn_state.updated_at_ms
+    ? ageMs(row.turn_state.updated_at_ms, now)
+    : null;
   return {
-    inPhase: ageMs(row && (row.phase_changed_ts ?? row.updated_ts), now),
-    lastEvt: ageMs(feedTs ?? (row && row.last_event_ts), now),
-    served: ageMs(row && (row.instruction_served_ts ?? row.updated_ts), now),
+    inPhase: nonNegative(row && row.in_phase_ms)
+      ?? servedMs
+      ?? ageMs(row && (row.phase_changed_ts ?? row.updated_ts), now),
+    // Prefer whichever is FRESHER: a live SSE append can be newer than the
+    // snapshot, and a snapshot can be newer than a feed that never seeded.
+    lastEvt: (() => {
+      const snap = nonNegative(row && row.last_event_ms) ?? ageMs(row && row.last_event_ts, now);
+      if (feedAge == null) return snap;
+      if (snap == null) return feedAge;
+      return Math.min(feedAge, snap);
+    })(),
+    served: nonNegative(row && row.instruction_served_ms)
+      ?? ageMs(row && (row.instruction_served_ts ?? row.updated_ts), now),
   };
 }
 
@@ -142,11 +184,33 @@ export function agentAges(row, feedTs, now = Date.now()) {
 // PLAN while turn-state.json has already moved to EXECUTE (observed live on
 // spoint). That is a real, reportable condition -- show BOTH sources and flag the
 // divergence rather than silently picking one and presenting it as the truth.
+// The server computes and publishes this directly (`phase_divergence`, with both
+// sides as `phase_served` / `phase_authoritative`), so the divergence flag and
+// the two phases it names always come from one comparison rather than the client
+// re-deriving it from fields that may not both be present.
 export function phaseDivergence(row) {
-  const served = row && (row.instruction_phase ?? row.next_step_phase ?? null);
-  const actual = row && (row.turn_state_phase ?? row.phase ?? null);
+  if (!row) return null;
+  const served = row.phase_served ?? row.instruction_phase ?? row.next_step_phase ?? null;
+  const actual = row.phase_authoritative
+    ?? (row.turn_state && row.turn_state.phase)
+    ?? row.turn_state_phase ?? row.phase ?? null;
   if (!served || !actual || served === actual) return null;
   return { served, actual };
+}
+
+// The phase to LEAD with. turn-state.json is the authoritative FSM state and
+// next-step.md's header is instruction provenance that can legitimately lag it
+// (witnessed live: the gmsniff card read "PLAN" from the served prose while
+// turn-state had already moved to EXECUTE). Showing the served phase as the
+// agent's phase states the stale one as fact; the divergence is surfaced
+// separately rather than silently resolved.
+export function authoritativePhase(row) {
+  if (!row) return null;
+  return row.phase_authoritative
+    ?? (row.turn_state && row.turn_state.phase)
+    ?? row.phase
+    ?? row.phase_served
+    ?? null;
 }
 
 // ---------------------------------------------------------------------------

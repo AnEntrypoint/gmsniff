@@ -1706,7 +1706,7 @@ async function launchGui(args) {
     if (args[i] === '--port') port = parseInt(args[++i], 10) || 0;
     else if (args[i] === '--open') open = true;
   }
-  const { url } = await createServer({ logDir: DEFAULT_LOG_DIR, port });
+  const { url } = await createServer({ port });
   process.stdout.write(`gmsniff gui - ${url}\n`);
   if (open) {
     try {
