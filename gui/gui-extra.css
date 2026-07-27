@@ -1,14 +1,20 @@
 /* gmsniff-specific chrome not covered by anentrypoint-design's shared CSS.
    Theme-aware: every color rides colors_and_type.css tokens, no raw hex. */
 
-/* Skill Layout drilldown: shows the served instruction and its output feed as two side-by-side
-   columns (Dialog size="wide", added upstream in anentrypoint-design) instead of stacked
-   sections requiring scroll-past to see both. Falls back to a single stacked column under
-   900px, where two panes side by side would be too cramped to read. */
-.gm-split-pane { display:flex; gap:16px; align-items:flex-start; }
-.gm-split-pane > .gm-split-col { flex:1 1 50%; min-width:0; display:flex; flex-direction:column; }
+/* Agent drilldown: served instruction beside its output feed, laid out by the ds
+   SplitPanel (drag- and keyboard-resizable, ds-ep-split* rules in
+   editor-primitives.css). This wrapper supplies only what SplitPanel does not:
+   a height for its 100%-height root, the gap between panes, and the sub-900px
+   fallback to a single stacked column, where two panes would be too cramped to
+   read and the drag handle has no room to be useful. */
+.gm-split-pane { height:62vh; }
+.gm-split-pane .ds-ep-split { gap:16px; }
+.gm-split-col { min-width:0; display:flex; flex-direction:column; }
 @media (max-width: 900px) {
-  .gm-split-pane { flex-direction:column; }
+  .gm-split-pane { height:auto; }
+  .gm-split-pane .ds-ep-split.horiz { flex-direction:column; }
+  .gm-split-pane .ds-ep-split.horiz > .ds-ep-split-pane { width:auto !important; flex:0 0 auto !important; }
+  .gm-split-pane .ds-ep-resize { display:none; }
 }
 
 .gm-toolbar { display:flex; gap:8px; margin-bottom:10px; align-items:center; flex-wrap:wrap; }
@@ -48,10 +54,6 @@
 
 .gm-propgrid-row { border-bottom:1px solid var(--border); padding:8px 0; }
 .gm-propgrid-row:last-child { border-bottom:none; }
-.gm-bar-visual { display:flex; align-items:center; gap:8px; margin:2px 0; font-size:11px; }
-.gm-bar-visual .lbl { width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.gm-graph-node { border:1px solid var(--border); border-radius:4px; padding:6px 10px; margin:3px; display:inline-block; font-size:11px; cursor:pointer; background: var(--surface-2, var(--panel-bg)); }
-.gm-graph-node:hover { border-color: var(--accent, var(--panel-accent)); }
 
 /* Cross-project measurement strip for the working agents, above the panel router.
    Deliberately has no amber/red variant: a colour is a verdict, and this strip
@@ -94,7 +96,6 @@
 .gm-m-0 { margin:0; }
 .gm-my-4 { margin:4px 0; }
 .gm-cursor-pointer { cursor:pointer; }
-.gm-flex-2 { flex:2; }
 .gm-h-80 { height:80px; }
 .gm-opacity-70 { opacity:.7; }
 .gm-p-8 { padding:8px; }
@@ -121,7 +122,6 @@
 .gm-ml-10 { margin-left:10px; }
 .gm-mr-8 { margin-right:8px; }
 .gm-list-row { padding:6px 0; border-bottom:1px solid var(--border); }
-.gm-center-mt-14 { margin-top:14px; text-align:center; }
 .gm-panel-danger { border-color: var(--flame, #f85149); }
 .gm-row-danger-tint { background: color-mix(in oklab, var(--flame, #f85149) 12%, transparent); }
 
@@ -134,7 +134,6 @@
 /* colorFor(sub) is per-subsystem data (a hash-derived hsl or a named palette
    entry), not a fixed layout value -- kept as a custom property so the class
    stays static while the color remains dynamic. */
-.gm-muted-12 { color: var(--muted); font-size:12px; }
 .gm-muted-11 { color: var(--muted); font-size:11px; }
 .gm-sub-color { color: var(--sub-color); }
 

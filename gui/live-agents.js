@@ -1,6 +1,6 @@
 import * as webjsx from 'webjsx';
 import { Btn, Chip, Pill } from 'ds/components/shell.js';
-import { Dialog } from 'ds/components/editor-primitives.js';
+import { Dialog, SplitPanel } from 'ds/components/editor-primitives.js';
 import { SessionDashboard, fmtAgo, fmtDuration } from 'ds/components/sessions.js';
 import { Toggle } from 'ds/components/form-primitives.js';
 import { api, apiPost, esc, fmtTs, state, toast } from './data.js';
@@ -579,7 +579,9 @@ function AgentDrilldown(setBody) {
     ariaLabel: 'Live agent detail',
     onClose: () => closeDrilldown(setBody),
     actions: [{ label: 'Close', onClick: () => closeDrilldown(setBody) }],
-    children: h('div', {}, header, controls, h('div', { class: 'gm-split-pane gm-mt-10' }, instructionPane, feedPane)),
+    children: h('div', {}, header, controls,
+      h('div', { class: 'gm-split-pane gm-mt-10' },
+        SplitPanel({ orientation: 'horizontal', initial: '50%', min: 240, children: [instructionPane, feedPane] }))),
   });
 }
 

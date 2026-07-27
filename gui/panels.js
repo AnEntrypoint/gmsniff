@@ -367,6 +367,18 @@ export async function SubsystemPanel(sub, setBody) {
   }, setBody);
 }
 
+const SESS_ID_DISPLAY_CHARS = 20;
+
+// gm writes a deviation's cause as either a `residuals` array or a single
+// `reason` scalar, and both shapes are live; DevRow takes one array.
+function toDevRow(e) {
+  return DevRow({
+    ts: fmtTs(e.ts), event: e.event, sess: (e.sess || '-').slice(0, SESS_ID_DISPLAY_CHARS),
+    operation: e.operation,
+    residuals: Array.isArray(e.residuals) ? e.residuals : (e.reason ? [e.reason] : []),
+  });
+}
+
 const deviationsFilterState = { sessQuery: '' };
 export async function Deviations(setBody) {
   const r = await api('/api/deviations?limit=200');
@@ -396,10 +408,7 @@ export async function Deviations(setBody) {
         ...(sessRows.length ? sessRows.map(([s, n]) => BarRow({ label: s.slice(0, 60), value: String(n) })) : [Empty(q ? 'No sessions match filter.' : '-')]),
         ...(sessRowsOmitted > 0 ? [h('div', { class: 'gm-muted-11' }, `+${sessRowsOmitted} more session${sessRowsOmitted === 1 ? '' : 's'} not shown (list caps at ${TOP_ROWS_SHOWN})`)] : []))),
     h('div', { class: 'ds-panel' }, h('h2', {}, `Recent Deviations (${recent.length}${q ? ` of ${r.total}` : ` / ${r.total}`})`),
-      ...(recent.length ? recent.map((e, i) => DevRow({
-        ts: fmtTs(e.ts), event: e.event, sess: (e.sess || '-').slice(0, 20), operation: e.operation,
-        residuals: Array.isArray(e.residuals) ? e.residuals : (e.reason ? [e.reason] : []),
-      })) : [Empty(q ? 'No deviations match filter.' : 'No deviations recorded -- agents are following the process.')])));
+      ...(recent.length ? recent.map(toDevRow) : [Empty(q ? 'No deviations match filter.' : 'No deviations recorded -- agents are following the process.')])));
 }
 
 const sessionDetailState = { open: false, sess: null, loading: false, tree: null, deviations: null, error: null };
@@ -457,10 +466,7 @@ export function SessionDetailDialog(setBody) {
             : Empty('No process events for this session.'),
           h('h2', { class: 'gm-mt-10' }, `Deviations (${(s.deviations && s.deviations.total) || 0})`),
           devRows.length
-            ? h('div', {}, ...devRows.map((e, i) => DevRow({
-                ts: fmtTs(e.ts), event: e.event, sess: (e.sess || '-').slice(0, 20), operation: e.operation,
-                residuals: Array.isArray(e.residuals) ? e.residuals : (e.reason ? [e.reason] : []),
-              })))
+            ? h('div', {}, ...devRows.map(toDevRow))
             : Empty('No deviations recorded for this session.'));
   return Dialog({
     title: `Session ${s.sess ? String(s.sess).slice(0, 40) : ''}`,
