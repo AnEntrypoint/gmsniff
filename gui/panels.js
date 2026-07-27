@@ -66,7 +66,7 @@ export async function Dashboard({ onNav, devTotal, health } = {}) {
     const hr = healthByCwd.get(p.cwd);
     const name = String(p.cwd).split(/[\\/]/).filter(Boolean).pop() || p.cwd;
     return h('tr', {
-      key: p.cwd, style: 'cursor:pointer', title: p.cwd,
+      key: p.cwd, class: 'gm-cursor-pointer', title: p.cwd,
       onclick: () => { state.cwd = p.cwd; if (onNav) onNav('overview'); },
     },
       h('td', {}, name),

@@ -38,7 +38,6 @@
 .gm-flex-row { display:flex; gap:12px; align-items:flex-start; flex-wrap:wrap; }
 .gm-flex-row > .ds-panel, .gm-flex-row > div { flex:1; min-width:260px; }
 .gm-textarea { width:100%; height:160px; font-family: ui-monospace, Consolas, monospace; font-size:11px; }
-.gm-conflict { color: var(--danger, var(--flame, #c0392b)); font-size:12px; margin-top:6px; }
 /* gm-toast/.err retired: toast() in data.js now delegates to the design SDK's
    ds/components/editor-primitives.js toast(), which owns its own .ds-ep-toast /
    .ds-ep-toast-host styling (editor-primitives.css) -- stacking host, kind-based

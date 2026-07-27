@@ -775,6 +775,169 @@ assert(schemaOut.subcommands.every(s => typeof s.tier === 'string'), 'schema sub
   assert.strictEqual(fs.existsSync(path.join(failSpool, 'in', 'learn')), false,
     'a rejected retired verb writes nothing to the spool');
 
+  // ---- write routes ----------------------------------------------------------------------
+  // Every route below MUTATES real files or the real spool, so each asserts against what
+  // actually landed on disk, never against the response body alone: a handler that returns
+  // {ok:true} while writing nothing is precisely the returns-success-while-broken class.
+  const postJson = (route, body) => fetch(failSrv.url + route, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+  });
+
+  // A known-good verb writes exactly one payload file into in/<verb>/.
+  const accepted = await postJson('/api/lifecycle', { cwd: failProj, verb: 'status', payload: { k: 1 } });
+  assert.strictEqual(accepted.status, 200, 'a known, non-retired verb is accepted by /api/lifecycle');
+  const acceptedBody = await accepted.json();
+  assert.strictEqual(acceptedBody.ok, true, '/api/lifecycle reports the write succeeded');
+  const statusDir = path.join(failSpool, 'in', 'status');
+  const statusFiles = fs.readdirSync(statusDir);
+  assert.strictEqual(statusFiles.length, 1, 'exactly one spool file is written, not zero and not two');
+  assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(statusDir, statusFiles[0]), 'utf-8')), { k: 1 },
+    'the spool file carries the caller\'s payload verbatim');
+  assert.strictEqual(acceptedBody.file, path.join(statusDir, statusFiles[0]),
+    'the returned path is the file that actually exists, so a caller can poll for its response');
+
+  // An unknown verb is refused before any directory is created.
+  const unknownVerb = await postJson('/api/lifecycle', { cwd: failProj, verb: 'notaverb', payload: {} });
+  assert.strictEqual(unknownVerb.status, 400, 'an unknown verb is rejected by /api/lifecycle');
+  assert.strictEqual(fs.existsSync(path.join(failSpool, 'in', 'notaverb')), false,
+    'a rejected unknown verb writes nothing to the spool');
+
+  // The cwd allowlist is the only thing standing between these write routes and an arbitrary
+  // filesystem path, so its rejection path is asserted on every writing route, not just one.
+  const outsideCwd = path.join(failRoot, 'not-a-discovered-project');
+  for (const [route, body] of [
+    ['/api/lifecycle', { cwd: outsideCwd, verb: 'status', payload: {} }],
+    ['/api/prd/edit', { cwd: outsideCwd, id: 'x', status: 'done' }],
+    ['/api/mutables/edit', { cwd: outsideCwd, id: 'x', status: 'witnessed' }],
+    ['/api/codesearch', { cwd: outsideCwd, query: 'q' }],
+  ]) {
+    const rejected = await postJson(route, body);
+    assert.strictEqual(rejected.status, 403, `${route} refuses a cwd outside the discovered project registry`);
+    assert.strictEqual((await rejected.json()).error, 'cwd not in discovered project registry',
+      `${route} names the registry as the reason it refused`);
+  }
+  assert.strictEqual(fs.existsSync(outsideCwd), false,
+    'no write route created anything under the rejected cwd');
+
+  // `..` is refused ahead of the registry check, so a traversal attempt never reaches a stat.
+  const traversal = await postJson('/api/lifecycle', { cwd: `${failProj}/../..`, verb: 'status', payload: {} });
+  assert.strictEqual(traversal.status, 403, 'a cwd containing .. is refused');
+  assert.strictEqual((await traversal.json()).error, 'invalid cwd',
+    'a traversal cwd is refused as malformed, distinct from being out of registry');
+
+  // ---- prd/mutables edit: the on-disk file is the assertion, not the response ----
+  const failGm = path.join(failProj, '.gm');
+  fs.writeFileSync(path.join(failGm, 'prd.yml'), [
+    '- id: modern-row', '  status: pending', '  text: original text',
+    // A legacy non-`id` boundary row: ../gm's live mutables.yml carries 41 of these behind
+    // mutable_id/text/subject/name/prd_id/repo/title, so rewriting one must preserve the
+    // boundary key rather than reshaping the row into `- id:`.
+    '- subject: legacy boundary row', '  id: legacy-row', '  status: pending', '',
+  ].join('\n'));
+  fs.writeFileSync(path.join(failGm, 'mutables.yml'), [
+    '- id: mut-row', '  status: unknown', '  witness_evidence: none yet', '',
+  ].join('\n'));
+
+  const prdEdited = await postJson('/api/prd/edit', { cwd: failProj, id: 'modern-row', status: 'done', text: 'rewritten' });
+  assert.strictEqual(prdEdited.status, 200, '/api/prd/edit accepts an edit to a real row');
+  const prdOnDisk = fs.readFileSync(path.join(failGm, 'prd.yml'), 'utf-8');
+  assert(/^- id: modern-row\n  status: done\n/m.test(prdOnDisk),
+    'the PRD row on disk really carries the new status, not just the response body');
+  assert(prdOnDisk.includes('rewritten'), 'the new text landed in the file');
+  assert.strictEqual(prdOnDisk.includes('original text'), false, 'the old text is gone, not duplicated');
+
+  // Byte preservation for every row the caller did NOT name.
+  assert(prdOnDisk.includes('- subject: legacy boundary row'),
+    'an untouched legacy-boundary row keeps its own boundary key byte-for-byte');
+
+  const legacyEdited = await postJson('/api/prd/edit', { cwd: failProj, id: 'legacy-row', status: 'done' });
+  assert.strictEqual(legacyEdited.status, 200, '/api/prd/edit reaches a row whose boundary key is not `id`');
+  const prdAfterLegacy = fs.readFileSync(path.join(failGm, 'prd.yml'), 'utf-8');
+  assert(prdAfterLegacy.includes('- subject: legacy boundary row'),
+    'rewriting a legacy row re-emits its original boundary key, never reshaping it into `- id:`');
+  assert(/^- subject: legacy boundary row\n  id: legacy-row\n  status: done\n/m.test(prdAfterLegacy),
+    'the legacy row is edited in place with its field order and boundary intact');
+
+  const mutEdited = await postJson('/api/mutables/edit', { cwd: failProj, id: 'mut-row', status: 'witnessed', witness: 'file:1' });
+  assert.strictEqual(mutEdited.status, 200, '/api/mutables/edit accepts an edit to a real row');
+  const mutOnDisk = fs.readFileSync(path.join(failGm, 'mutables.yml'), 'utf-8');
+  assert(/^  status: witnessed$/m.test(mutOnDisk), 'the mutable row on disk carries the new status');
+  assert(mutOnDisk.includes('file:1'), 'the witness the caller supplied landed in the file');
+
+  // A missing row is a 404 and must leave the file untouched -- a rewriteRow returning null that
+  // was written anyway would truncate the store.
+  const bytesBefore = fs.readFileSync(path.join(failGm, 'prd.yml'), 'utf-8');
+  const missingRow = await postJson('/api/prd/edit', { cwd: failProj, id: 'no-such-row', status: 'done' });
+  assert.strictEqual(missingRow.status, 404, 'editing a row that does not exist is a 404');
+  assert.strictEqual(fs.readFileSync(path.join(failGm, 'prd.yml'), 'utf-8'), bytesBefore,
+    'a 404 edit leaves the file byte-identical');
+
+  // Optimistic concurrency: a stale `since` mtime must refuse rather than clobber a concurrent write.
+  const stale = await postJson('/api/prd/edit', { cwd: failProj, id: 'modern-row', status: 'pending', since: 1 });
+  assert.strictEqual(stale.status, 409, 'an edit carrying a stale mtime is refused as a conflict');
+  const staleBody = await stale.json();
+  assert.strictEqual(typeof staleBody.mtimeMs, 'number', 'the conflict reports the mtime the caller must re-read from');
+  assert.strictEqual(staleBody.currentRow.status, 'done',
+    'the conflict hands back the row as it actually is now, so the caller can merge');
+  assert(fs.readFileSync(path.join(failGm, 'prd.yml'), 'utf-8').includes('status: done'),
+    'a refused conflicting edit changed nothing on disk');
+
+  // ---- lifecycle/response filename validation ----
+  // The `file` parameter names a file inside .gm/exec-spool/out and is attacker-controlled, so
+  // every shape that could escape that directory is refused BEFORE any read is attempted.
+  const failOut = path.join(failSpool, 'out');
+  fs.mkdirSync(failOut, { recursive: true });
+  fs.writeFileSync(path.join(failOut, 'codesearch-1.json'), JSON.stringify({ hits: [{ path: 'a.js' }] }), 'utf-8');
+  fs.writeFileSync(path.join(failProj, 'secret.json'), JSON.stringify({ secret: true }), 'utf-8');
+
+  const respUrl = (file, verb = 'codesearch') =>
+    `${failSrv.url}/api/lifecycle/response?cwd=${encodeURIComponent(failProj)}&verb=${encodeURIComponent(verb)}&file=${encodeURIComponent(file)}`;
+
+  const goodResp = await (await fetch(respUrl('codesearch-1.json'))).json();
+  assert.strictEqual(goodResp.ok, true, 'a well-formed response filename inside out/ is served');
+  assert.deepStrictEqual(goodResp.response.hits, [{ path: 'a.js' }], 'the response body is the parsed file content');
+
+  for (const bad of ['../secret.json', '..\\secret.json', 'sub/codesearch-1.json', 'sub\\codesearch-1.json', 'codesearch-1.txt', '.json']) {
+    const r = await fetch(respUrl(bad));
+    assert.strictEqual(r.status, 400, `/api/lifecycle/response refuses the file parameter ${JSON.stringify(bad)}`);
+    assert(/invalid file parameter/.test((await r.json()).error),
+      `the refusal of ${JSON.stringify(bad)} names the file parameter as the cause`);
+  }
+  // A traversal that is refused must not have leaked the file it aimed at.
+  const escaped = await fetch(respUrl('../secret.json'));
+  assert.strictEqual((await escaped.text()).includes('"secret"'), false,
+    'a refused traversal returns no content from outside out/');
+
+  const badVerb = await fetch(respUrl('codesearch-1.json', 'code search'));
+  assert.strictEqual(badVerb.status, 400, 'the verb parameter is shape-checked too');
+  assert.strictEqual((await badVerb.json()).error, 'invalid verb parameter',
+    'a malformed verb is refused as a verb, not misreported as a bad filename');
+
+  const absentResp = await fetch(respUrl('codesearch-absent.json'));
+  assert.strictEqual(absentResp.status, 404,
+    'a well-formed name with no file behind it is an honest 404, distinct from a 400 refusal');
+
+  // ---- codesearch ----
+  // No daemon is running against this fixture, so nothing will ever write the response file.
+  // That is the real timeout path: the route must write its request and then 504 rather than
+  // hang or claim success.
+  const csEmpty = await postJson('/api/codesearch', { cwd: failProj, query: '' });
+  assert.strictEqual(csEmpty.status, 400, 'an empty codesearch query is refused');
+  const csLong = await postJson('/api/codesearch', { cwd: failProj, query: 'x'.repeat(4097) });
+  assert.strictEqual(csLong.status, 400, 'a codesearch query over the length cap is refused');
+  assert.strictEqual(fs.existsSync(path.join(failSpool, 'in', 'codesearch')), false,
+    'a refused codesearch query writes no spool request');
+
+  const csBadJson = await fetch(failSrv.url + '/api/codesearch', {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: '{not json',
+  });
+  assert.strictEqual(csBadJson.status, 400, 'a malformed JSON body is refused rather than crashing the route');
+
+  for (const route of ['/api/lifecycle', '/api/prd/edit', '/api/mutables/edit', '/api/codesearch']) {
+    const wrongMethod = await fetch(failSrv.url + route);
+    assert.strictEqual(wrongMethod.status, 405, `${route} is POST-only`);
+  }
+
   if (prevFailSpool === undefined) delete process.env.GM_SPOOL_DIRS; else process.env.GM_SPOOL_DIRS = prevFailSpool;
   await failSrv.close();
   fs.rmSync(failRoot, { recursive: true, force: true });

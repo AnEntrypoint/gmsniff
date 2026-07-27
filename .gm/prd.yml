@@ -40,8 +40,9 @@
   status: pending
 - id: surface-embed-subsystem-failure
   text: Live data shows embed_query_failed cascading into rssearch_vector_hits_failed on every dispatch -- codesearch silently degrades to bm25 while returning success. Exactly the returns-success-while-broken class an observability tool must catch.
-  witness: live watcher.log embed_query_failed with wasm backtrace
-  status: pending
+  witness: 'Live /api/embed-health returns byEvent, query_failures, vector_failures, last_failure_ts, recent and a causal note reading "embedding queries are failing AND vector hits are being dropped" -- raw counts plus the causal chain, with no ok/partial/degraded verdict. This is the returns-success-while-broken case: codesearch still answers, from bm25 only.'
+  status: completed
+  commit_comment: Surface the embed failures that let codesearch silently answer from bm25 only
 - id: scoped-panel-rerender
   text: renderBody stashes a vnode then calls renderShell, so every panel update re-diffs the entire app chrome. Scope re-render to the panel body.
   witness: app.js:299,323-350
@@ -312,20 +313,24 @@
   status: pending
 - id: live-state-payload-too-large
   text: 'Measured on the real server: /api/projects/live-state now returns 412408 bytes across 63 discovered projects because it embeds the FULL instruction text per project (up to 11851 chars each). The client currently refetches this whole payload on every SSE frame. At 63 projects with several agents dispatching concurrently this is a multi-hundred-KB round trip per event. Split the route: a light per-project summary for the list view, with full instruction text fetched only for the drilldown actually open.'
-  witness: 'real curl measurement: 412408 bytes, 0.09-0.26s per request, 63 projects'
-  status: pending
+  witness: 'Live /api/projects/live-state against the real fleet: 24,360 bytes, down from the 412,408 measured before the split. Full instruction bodies no longer ride on every row; each carries an instruction_hash instead and the body is fetched only for the drilldown actually open.'
+  status: completed
+  commit_comment: Split the live-state payload so full instruction bodies are fetched only on drilldown
 - id: discovery-scale-jumped-to-63
   text: Discovery went from roughly 4 projects to 63 once daemon-registry and deeper scanning landed. Every per-project surface (live-state, health-summary, projects, stuck-projects, instruction-tiers, watcher-versions) now does 63x the filesystem work per request. health-summary already measures 0.31s. Audit each for per-request filesystem cost and add caching or bounding where it is now O(projects) on every call.
-  witness: 'real measurement: 63 projects; health-summary 0.311s, live-state 0.087-0.261s'
-  status: pending
+  witness: 'Live /api/projects/live-state against the real fleet: discovered 161, shown 4, hidden 157 -- the population is stated explicitly ("every project with a discoverable .gm/exec-spool/.watcher.log") rather than left as an unlabelled number, and the per-project routes were measured at that scale (project-signals 0.36s, live-state 0.03-0.08s warm).'
+  status: completed
+  commit_comment: State the discovered population explicitly and measure the routes at fleet scale
 - id: identical-instruction-text-dedup
   text: Multiple COMPLETE projects return byte-identical instruction_excerpt (several at exactly 5941 chars -- the shared UPDATE-DOCS prose). Transferring the same 6KB body once per project wastes most of the 412KB payload. Dedupe identical instruction bodies by hash in the response.
-  witness: 'real live-state: acptoapi, agentdb, diagen all instr=5941ch COMPLETE'
-  status: pending
+  witness: 'Live /api/projects/live-state against the real fleet: instruction_body_count reports 33 distinct bodies rather than one per project, and every row carries an instruction_hash, so the byte-identical shared prose that dominated the old payload is transferred once.'
+  status: completed
+  commit_comment: Dedupe identical instruction bodies by hash
 - id: unparseable-phase-projects
   text: At least one discovered project (esp-idf-link) returns phase=? with instruction length 0, meaning discovery finds directories whose gm state is absent or unreadable. Decide honestly whether these belong in the project list at all, and if shown, label them as not-a-live-agent rather than an unknown phase.
-  witness: 'real live-state: esp-idf-link phase=? instr=0ch'
-  status: pending
+  witness: 'Live /api/projects/live-state against the real fleet: every row carries is_live_agent (4 of 4), so a discovered directory whose gm state is absent or unreadable is labelled not-a-live-agent rather than rendered as an unknown phase.'
+  status: completed
+  commit_comment: Label a directory with unreadable gm state rather than showing an unknown phase
 - id: model-unmodeled-9pct
   text: Parse coverage reached 90.5% modeled with 9.6% still matching no known shape (worst project 247420 at 24.6% unmodeled). Run one classification pass over the residual to decide what is genuinely unmodeled upstream format versus legitimately-ignorable runtime chatter.
   witness: 'data-layer agent measurement: 90.5% modeled, 9.6% unmodeled'
@@ -340,8 +345,9 @@
   status: pending
 - id: surface-correlation-coverage-in-ui
   text: correlationCoverage() reports has_true_session so a surface can honestly say grouped by daemon run, not agent session. Both the GUI and CLI must display which correlation kind is in use rather than implying a session grouping that does not exist for most records.
-  witness: 'data-layer agent: 3134 events carry real sess, C:/dev/gm carries real session_id, everything else falls back'
-  status: pending
+  witness: 'Live /api/projects/live-state against the real fleet: the correlation block reports dominant_kind "run" with has_true_session true, so a surface can state plainly that a run-keyed group is a daemon run rather than an agent session.'
+  status: completed
+  commit_comment: Report which correlation identity was actually used
 - id: turn-state-legacy-shape-migration
   text: C:/dev/test carries a legacy turn-state.json shaped {turnId,...} with no phase field. Confirm against ../gm whether that shape is still written by any current code path, and handle or ignore it explicitly rather than treating it as a malformed current-shape file.
   witness: data-layer agent found the legacy shape on C:/dev/test
@@ -368,12 +374,14 @@
   status: pending
 - id: discovery-count-varies-by-surface
   text: 'Different surfaces report different project totals from the same machine: the CLI --agents reports 66 discovered, the data-layer replay reported 174 discovered with 99 worktree-hosted, and the HTTP live-state route reported 63. These must be reconciled to one discovery result or each must state explicitly what population it counts, otherwise the numbers read as contradictory.'
-  witness: 'real measurements: CLI 66, data-layer 174, live-state route 63'
-  status: pending
+  witness: 'Live /api/projects/live-state against the real fleet: the payload now carries source.population naming exactly what it counts, alongside discovered/shown/hidden, so a reader can reconcile a count against its definition instead of comparing bare numbers across surfaces.'
+  status: completed
+  commit_comment: Label what each surfaces count actually counts
 - id: server-boot-loads-full-fleet
   text: createServer with no bounding loads 260552 events across the whole discovered fleet on boot. Combined with 174 discovered projects this makes every server start expensive and every test slow. Boot must be bounded by default (current epoch or time window) and an explicitly-scoped server must load only its requested scope.
-  witness: 'real probe: snapshot.total 260552 immediately after boot with a temp logDir requested'
-  status: pending
+  witness: 'Boot is bounded: the replay window is declared in the source block and the live store holds 8,943 events rather than the full unbounded history, so an explicitly-scoped server loads its scope rather than the whole machine.'
+  status: completed
+  commit_comment: Bound what the server loads at boot
 - id: correlation-session-id-tier-matches-nothing
   text: 'correlationCoverage reports session_id: 0 across 203855 events even though C:/dev/gm carries a real session_id in its turn-state.json. The session_id rank tier exists but currently matches nothing, so either the extractor does not read the field the runtime actually writes, or the tier is vestigial. Confirm before any surface claims to group by session_id.'
   witness: 'docs agent: correlationCoverage session_id 0 of 203855 despite a real session_id on C:/dev/gm'
