@@ -806,3 +806,15 @@
   text: GM_SPOOL_DIRS ADDS a discovery root rather than restricting discovery -- C:/dev and process.cwd() are always scanned (src/index.js:309). Existing tests pass only because each asserts against its own projects rows; a future test asserting a fleet-wide total would be machine-dependent and fail on another machine. Document the semantics, and keep fixture assertions scoped to their own cwd.
   witness: server agent traced it to src/index.js:309 while diagnosing a fixture count
   status: pending
+- id: preserve-gm-own-vocabulary-in-sweep
+  text: The sweep must NOT strip gm own documented vocabulary. cli.js DEVIATION_META severities map each deviation kind to the recovery verb gm itself names (stuck-loop-escalation -> wfgy-method, push-dirty -> git_status then git_commit); that is reporting gm facts, not gmsniff inventing a judgement. Same for the severity field gm writes into its own prd.yml rows. Distinguish reporting-anothers-classification from minting-our-own.
+  witness: cli.js:687-699 severities carry gm documented recovery verbs per kind
+  status: pending
+- id: health-banner-scores-and-drops-rows
+  text: gui/app.js healthRowSeverity counts breaches against four hardcoded thresholds (HEALTH_DEV_RATE_AMBER_PER_MIN 1, HEALTH_WATCHER_DEAD_AFTER_SEC 300, HEALTH_FULLY_STALE_AFTER_SEC 300, HEALTH_BREACHES_MEANING_RED 2) and collapses them to red/amber/ok, then line 262 FILTERS OUT every row scoring ok. An agent one second under a cutoff renders identically to a healthy one, and a condition the thresholds do not anticipate is not merely unranked but invisible. Replace the verdict with the measurements themselves plus their ages, and stop dropping rows.
+  witness: gui/app.js:205-219 breach counting; gui/app.js:262 filter(r => r.severity !== ok)
+  status: pending
+- id: sweep-all-hardcoded-error-checking
+  text: 'Run a whole-tree sweep for the same pattern the user named: any code deciding something is an error and then acting on that decision -- invented severity scores, thresholds that omit data from a result set, ok/degraded/critical labels standing in for the numbers behind them, and boolean is-broken predicates. Replace each with the measurement and its age. A threshold that affects only presentation may stay ONLY if the count hidden is stated, the criterion named, and the underlying numbers remain reachable.'
+  witness: 'user directive: no hard coded error checking anywhere, just report information as informatively as possible'
+  status: pending
