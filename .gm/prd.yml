@@ -174,16 +174,6 @@
   text: Two places re-check typeof e.ts === number, unreachable after normalizeTs converts at parse time, while four others do plain string comparison -- dual-path dead code.
   witness: server.js:1004,1119 vs :527,608,743,1045
   status: pending
-- id: changelog-entry
-  text: One CHANGELOG entry per commit landed this session with a one-sentence why.
-  witness: CHANGELOG carries 20 entries for this session, each a commit-subject line plus a one-sentence why.
-  status: completed
-  commit_comment: Record this sessions work in the changelog
-- id: update-readme
-  text: README documents the current public surface including the gm-log default; refresh to the watcher.log-primary model.
-  witness: README now opens "A live manager for running gm agents -- see every agent on the machine, what phase it is in, what instruction it was actually served, and what it has produced", leading with the primary use case rather than the dead gm-log default it previously documented.
-  status: completed
-  commit_comment: Rewrite the README around the live-manager use case
 - id: dedupe-flag-defs
   text: Four flags are registered twice, once as an alias and once as their own FLAG_DEFS row.
   witness: cli.js:25-28,45-46,51-52,66-67
@@ -368,25 +358,10 @@
   text: Upstream SessionCard gained an optional lifecycle strip driven by session.phases/phase/phasesSeen/phaseGaps via PhaseWalk, with phasesSeen as an authoritative VISITED SET rather than index math -- correctly modeling gm re-plan edges where EXECUTE->PLAN must not render as a regression. gmsniff must feed phasesSeen from real transition history rather than a current-phase index.
   witness: 'design-system agent proved it: a re-planned session shows 2 reached where index math gives 1'
   status: pending
-- id: document-new-architecture-in-readme
-  text: 'README is 82 lines describing the old gm-log-primary model. It must describe the real current architecture: watcher.log as the live source, the agentplug shared daemon, per-project state files, and the live-agent manager as the primary use case.'
-  witness: 'The README describes the current architecture: watcher.log as the live source, the agentplug shared daemon, the per-project state files, and the two distinct clocks (IN-PHASE from turn-state, LAST-EVT from the watcher log).'
-  status: completed
-  commit_comment: Document the current architecture in the README
-- id: node-engine-floor-check
-  text: engines says node >=18 but the code uses modern syntax and the test run here is on Node 24. Verify the floor is real by exercising the actual entry points, or raise it honestly rather than claiming support that is untested.
-  witness: engines declares node >=18 and the floor is held by source review rather than execution -- no Node 18 runtime exists in this environment (local is v24). AGENTS.md states this explicitly as an asserted contract rather than a tested one, and lists the newer APIs that must not be used.
-  status: completed
-  commit_comment: State the Node engine floor honestly as asserted, not tested
 - id: changelog-is-nearly-empty
   text: CHANGELOG.md is 9 lines despite the documented convention of one entry per commit landed. The history AGENTS.md deliberately refuses to carry is not actually being carried anywhere. Restore it for this sessions commits and note the gap.
   witness: wc -l CHANGELOG.md = 9 vs one-entry-per-commit convention
   status: pending
-- id: agents-md-rewrite-for-new-model
-  text: AGENTS.md still documents gm-log defaults, the removed subsystem list, the SUBSYSTEMS seed rationale, and the panel/nav tiering that this rework changes. Every rule in it is meant to be present-tense truth about the code as it is now, so it needs a real rewrite rather than an append.
-  witness: AGENTS.md now carries 16 present-tense invariant sections covering spool-primary/archive-opt-in, the three meanings of liveness, ranked correlation, the FSM re-plan edges, zero dependencies, the offline GUI, comment discipline, report-measurements-never-a-verdict, and the counting/parsing/comparator traps -- each stating the rule and the concrete failure it prevents.
-  status: completed
-  commit_comment: Rewrite AGENTS.md as present-tense invariants for the current model
 - id: publish-workflow-guards
   text: Pushing to main auto-bumps the patch version and publishes to npm. With this much changing at once, confirm the workflow still passes and that a broken build cannot publish -- ideally the single root test must gate the publish.
   witness: .github/workflows/publish-npm.yml auto-bump-and-publish on push to main
