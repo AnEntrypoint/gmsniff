@@ -30,6 +30,8 @@ A comment is admissible only when it states something the code structurally **ca
 
 Any comment pass must be provably behavior-preserving: run `node test.js` and re-witness the affected surface before and after. A rename that misses one call site is a silent break.
 
+**A comment pass is also a dead-code audit.** Prose describing what a function is *for* makes an uncalled function look load-bearing. Removing it exposes the truth: seven dead surfaces were found this way here, the sharpest being a `loadState` helper whose comment called itself "the through-line of this rework" and claimed every panel built one, while it had zero call sites. The prose asserted an architecture the code did not have.
+
 Three verification traps, each of which produced a false pass in this repo:
 
 - **`node --check` cannot catch a partial rename.** It parses without resolving identifiers, so a name left undeclared by a half-finished rename reads as clean and fails only at runtime. Verify a rename by *executing* the module.

@@ -806,3 +806,7 @@
   text: GM_SPOOL_DIRS ADDS a discovery root rather than restricting discovery -- C:/dev and process.cwd() are always scanned (src/index.js:309). Existing tests pass only because each asserts against its own projects rows; a future test asserting a fleet-wide total would be machine-dependent and fail on another machine. Document the semantics, and keep fixture assertions scoped to their own cwd.
   witness: server agent traced it to src/index.js:309 while diagnosing a fixture count
   status: pending
+- id: comments-conceal-dead-code
+  text: 'A comment pass is also a dead-code audit, and the two reinforce each other: prose describing what a function is for makes an uncalled function look load-bearing. Four dead surfaces were found this way -- gui/shared.js loadState and capabilitiesLoaded, gui/live-agents.js resetLiveState, and a never-read _openDispatch field in server.js -- plus three functions in panels.js. loadState is the sharpest case: its comment called itself the through-line of this rework and asserted every panel builds one, while zero call sites existed. The prose described an architecture the code did not have, and only removing the prose exposed that.'
+  witness: 'exhaustive grep across js/mjs/html/md excluding node_modules and gui/ds: zero references to any of the three, verified again in a real browser as typeof undefined'
+  status: pending
