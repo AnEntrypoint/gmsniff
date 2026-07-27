@@ -18,16 +18,6 @@
   text: Pushing to main auto-bumps the patch version and publishes to npm. With this much changing at once, confirm the workflow still passes and that a broken build cannot publish -- ideally the single root test must gate the publish.
   witness: .github/workflows/publish-npm.yml auto-bump-and-publish on push to main
   status: pending
-- id: skill-lags-phase-in-turn-state
-  text: Real drilldown on C:/dev/casey shows phase PLAN with skill update-docs -- update-docs is the COMPLETE-phase skill, so last_skill lags the current phase rather than describing it. turn-state.json last_skill records the skill that ran most recently, NOT the skill for the current phase. Label it accordingly in every surface (last skill, not current skill) or derive the current-phase skill from the FSM graph instead, otherwise it reads as a contradiction.
-  witness: 'Settled by real measurement across four live projects rather than assumed to be lag: casey COMPLETE/update-docs, gmsniff EXECUTE/gm-emit, spoint VERIFY/gm-consolidate, aloop EXECUTE/gm-emit. The field turn-state.json calls last_skill consistently holds the skill for the phase the agent moves to NEXT, not the one it is in -- so it never lagged, it was mislabelled. The CLI rendered it as "(skill: gm-emit)" beside "phase: EXECUTE", reading as though the agent were running gm-emit at that moment; it now reads "(next skill: gm-emit)". Verified by real run.'
-  status: completed
-  commit_comment: Label turn-states last_skill as the NEXT phases skill, which is what it holds
-- id: phase-held-far-beyond-normal
-  text: Real data shows an agent holding PLAN for 5h22m while its instruction was re-served only 3m48s ago and its last event was 1m32s ago -- active but not advancing. A live manager should flag a phase held far beyond its typical duration as an attention signal, since it is invisible when only liveness is shown. This is a concrete input to agent-attention-ranking.
-  witness: 'Already covered correctly and deliberately without a threshold. Elapsed-in-phase is always displayed as its own IN-PHASE column (witnessed: gmsniff EXECUTE for 4h22m), so a long hold is visible as a measurement rather than hidden until it crosses an invented cutoff, and attentionScore contributes an idle-mid-chain reason by name. Adding a too-long threshold would have violated the report-measurements-never-a-verdict invariant.'
-  status: completed
-  commit_comment: Show elapsed-in-phase as a measurement rather than gating it on a threshold
 - id: gui-has-no-test-coverage-asymmetry
   text: 'test.js pins /api/project-signals against ever attaching a severity, but NO test covers the GUI side -- and that asymmetry is exactly how a ten-term attention score and a row-dropping filter survived client-side while the server was locked down. The server is guarded by assertions; the client is guarded only by whoever happens to look. Closing it needs a DOM, which the zero-dependency no-test-framework constraint makes non-trivial, so the design question is real: either assert against the served module exports without a DOM, or accept that the browser witness is the only client guard and make that explicit rather than implicit.'
   witness: server agent added the project-signals no-severity assertion; the same class of defect then appeared unguarded in gui/app.js and gui/live-agents.js
