@@ -48,6 +48,8 @@ function asKeyValueLine(obj, maxLen = 200) {
   return truncateWithEllipsis(parts.join('  '), maxLen);
 }
 
+const TOP_ROWS_SHOWN = 15;
+
 export async function Dashboard({ onNav, devTotal, health } = {}) {
   const snap = await api('/api/snapshot');
   if (snap.error) return Empty('Failed to load snapshot: ' + snap.error);
@@ -101,9 +103,14 @@ export async function Dashboard({ onNav, devTotal, health } = {}) {
     const pct = snap.total ? Math.round(n / snap.total * 100) : 0;
     return BarRow({ label: s, value: String(n), pct, tone: colorFor(s) });
   });
-  const evSorted = Object.entries(snap.byEvent || {}).sort((a, b) => b[1] - a[1]).slice(0, 15);
+  const evRanked = Object.entries(snap.byEvent || {}).sort((a, b) => b[1] - a[1]);
+  const evSorted = evRanked.slice(0, TOP_ROWS_SHOWN);
+  const evOmitted = evRanked.length - evSorted.length;
   const evRows = evSorted.length
-    ? evSorted.map(([ev, n]) => BarRow({ label: ev || '?', value: String(n), pct: snap.total ? Math.round(n / snap.total * 100) : 0 }))
+    ? [
+      ...evSorted.map(([ev, n]) => BarRow({ label: ev || '?', value: String(n), pct: snap.total ? Math.round(n / snap.total * 100) : 0 })),
+      ...(evOmitted > 0 ? [h('div', { class: 'gm-muted-11' }, `+${evOmitted} more event type${evOmitted === 1 ? '' : 's'} not shown (list caps at ${TOP_ROWS_SHOWN})`)] : []),
+    ]
     : [Empty('No events observed yet.')];
   const exportBtn = Btn({
     children: 'Export',
@@ -370,7 +377,9 @@ export async function Deviations(setBody) {
   const bySessionEntries = Object.entries(r.bySession || {});
   const bySessionFiltered = q ? bySessionEntries.filter(([s]) => s.toLowerCase().includes(q)) : bySessionEntries;
   const kindRows = Object.entries(r.byKind || {}).sort((a, b) => b[1] - a[1]);
-  const sessRows = bySessionFiltered.sort((a, b) => b[1] - a[1]).slice(0, 15);
+  const bySessionRanked = bySessionFiltered.sort((a, b) => b[1] - a[1]);
+  const sessRows = bySessionRanked.slice(0, TOP_ROWS_SHOWN);
+  const sessRowsOmitted = bySessionRanked.length - sessRows.length;
   const toolbar = Toolbar(
     h('input', {
       placeholder: 'filter by session id...', value: deviationsFilterState.sessQuery,
@@ -384,7 +393,8 @@ export async function Deviations(setBody) {
       h('div', { class: 'ds-panel' }, h('h2', {}, 'By Deviation Kind'),
         ...(kindRows.length ? kindRows.map(([k, n]) => BarRow({ label: k, value: String(n), tone: 'var(--flame, #f85149)' })) : [Empty('No deviations recorded yet.')])),
       h('div', { class: 'ds-panel' }, h('h2', {}, 'By Session'),
-        ...(sessRows.length ? sessRows.map(([s, n]) => BarRow({ label: s.slice(0, 60), value: String(n) })) : [Empty(q ? 'No sessions match filter.' : '-')]))),
+        ...(sessRows.length ? sessRows.map(([s, n]) => BarRow({ label: s.slice(0, 60), value: String(n) })) : [Empty(q ? 'No sessions match filter.' : '-')]),
+        ...(sessRowsOmitted > 0 ? [h('div', { class: 'gm-muted-11' }, `+${sessRowsOmitted} more session${sessRowsOmitted === 1 ? '' : 's'} not shown (list caps at ${TOP_ROWS_SHOWN})`)] : []))),
     h('div', { class: 'ds-panel' }, h('h2', {}, `Recent Deviations (${recent.length}${q ? ` of ${r.total}` : ` / ${r.total}`})`),
       ...(recent.length ? recent.map((e, i) => DevRow({
         ts: fmtTs(e.ts), event: e.event, sess: (e.sess || '-').slice(0, 20), operation: e.operation,
@@ -701,10 +711,19 @@ export async function LifecycleControl(setBody) {
   if (unscoped) return unscoped;
   const [prd, mutables] = await Promise.all([api('/api/prd', { scoped: true }), api('/api/mutables', { scoped: true })]);
   if (prd.error || mutables.error) return Empty('Failed to load lifecycle state: ' + (prd.error || mutables.error));
-  const pendingInReturnedPage = (prd.rows || []).filter(r => r.status !== 'resolved').length;
-  const unknownInReturnedPage = (mutables.rows || []).filter(r => r.status === 'unknown').length;
+  // /api/prd and /api/mutables page their rows, so counting the returned page reports a number
+  // capped at the page size: on a real 820-row PRD the page held 250 rows of which 0 were
+  // pending, so this panel displayed "0 PRD pending" for a project with 314 actually pending.
+  // /api/projects computes both counts over the whole file and is the only honest source here.
+  const project = (state.projects || []).find(r => r.cwd === state.cwd);
+  const prdPending = project ? project.prd_pending : null;
+  const mutUnknown = project ? project.mut_unknown : null;
+  const countsUnavailable = prdPending == null;
   return h('div', { class: 'ds-panel' }, h('h2', {}, 'Lifecycle Control'),
-    StatsGrid({ items: [{ val: pendingInReturnedPage, lbl: 'PRD pending' }, { val: unknownInReturnedPage, lbl: 'mutables unknown', cls: unknownInReturnedPage ? 'err-rate' : '' }] }),
+    StatsGrid({ items: [
+      { val: countsUnavailable ? '--' : prdPending, lbl: countsUnavailable ? 'PRD pending (not reported for this project)' : `PRD pending of ${project.prd_total}` },
+      { val: countsUnavailable ? '--' : mutUnknown, lbl: 'mutables unknown', cls: mutUnknown ? 'err-rate' : '' },
+    ] }),
     h('div', { class: 'gm-mt-12' }, Toolbar(
       Btn({ children: 'Transition', onClick: () => lifecycleAct('transition', {}) }),
       Btn({ children: 'Instruction', onClick: () => lifecycleAct('instruction', {}) }),
