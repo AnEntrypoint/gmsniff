@@ -78,11 +78,6 @@
   text: panels.js:1063-1067 hardcodes 27 verbs while the server already publishes the authoritative list at /api/capabilities. The client must consume it.
   witness: panels.js:1063 vs server.js:1255
   status: pending
-- id: incremental-output-append
-  text: Every SSE frame triggers a full renderBody, a full live-state refetch and a full shell re-diff. Output does not stream. Append incrementally instead of re-polling.
-  witness: 'The server emitted an agent.output frame that NO client listener received, so the whole incremental path was unreachable from the browser and the panel fell back to refetching the full live-state payload on every raw event. Added appendOutputBatch to gui/live-agents.js and an agent.output listener in gui/app.js. Real browser witness (page.evaluate against the served modules at http://127.0.0.1:8805/#panel=agents): exportPresent true, first append returned the agent key "C:devspoint|c:/dev/spoint#2026-07-27T14:59:08.111Z", and an identical replay of the same batch returned null, so dedupeWorked true -- a Last-Event-ID replay that re-delivers already-appended frames cannot double-append. Nodes in the frame already carry the process-tree shape seedFeed uses, so they are pushed as-is rather than re-mapped through normalizeStreamEvent, which maps RAW gm-log events and would drop every field it does not know.'
-  status: completed
-  commit_comment: Wire the agent.output SSE frame to the client feed so output appends instead of refetching
 - id: debounce-sse-rerender
   text: No debounce or coalescing on SSE-driven re-renders; several concurrently-active agents produce a request storm.
   witness: app.js:433-443
