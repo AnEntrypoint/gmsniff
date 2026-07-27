@@ -237,7 +237,12 @@ function healthReason(r) {
   if (r.staleSeconds == null) bits.push('no events ever');
   else if (r.staleSeconds >= HEALTH_STALE_FULL_SEC) bits.push(`silent ${Math.round(r.staleSeconds / 60)}m`);
   if ((r.deviationRate || 0) >= HEALTH_DEV_RATE_AMBER_PER_MIN) bits.push(`${r.deviationRate.toFixed(1)} deviations/min`);
-  return bits.join(', ') || 'degraded';
+  // Never fall back to a bare verdict like "degraded": a word with no measurement behind it is
+  // the exact thing this banner was rebuilt to stop doing. If nothing crossed a display
+  // threshold, say so and show the numbers -- the reader decides whether they matter.
+  if (bits.length) return bits.join(', ');
+  const stale = r.staleSeconds == null ? 'no events' : `silent ${Math.round(r.staleSeconds / 60)}m`;
+  return `${stale}, ${(r.deviationRate || 0).toFixed(1)} deviations/min`;
 }
 
 // A stopped watcher on a project that FINISHED or was abandoned months ago is

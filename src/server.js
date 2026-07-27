@@ -127,17 +127,20 @@ function embedDegradation(events, cwd = null) {
   }
   const queryFailures = (byEvent.embed_query_failed || 0) + (byEvent.embed_init_fail || 0);
   const vectorFailures = (byEvent.rssearch_vector_hits_failed || 0) + (byEvent.rssearch_vectors_write_failed || 0);
-  const degraded = queryFailures > 0 && vectorFailures > 0;
+  // Counts and the causal note, not a verdict. A 'severity: ok|partial|silent-degradation' label
+  // here would be gmsniff deciding on the reader's behalf where the line between fine and broken
+  // sits; the counts and their timestamps let the reader see that for themselves, and a single
+  // failure stays visible instead of being rounded down to "ok".
   return {
-    degraded,
-    severity: degraded ? 'silent-degradation' : (queryFailures || vectorFailures ? 'partial' : 'ok'),
     byEvent,
     query_failures: queryFailures,
     vector_failures: vectorFailures,
     last_failure_ts: newest ? new Date(newest).toISOString() : null,
     recent: recent.slice(-20).reverse(),
-    explanation: degraded
-      ? 'embedding queries are failing and vector hits are being dropped; codesearch still returns success but is answering from bm25 only — semantic results are silently missing'
+    // Names the causal chain these two counts imply when both are non-zero. This is an
+    // observation about how the subsystem fails, not a judgement about whether it is acceptable.
+    note: queryFailures > 0 && vectorFailures > 0
+      ? 'embedding queries are failing AND vector hits are being dropped: codesearch still returns success but is answering from bm25 only, so semantic results are silently missing'
       : null,
   };
 }
@@ -1834,99 +1837,49 @@ function healthSummary(store) {
 // -- Stuck-project detection (formal spec Module 8 extension) --
 // Scans all discovered projects and flags: stale phase (>N min unchanged), dead watcher,
 // growing PRD backlog (pending > threshold), and high deviation rate. Returns a ranked list
-// with a composite severity score so an operator can triage at a glance.
-const STUCK_PHASE_MINUTES = parseInt(process.env.GM_STUCK_PHASE_MINUTES, 10) || 15;
-const STUCK_PRD_PENDING_THRESHOLD = parseInt(process.env.GM_STUCK_PRD_THRESHOLD, 10) || 10;
-const STUCK_DEVIATION_RATE_THRESHOLD = parseFloat(process.env.GM_STUCK_DEVIATION_RATE) || 5.0;
-
-function stuckProjects(store) {
+// Reports the measurements an operator triages on, for EVERY project, with no verdict attached.
+//
+// This deliberately carries no thresholds, no severity weights and no filtering. The previous
+// shape decided that 15min was "stale", 10 rows a "backlog" and 5 deviations/min "high", summed
+// invented weights into a severity score, and then omitted every project that scored zero -- so
+// an issue the thresholds did not anticipate was not merely unranked, it was invisible, and a
+// project one minute under a cutoff looked identical to a healthy one. Ranking is the reader's
+// job (or the client's, which can sort on any field here); gmsniff's job is to report what it
+// observed and how old each observation is, so the numbers themselves make the issue findable.
+function projectSignals(store) {
   const projects = discoverProjectsCached(store.events);
   const now = Date.now();
-  const health = healthSummary(store);
-  const healthByCwd = new Map(health.map(h => [h.cwd, h]));
-  const out = [];
-  for (const proj of projects) {
-    const issues = [];
-    let severity = 0;
+  const healthByCwd = new Map(healthSummary(store).map(h => [h.cwd, h]));
+  return projects.map(proj => {
     const hr = healthByCwd.get(proj.cwd);
     const phaseState = readLivePhaseState(proj.cwd);
-
-    // Abandoned agent (severity 3). This was previously `!proj.alive`, driven by the shared
-    // daemon pid -- so it fired for every project on the machine at once or for none, which made
-    // the highest-weighted signal in this ranking pure noise. Now driven by this project's own
-    // dispatch age, and only 'abandoned' (not merely 'idle') counts: an agent idle between turns
-    // is healthy.
     const liveness = readProjectLiveness(proj.cwd);
-    if (liveness.activity === 'abandoned' && phaseState.present && phaseState.phase !== 'COMPLETE') {
-      issues.push({
-        kind: 'abandoned-agent',
-        detail: `no dispatch for ${Math.round((liveness.dispatch_age_ms || 0) / 3600000)}h while phase is ${phaseState.phase}`,
-        activity: liveness.activity,
-        dispatchAgeMs: liveness.dispatch_age_ms,
-      });
-      severity += 3;
-    }
-
-    // Gate blockers: an agent whose only outgoing edges are all gate-blocked cannot advance.
-    const gateState = readFsmGates(proj.cwd, { prd_pending: proj.prd_pending ?? null, mut_unknown: proj.mut_unknown ?? null, phase: phaseState.phase });
-    if (gateState.blocked) {
-      issues.push({
-        kind: 'gate-blocked',
-        detail: `every outgoing edge from ${gateState.phase} is gate-blocked`,
-        blocked_edges: gateState.blocked_edges,
-      });
-      severity += 2;
-    }
-
-    // Stale phase: phase hasn't changed in > STUCK_PHASE_MINUTES (severity 2)
-    if (phaseState.present && phaseState.updated_ts && phaseState.phase) {
-      const phaseAge = now - phaseState.updated_ts;
-      if (phaseAge > STUCK_PHASE_MINUTES * 60_000) {
-        issues.push({
-          kind: 'stale-phase',
-          detail: `phase ${phaseState.phase} unchanged for ${Math.round(phaseAge / 60_000)}min`,
-          phase: phaseState.phase,
-          ageMinutes: Math.round(phaseAge / 60_000),
-        });
-        severity += 2;
-      }
-    }
-
-    // Growing PRD backlog (severity 2)
-    if (proj.prd_pending > STUCK_PRD_PENDING_THRESHOLD) {
-      issues.push({
-        kind: 'prd-backlog',
-        detail: `${proj.prd_pending} pending PRD rows (threshold: ${STUCK_PRD_PENDING_THRESHOLD})`,
-        pending: proj.prd_pending,
-        total: proj.prd_total,
-      });
-      severity += 2;
-    }
-
-    // High deviation rate (severity 1)
-    if (hr && hr.deviationRate > STUCK_DEVIATION_RATE_THRESHOLD) {
-      issues.push({
-        kind: 'high-deviation-rate',
-        detail: `${hr.deviationRate.toFixed(1)} deviations/min`,
-        rate: hr.deviationRate,
-      });
-      severity += 1;
-    }
-
-    // Stale heartbeat: no events in > HEALTH_STALE_MS (severity 1)
-    if (hr && hr.staleSeconds && hr.staleSeconds > HEALTH_STALE_MS / 1000) {
-      issues.push({
-        kind: 'stale-heartbeat',
-        detail: `no events for ${Math.round(hr.staleSeconds / 60)}min`,
-        staleSeconds: hr.staleSeconds,
-      });
-      severity += 1;
-    }
-
-    if (issues.length) out.push({ cwd: proj.cwd, name: path.basename(proj.cwd), severity, issues });
-  }
-  out.sort((a, b) => b.severity - a.severity);
-  return out;
+    const gateState = readFsmGates(proj.cwd, {
+      prd_pending: proj.prd_pending ?? null,
+      mut_unknown: proj.mut_unknown ?? null,
+      phase: phaseState.phase,
+    });
+    return {
+      cwd: proj.cwd,
+      name: path.basename(proj.cwd),
+      phase: phaseState.present ? phaseState.phase : null,
+      phase_present: phaseState.present,
+      phase_age_ms: phaseState.updated_ts ? now - phaseState.updated_ts : null,
+      activity: liveness.activity,
+      dispatch_age_ms: liveness.dispatch_age_ms ?? null,
+      last_activity_age_ms: liveness.last_activity_age_ms ?? null,
+      event_age_ms: hr && hr.staleSeconds != null ? Math.round(hr.staleSeconds * 1000) : null,
+      deviation_rate_per_min: hr ? hr.deviationRate : null,
+      prd_pending: proj.prd_pending ?? null,
+      prd_total: proj.prd_total ?? null,
+      mut_unknown: proj.mut_unknown ?? null,
+      mut_total: proj.mut_total ?? null,
+      queue_depth: proj.queue_depth ?? null,
+      gates_failing: gateState.failing || [],
+      gates_blocked_edges: gateState.blocked_edges || [],
+      every_edge_gate_blocked: !!gateState.blocked,
+    };
+  });
 }
 
 // -- Event throughput metrics (formal spec Module 8 extension) --
@@ -2094,14 +2047,14 @@ const API_ROUTES = [
   { path: '/api/source', method: 'GET', params: [], response: '{selected, archive_used, explicit_log_dir, log_dir, window_ms, window_start, total_in_window, sources, warnings, population, project_count, event_count, newest_event_ts, newest_age_ms, stale, warning, daemon}. Provenance + window bound for every aggregate number.' },
   { path: '/api/daemon', method: 'GET', params: [], response: '{present, pid, pid_alive, ts, active_projects, age_ms, stale, stale_threshold_ms, alert}. Machine-global shared-daemon heartbeat (~/.gm-tools/daemon-status.json); its ts is observed days stale while dispatches fire, hence the explicit alert.' },
   { path: '/api/gates', method: 'GET', params: ['cwd?'], response: 'with cwd: {cwd, gates: [{gate, state: "pass"|"fail"|"unknown", detail, ts}], blockers, phase, fsm_graph, outgoing_edges: [{from, to, gates, blocked, blockers}], blocked, open_edges, blocked_edges, last_gate_fired: {key, ts, age_ms, is_current_block:false}, gate_deviation_repeats, gate_deviation_repeat_count}. Without cwd: {projects: [...]}. All 8 FSM gates; "unknown" is an honest verdict, never collapsed into "fail". last_gate_fired is the last-EVER firing, not a current block — always carries age_ms.' },
-  { path: '/api/embed-health', method: 'GET', params: ['cwd?'], response: '{cwd, degraded, severity: "ok"|"partial"|"silent-degradation", byEvent, query_failures, vector_failures, last_failure_ts, recent, explanation}. Catches the returns-success-while-broken case where embed_query_failed cascades into rssearch_vector_hits_failed and codesearch silently answers from bm25 only.' },
+  { path: '/api/embed-health', method: 'GET', params: ['cwd?'], response: '{cwd, byEvent, query_failures, vector_failures, last_failure_ts, recent, note}. Raw failure counts, no verdict: when both counts are non-zero `note` names the causal chain (embed_query_failed cascading into rssearch_vector_hits_failed, so codesearch returns success while answering from bm25 only and silently missing semantic results).' },
   { path: '/api/fsm-graph', method: 'GET', params: ['cwd'], response: '{cwd, present, source, phases, states, edges: [{from, to, gates}], gatesByEdge}. The project\'s own .gm/instructions/fsm/graph.json where one exists (real override live on this machine); present:false means the default six-phase walk applies.' },
   { path: '/api/projects/live-state', method: 'GET', params: ['full=1 (opt into full instruction bodies)', 'limit (recent_events cap)'], response: '{projects: [...], mode: "list"|"full", instruction_body_count, instruction_bodies (full mode only: {hash: body} deduped), recent_limit, correlation, source, daemon}. Per project: {cwd, alive, activity: "dispatching"|"idle"|"abandoned"|"unknown", liveness, is_live_agent, phase, phase_authoritative (turn-state.json, AUTHORITATIVE), phase_served (next-step.md), phase_divergence, skill, in_phase_ms, last_event_ms, instruction_served_ms, instruction_key, instruction_heading, instruction_preview, instruction_truncated, instruction_length, instruction_hash, instruction_excerpt (FULL MODE ONLY), instruction_tier, instruction_source_file, instruction_source_repo, instruction_auto_provisioned, updated_ts, stale, present, unparseable, turn_state, turn_summary, last_prompt, last_dispatch_ts, last_instruction_ts, served_version, codeinsight_digest, gates, prd_pending, prd_total, mut_unknown, mut_total, recent_sess, recent_correlation_kind, recent_run, recent_events, recent_total, recent_limit, recent_truncated, recent_more_above}. DEFAULT IS THE LIGHT LIST PAYLOAD -- the full form is measured at 1.4MB/174 projects, so the multi-KB instruction body is served only via ?full=1 or /api/projects/instruction. `alive`/`activity` are PER-PROJECT (watcher.log mtime / turn-summary / turn-state / last-dispatch age), never the machine-wide shared daemon pid. recent_events node kinds: instruction {phase, prd_pending_count, mutables_pending_count} | transition {phase, from, replan} | dispatch {verb, ms} | prd-add {id, rescoped} | prd-resolve {id} | mutable-add {id} | mutable-resolve {id} | memorize {key} | deviation {deviation, detail, source, sub}; every node also carries {ts, cwd, run}. instruction_tier is one of "vendored" (a real per-project override -- content diverges from what ensureInstructionsBundle last auto-provisioned, or the file is fsm-vendor-sourced with no auto-sync ambiguity at all), "source-synced", or "default". instruction_auto_provisioned is true only when tier="default" but a file is nonetheless present on disk, byte-identical to gm-plugkit\'s own last-known-shipped hash for it (materialized by the bootstrap sync, not baked into the wasm guest, and NOT a real customization -- distinguish this from a genuine "no file at all" default when displaying).' },
   { path: '/api/spool-queue', method: 'GET', params: [], response: '{queues: [{cwd, name, totalPending, byVerb}], schemaVersion}' },
   { path: '/api/watcher-versions', method: 'GET', params: [], response: '{projects: [{cwd, name, alive, pid, runtime, shared, version}], schemaVersion}' },
   { path: '/api/instruction-tiers', method: 'GET', params: [], response: '{byTier: {vendored, source-synced, default, auto_provisioned}, details: [{cwd, name, tier, source_file, source_repo, auto_provisioned?}], schemaVersion}. auto_provisioned is a sub-count of default (real defaults materialized to disk by the bootstrap sync, not a fourth tier) -- byTier.default already includes every auto-provisioned project.' },
   { path: '/api/vendored-settings', method: 'GET', params: ['cwd?'], response: 'without cwd: {projects: [{cwd, name, vendored, has_custom_graph, file_count, entries}], schemaVersion} -- every project that has run the fsm-vendor verb at least once. with cwd: {cwd, vendored, has_custom_graph, file_count, entries: [{label, path, present, size, mtime_ts}], schemaVersion} for that one project. Covers the fsm-vendor verb\'s own real customization surface (phase-prose .md files, fsm/graph.json, fsm/predicates.md, hooks/*.js, browser-config.json, daemon-project-config.json) -- a WIDER, separately-tracked set from the gates/residual auto-sync instruction-tiers endpoint above, with no false-positive risk since every entry here is a real file whose presence always means a deliberate local customization surface exists (fsm-vendor is absence-gated, one-shot, never auto-overwritten).' },
-  { path: '/api/stuck-projects', method: 'GET', params: [], response: '[{cwd, name, severity, issues: [{kind, detail, ...}]}]' },
+  { path: '/api/project-signals', method: 'GET', params: [], response: '[{cwd, name, phase, phase_present, phase_age_ms, activity, dispatch_age_ms, last_activity_age_ms, event_age_ms, deviation_rate_per_min, prd_pending, prd_total, mut_unknown, mut_total, queue_depth, gates_failing, gates_blocked_edges, every_edge_gate_blocked}]. Raw per-project measurements for EVERY discovered project -- no thresholds, no severity score, nothing filtered out. Sort/threshold client-side; a verdict baked in here would hide whatever it did not anticipate. /api/stuck-projects is the former name and returns the same payload.' },
   { path: '/api/throughput', method: 'GET', params: [], response: '{total, rates: {window: {count, perMinute, bySub}}, schemaVersion}' },
   { path: '/api/memory-store-health', method: 'GET', params: [], response: '{projects: [{cwd, name, memoriesCount, memoriesSize, dbSize, totalSize}], schemaVersion}' },
   { path: '/api/codeinsight-age', method: 'GET', params: [], response: '{projects: [{cwd, name, mtimeMs, ageSeconds, summary}], schemaVersion}' },
@@ -2672,8 +2625,8 @@ export function createServer({ logDir, port = 0, host = '127.0.0.1' } = {}) {
       }
 
       // -- Stuck-project detection: which projects need operator attention? --
-      if (p === '/api/stuck-projects') {
-        return send(res, 200, stuckProjects(store), 'application/json', p);
+      if (p === '/api/stuck-projects' || p === '/api/project-signals') {
+        return send(res, 200, projectSignals(store), 'application/json', p);
       }
 
       // -- Event throughput: ingestion rate over configurable time windows --

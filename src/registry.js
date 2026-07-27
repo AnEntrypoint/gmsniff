@@ -94,22 +94,33 @@ function yamlScalar(s) {
   return `'${s.replace(/'/g, "''")}'`;
 }
 
-// Reads and parses a PRD or mutables yml file. Returns { text, mtimeMs, rows } or null if absent.
+// Reads and parses a PRD or mutables yml file. Returns { text, mtimeMs, bytes, rows } or null
+// if absent.
 export function readYamlFile(filePath) {
   try {
     const stat = fs.statSync(filePath);
     const text = fs.readFileSync(filePath, 'utf-8');
-    return { text, mtimeMs: stat.mtimeMs, rows: parseYamlRows(text) };
+    return { text, mtimeMs: stat.mtimeMs, bytes: stat.size, rows: parseYamlRows(text) };
   } catch (_) {
     return null;
   }
 }
 
+// ABSENT vs EMPTY. Both readPrd and readMutables returned {mtimeMs: null, rows: []} for a file
+// that does not exist AND {mtimeMs: <n>, rows: []} for one that exists but parses to no rows --
+// a distinction only recoverable by a caller re-stat'ing the file itself, which is exactly what
+// server.js's yamlRowsPayload had to do to keep a missing store from rendering as a satisfied
+// one (C:/dev/gm genuinely has no prd.yml, while an empty prd.yml is a real and different state:
+// a store that exists and is closed out). Every caller needs that distinction, so `present` is
+// reported here rather than reconstructed per-route. mtimeMs stays null when absent, so existing
+// consumers keep their current behavior.
 export function readPrd(cwd) {
   const f = readYamlFile(path.join(cwd, '.gm', 'prd.yml'));
-  if (!f) return { mtimeMs: null, rows: [] };
+  if (!f) return { present: false, mtimeMs: null, bytes: null, rows: [] };
   return {
+    present: true,
     mtimeMs: f.mtimeMs,
+    bytes: f.bytes,
     // text is by far the dominant/current free-text field (868 occurrences across
     // ../gm/.gm/prd.yml, 100% of the most recent 300 rows); note/subject are older
     // minority conventions; body is a superseded historical field (66 body-only rows,
@@ -134,9 +145,11 @@ export function readPrd(cwd) {
 
 export function readMutables(cwd) {
   const f = readYamlFile(path.join(cwd, '.gm', 'mutables.yml'));
-  if (!f) return { mtimeMs: null, rows: [] };
+  if (!f) return { present: false, mtimeMs: null, bytes: null, rows: [] };
   return {
+    present: true,
     mtimeMs: f.mtimeMs,
+    bytes: f.bytes,
     rows: f.rows.map(r => ({ id: r.id, status: r.status || 'unknown', claim: r.claim || '', witness_method: r.witness_method || undefined, witness_evidence: r.witness_evidence || undefined })),
   };
 }
@@ -559,10 +572,6 @@ export function statusPolicy() {
   return { prd_closed: prdClosedStatuses(), mutable_open: mutableOpenStatuses(), default_prd_status: 'pending', default_mutable_status: 'unknown' };
 }
 
-function statusRe(words) {
-  return new RegExp(`status:\\s*(${words.map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})\\b`, 'i');
-}
-
 export function readPrdMutablesState(cwd) {
   const prdPath = path.join(cwd, '.gm', 'prd.yml');
   const mutPath = path.join(cwd, '.gm', 'mutables.yml');
@@ -573,20 +582,31 @@ export function readPrdMutablesState(cwd) {
   const cached = cacheGet(_prdMutStateCache, cwd);
   if (cached && cached.prdMtime === prdMtime && cached.mutMtime === mutMtime && cached.policyKey === policyKey) return cached.value;
 
-  const closedRe = statusRe(policy.prd_closed);
-  const openRe = statusRe(policy.mutable_open);
-  const out = { prd_pending: 0, prd_total: 0, mut_unknown: 0, mut_total: 0 };
+  // Counted through parseYamlRows, the SAME parser readPrd/readMutables use, rather than a
+  // second `split(/^- id:/m)` implementation of "what is a row". Those two answers disagreed on
+  // real data: ../gm's live mutables.yml has 259 rows, of which only 218 open with `- id:` --
+  // the other 41 use a legacy boundary key (mutable_id 21, text 10, subject 4, name 2, prd_id 2,
+  // title 1, repo 1), exactly the cluster parseYamlRows's boundary rule exists to catch. The
+  // split path silently undercounted mut_total by 41 and could not see those rows' status at
+  // all; all 41 happen to be closed today, so mut_unknown was coincidentally right, and the next
+  // open row written in that shape would have been invisible to every pending count in the GUI.
+  // Status is read off the parsed field, not regex-tested against the row's raw text, so a
+  // status word appearing inside a claim/witness string can no longer be mistaken for the row's
+  // own status.
+  const closedSet = new Set(policy.prd_closed);
+  const openSet = new Set(policy.mutable_open);
+  const out = { prd_present: false, prd_pending: 0, prd_total: 0, mut_present: false, mut_unknown: 0, mut_total: 0 };
   try {
-    const prdText = fs.readFileSync(prdPath, 'utf-8');
-    const items = prdText.split(/^- id:/m).slice(1);
-    out.prd_total = items.length;
-    out.prd_pending = items.filter(i => !closedRe.test(i)).length;
+    const rows = parseYamlRows(fs.readFileSync(prdPath, 'utf-8'));
+    out.prd_present = true;
+    out.prd_total = rows.length;
+    out.prd_pending = rows.filter(r => !closedSet.has(String(r.status || 'pending').toLowerCase())).length;
   } catch (_) {}
   try {
-    const mutText = fs.readFileSync(mutPath, 'utf-8');
-    const items = mutText.split(/^- id:/m).slice(1);
-    out.mut_total = items.length;
-    out.mut_unknown = items.filter(i => openRe.test(i)).length;
+    const rows = parseYamlRows(fs.readFileSync(mutPath, 'utf-8'));
+    out.mut_present = true;
+    out.mut_total = rows.length;
+    out.mut_unknown = rows.filter(r => openSet.has(String(r.status || 'unknown').toLowerCase())).length;
   } catch (_) {}
   cacheSet(_prdMutStateCache, cwd, { prdMtime, mutMtime, policyKey, value: out });
   return out;

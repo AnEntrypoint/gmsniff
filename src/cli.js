@@ -641,7 +641,7 @@ const LIST_SESSIONS_MIN_EVENTS = 5;
 
 function listSessions(all, opts = {}) {
   const m = new Map();
-  // correlationKey ranks real identities sess -> session_id -> cwd#run -> cwd, so genuine
+  // correlationKey ranks real identities sess -> cwd#run -> cwd, so genuine
   // session data (3,134 real events in the corpus) is preserved where it exists and degrades
   // to the daemon-run boundary where it does not, instead of collapsing everything into one
   // '(no-session)' bucket. The coverage footer below states which fidelity was actually used.
@@ -692,7 +692,7 @@ function listSessions(all, opts = {}) {
   process.stderr.write(`# ${rows.length} groups shown of ${allRows.length} - phase walk: P E E V C - watcher: ALIVE/dead per project cwd\n`);
   if (hiddenTrivial) process.stderr.write(`# ${hiddenTrivial} trivial group(s) hidden (<${LIST_SESSIONS_MIN_EVENTS} events): the daemon respawns constantly, so cwd#run fragments into thousands of 1-event groups. Pass --all to show them.\n`);
   process.stderr.write(cov.has_true_session
-    ? `# correlation: ${cov.counts.sess} sess + ${cov.counts.session_id} session_id real agent sessions; ${cov.counts.run} grouped by daemon run, ${cov.counts.cwd} by cwd only\n`
+    ? `# correlation: ${cov.counts.sess} sess real agent sessions; ${cov.counts.run} grouped by daemon run, ${cov.counts.cwd} by cwd only\n`
     : `# correlation: NO real agent-session ids in this data -- rows are grouped by daemon run (${cov.counts.run}) / cwd (${cov.counts.cwd}), not by agent session\n`);
 }
 
@@ -760,7 +760,7 @@ function devOrigin(e) {
   const own = process.env.GMSNIFF_OWN_SESSION;
   if (own) {
     const c = correlationOf(e);
-    if ((c.kind === 'sess' || c.kind === 'session_id') && String(c.key).startsWith(own)) return 'own';
+    if (c.kind === 'sess' && String(c.key).startsWith(own)) return 'own';
   }
   if (OWN_CWD && e.cwd && canonPath(e.cwd) === OWN_CWD) return 'own';
   return 'foreign';
@@ -1419,8 +1419,10 @@ function readJsonFile(p) {
 
 // Tails the last N events via the shared watcher-log parser (src/watcher-log.js), so the manager
 // view sees the SAME event universe as replay -- including the lines that carry no upstream
-// `evt:` record at all and are synthesized by the parser: dispatch.start (51,203 real events,
-// derived from "[dispatch] -> verb=..." lines), watcher/daemon spawn, plugkit.version banners,
+// `evt:` record at all and are synthesized by the parser: dispatch.start (57,537 paired plus
+// 6,638 malformed-verb starts, derived from "[dispatch] -> verb=..." lines in BOTH the ASCII and
+// the Unicode-arrow generation -- 7 projects emit the Unicode form exclusively, so matching only
+// "->" made their entire dispatch stream invisible), watcher/daemon spawn, plugkit.version banners,
 // lock.stale-takeover and instruction.handle-start. An evt-only scan (the previous shape here)
 // missed all of them, which is exactly the in-flight-verb signal this view most needs.
 function tailWatcherEvents(cwd, n, { bytes = 256 * 1024 } = {}) {

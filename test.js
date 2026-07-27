@@ -1,6 +1,7 @@
 import assert from 'assert';
 import { createServer } from './src/server.js';
 import { DEFAULT_LOG_DIR } from './src/index.js';
+import { readPrd, readMutables, readPrdMutablesState } from './src/registry.js';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -344,9 +345,21 @@ await new Promise((resolve, reject) => {
 await schemaSrv.close();
 fs.rmSync(schemaDir, { recursive: true, force: true });
 
-// -- Stuck-project detection --
-const stuck = await get('/api/stuck-projects');
-assert(Array.isArray(stuck), 'stuck-projects is array');
+// -- Per-project signals: raw measurements, no verdict, nothing filtered out --
+const signals = await get('/api/project-signals');
+assert(Array.isArray(signals), 'project-signals is array');
+const legacyStuck = await get('/api/stuck-projects');
+assert(Array.isArray(legacyStuck), 'stuck-projects (former name) still resolves');
+if (signals.length) {
+  const s = signals[0];
+  // The point of this route is that it reports every project rather than only the ones that
+  // tripped an invented threshold, and that it carries no severity/issues verdict at all.
+  for (const k of ['cwd', 'name', 'activity', 'prd_pending', 'gates_failing']) {
+    assert(k in s, `project-signals row carries ${k}`);
+  }
+  assert(!('severity' in s), 'project-signals attaches no severity verdict');
+  assert(!('issues' in s), 'project-signals attaches no issues verdict');
+}
 
 // -- Event throughput --
 const throughput = await get('/api/throughput');
@@ -617,6 +630,61 @@ assert(schemaOut.subcommands.every(s => typeof s.tier === 'string'), 'schema sub
   assert.strictEqual(capped.truncated, true, 'a partial window is flagged, never passed off as complete');
   if (prevYamlSpool === undefined) delete process.env.GM_SPOOL_DIRS; else process.env.GM_SPOOL_DIRS = prevYamlSpool;
   await yamlSrv.close();
+
+  // The same absent-vs-empty distinction at the MODULE level, not just the route. server.js's
+  // yamlRowsPayload had to re-stat the file itself to recover `present`, because readPrd/
+  // readMutables returned an identical {mtimeMs:null, rows:[]} for both states -- so every other
+  // caller of those functions still could not tell a project with no PRD from one whose PRD is
+  // empty. An empty prd.yml is written here explicitly: rows:[] is true of both cases, so rows
+  // alone can never be the discriminator.
+  const emptyProj = path.join(yamlRoot, 'empty-store');
+  fs.mkdirSync(path.join(emptyProj, '.gm'), { recursive: true });
+  fs.writeFileSync(path.join(emptyProj, '.gm', 'prd.yml'), '');
+  const absentPrd = readPrd(path.join(yamlRoot, 'no-such-project'));
+  const emptyPrd = readPrd(emptyProj);
+  assert.strictEqual(absentPrd.present, false, 'a project with no prd.yml reports present:false');
+  assert.strictEqual(emptyPrd.present, true, 'a project with an empty prd.yml reports present:true');
+  assert.deepStrictEqual([absentPrd.rows.length, emptyPrd.rows.length], [0, 0],
+    'both states are rows:[] -- which is exactly why `present` has to carry the distinction');
+  assert.deepStrictEqual([absentPrd.bytes, emptyPrd.bytes], [null, 0],
+    'absent has no byte count; empty has a real one of zero');
+  assert.strictEqual(readMutables(path.join(yamlRoot, 'no-such-project')).present, false,
+    'readMutables carries the same absence contract as readPrd');
+
+  // readPrdMutablesState counted rows with its own split(/^- id:/m) rather than the parseYamlRows
+  // boundary rule the row readers use, and the two disagreed on real data: ../gm's live
+  // mutables.yml holds 259 rows of which only 218 open with `- id:`, the rest using a legacy
+  // boundary key. The counting path silently lost 41 rows and could not see their status at all.
+  // A row whose boundary key is NOT `id` and whose status IS open is the case that was invisible.
+  const boundaryProj = path.join(yamlRoot, 'legacy-boundary');
+  fs.mkdirSync(path.join(boundaryProj, '.gm'), { recursive: true });
+  fs.writeFileSync(path.join(boundaryProj, '.gm', 'mutables.yml'),
+    '- id: normal-row\n  status: witnessed\n  claim: c1\n'
+    + '- mutable_id: legacy-open\n  status: unknown\n  claim: c2\n'
+    + '- subject: legacy-closed\n  status: witnessed\n  claim: c3\n');
+  fs.writeFileSync(path.join(boundaryProj, '.gm', 'prd.yml'),
+    '- id: p1\n  status: done\n  text: t1\n'
+    + '- title: legacy-pending\n  status: pending\n  text: t2\n');
+  const bState = readPrdMutablesState(boundaryProj);
+  assert.strictEqual(bState.mut_total, 3, 'rows with a legacy boundary key are counted, not dropped');
+  assert.strictEqual(bState.mut_unknown, 1, 'an OPEN mutable behind a legacy boundary key is visible');
+  assert.strictEqual(bState.prd_total, 2, 'the same boundary rule applies to prd.yml');
+  assert.strictEqual(bState.prd_pending, 1, 'a PENDING prd row behind a legacy boundary key is visible');
+  // The counting path and the row-reading path must agree, since they now share one parser.
+  assert.strictEqual(bState.mut_total, readMutables(boundaryProj).rows.length,
+    'readPrdMutablesState and readMutables report the same row count');
+  assert.strictEqual(bState.prd_total, readPrd(boundaryProj).rows.length,
+    'readPrdMutablesState and readPrd report the same row count');
+  // Status is read from the parsed field rather than regex-tested against the row's raw slice,
+  // so a closed-status word appearing ONLY in free text cannot close an open row. The row below
+  // has no `status:` field at all, so the default (pending) must win over the `status: done`
+  // sitting inside its text -- the case the old raw-text regex genuinely got wrong.
+  const quotedProj = path.join(yamlRoot, 'quoted-status');
+  fs.mkdirSync(path.join(quotedProj, '.gm'), { recursive: true });
+  fs.writeFileSync(path.join(quotedProj, '.gm', 'prd.yml'),
+    "- id: q1\n  text: 'note: status: done was claimed but never witnessed'\n");
+  assert.strictEqual(readPrdMutablesState(quotedProj).prd_pending, 1,
+    'a closed-status word inside free text does not close a row that has no status of its own');
   fs.rmSync(yamlRoot, { recursive: true, force: true });
 
   // Per-project liveness must ignore the shared-daemon heartbeat, which ticks for every project
