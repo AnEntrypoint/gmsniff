@@ -47,6 +47,16 @@
 
 .gm-table { width:100%; border-collapse:collapse; font-size: var(--fs-micro); }
 .gm-table th { text-align:start; padding: var(--space-1-75) var(--space-2-5); border-bottom: var(--bw-hair) solid var(--panel-3); color: var(--panel-text-3); font-weight:500; position:sticky; top:0; background: var(--panel-bg); }
+/* break-all stays, and two attempts to "improve" it both measured WORSE.
+   Tried and reverted, with the numbers, so neither is retried:
+     - word-break:normal + overflow-wrap:break-word -- a long cwd path then
+       cannot break at all, so the table forces itself wider than its panel and
+       every column re-squeezes: median row 67px -> 160px, panel scrolling
+       horizontally.
+     - adding min-width:64px on top -- same outcome for the same reason.
+   The real amplifier was never this property but the COLUMN COUNT (26 columns
+   in a 782px viewport); renderEventTable's population-based selection is what
+   fixed it, taking the median from 178px to 67px with break-all left alone. */
 .gm-table td { padding: var(--space-1-5) var(--space-2-5); border-bottom: var(--bw-hair) solid var(--panel-3); vertical-align:top; word-break:break-all; max-width:320px; }
 .gm-table tr:hover td { background: var(--surface-2); }
 .gm-table th.gm-th-sortable { cursor:pointer; user-select:none; white-space:nowrap; }

@@ -23,10 +23,11 @@
   SESSION_ID: gmsniff-gui-round3-1785256200
   status: pending
 - id: events-row-height-nonuniform
-  title: Events table rows measure 33/104/178px -- the same defect fixed in the roster
-  body: 'Measured live: the events panel renders 101 rows at three distinct heights (33, 104, 178px). This is the identical non-uniform-row defect fixed in the agent roster this session (37/55/75/176 -> uniform 37), where a long value wrapped and grew the row. The events table is the largest surface in the app, so the cost is higher here: a reader scanning 101 rows cannot predict where the next one starts.'
-  SESSION_ID: gmsniff-gui-round3-1785256200
-  status: pending
+  title: Events table renders 26 columns into 782px, shattering every row to 104-290px
+  body: 'Re-measured properly and the first reading understated it: ALL 100 rows are over 40px, not three of them, across 7 distinct heights (104, 178, 216, 234, 253, 271, 290px). Root cause is not a single long value -- it is column count. The table renders 26 columns into a 782px viewport, so a cell gets roughly 30-46px of width, and with word-break:break-all a 7-character value wraps to a 178px-tall column of single characters. Measured directly: tallestCell w=46 len=7 h=178 wordBreak=break-all. The fix is not row styling; it is deciding which of the 26 columns a reader actually needs at a given width, because no per-row rule can rescue a 46px column.'
+  status: completed
+  witness: 'Root-caused to COLUMN COUNT, not row styling. The table built its column set from the union of every key across all rows: measured 32 distinct keys on a real 100-row page, of which 17 appear on under 10% of rows (several on exactly one), yet each claimed a full column for all 100. At 26 rendered columns in a 782px viewport a cell gets 30-46px, and a 7-character value wrapped into a 178px stack of single characters -- ALL 100 rows measured over 40px, across 7 heights (104-290px). renderEventTable now selects columns by population (>=50% of rows), names the held-back fields in a notice, and carries each row own sparse values in a detail cell so nothing becomes unreachable. Measured after: 26 columns -> 9, heights 104-290 -> 48/67, median 178 -> 67, bodyOverflows false, zero page errors. Two CSS attempts measured WORSE and were reverted with their numbers recorded in the sheet: word-break:normal+overflow-wrap:break-word (median 67 -> 160, panel scrolling horizontally, because a long cwd path then cannot break at all) and adding min-width:64px (same outcome).'
+  commit_comment: Select event-table columns by population, not by key union
 - id: sessions-panel-no-structure
   title: Sessions renders 27332 chars with zero row elements and one control
   body: 'Measured live: the sessions panel is the biggest text surface in the GUI (27332 chars, more than events at 14977) yet reports 0 tr/.ds-dash-card/.gm-list-row elements and a single control. Whatever it renders is unstructured text rather than scannable rows, so none of the density, weight or truncation discipline applied elsewhere reaches it.'

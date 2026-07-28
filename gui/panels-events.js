@@ -183,10 +183,31 @@ function sortRows(rows, sortSpec) {
 }
 export function renderEventTable(rows, tableId, setBody) {
   if (!rows || !rows.length) return Empty('No events.');
-  const cols = new Set();
-  for (const r of rows) Object.keys(r).forEach(k => { if (!isInternalField(k)) cols.add(k); });
-  const keys = [...cols];
-  const display = [...LEADING_COLUMNS, ...keys.filter(k => !LEADING_COLUMNS.includes(k) && !isInternalField(k))];
+  // Columns are chosen by POPULATION, not by the union of every key present.
+  // Measured on a real 100-row page: 32 distinct keys, of which 17 appear on
+  // under 10% of rows (several on exactly one row) -- yet each still claimed a
+  // full column for all 100 rows. At 26 rendered columns in a 782px viewport a
+  // cell gets ~30-46px, and with word-break:break-all a 7-character value wraps
+  // into a 178px-tall stack of single characters. Every one of the 100 rows
+  // measured over 40px tall, across 7 distinct heights (104-290px). No row-level
+  // rule can rescue a 46px column, so the fix is to stop making them.
+  const population = new Map();
+  for (const r of rows) {
+    for (const k of Object.keys(r)) {
+      if (isInternalField(k)) continue;
+      population.set(k, (population.get(k) || 0) + 1);
+    }
+  }
+  // A field on fewer than this share of rows is per-event detail, not a column.
+  // It is NOT dropped: the row's own expandable payload still carries every
+  // field, so nothing becomes unreachable -- it just stops costing every other
+  // row horizontal space it cannot spare.
+  const SPARSE_COLUMN_SHARE = 0.5;
+  const threshold = rows.length * SPARSE_COLUMN_SHARE;
+  const keys = [...population.keys()];
+  const populated = keys.filter(k => !LEADING_COLUMNS.includes(k) && (population.get(k) || 0) >= threshold);
+  const sparse = keys.filter(k => !LEADING_COLUMNS.includes(k) && (population.get(k) || 0) < threshold);
+  const display = [...LEADING_COLUMNS, ...populated];
   const sortable = !!(tableId && setBody);
   const sortSpec = sortable ? sortStateByTableId.get(tableId) : null;
   const sortedRows = sortable ? sortRows(rows, sortSpec) : rows;
@@ -208,9 +229,17 @@ export function renderEventTable(rows, tableId, setBody) {
       onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleEventTableSort(tableId, colKey); setBody(); } },
     }, label + indicator);
   };
-  return h('table', { class: 'gm-table', 'aria-label': `${sortedRows.length} event row(s), ${display.length + 1} columns` },
+  // A column held back must be NAMED, never silently dropped -- and every value
+  // stays reachable in the row's own detail cell below.
+  const sparseNotice = sparse.length
+    ? h('p', { class: 'gm-hint-text' },
+        `${sparse.length} field(s) on fewer than half of these ${rows.length} rows are shown per-row rather than as columns: `
+        + sparse.map(k => `${k} (${population.get(k)})`).join(', '))
+    : null;
+  const table = h('table', { class: 'gm-table', 'aria-label': `${sortedRows.length} event row(s), ${display.length + 2} columns` },
     h('thead', {},
-      h('tr', {}, headerCell(SUBSYSTEM_BADGE_COLUMN_KEY, SUBSYSTEM_BADGE_COLUMN_KEY), ...display.map(k => headerCell(k, k)))),
+      h('tr', {}, headerCell(SUBSYSTEM_BADGE_COLUMN_KEY, SUBSYSTEM_BADGE_COLUMN_KEY), ...display.map(k => headerCell(k, k)),
+        sparse.length ? h('th', { scope: 'col' }, 'detail') : null)),
     h('tbody', {},
     ...sortedRows.map((r, i) => h('tr', { key: i },
       h('td', {}, Badge({ children: r._sub || '?', tone: 'neutral' })),
@@ -229,7 +258,18 @@ export function renderEventTable(rows, tableId, setBody) {
         const sv = String(v);
         const overflows = sv.length > MAX_CELL_CHARS;
         return h('td', { title: overflows ? sv : null }, overflows ? sv.slice(0, MAX_INLINE_OBJECT_CHARS) + ELLIPSIS : sv);
-      })))));
+      }),
+      // Every sparse field this row actually carries, so holding it back from
+      // the column set costs no reachability.
+      sparse.length ? (() => {
+        const present = sparse.filter(k => r[k] !== undefined && r[k] !== null);
+        if (!present.length) return h('td', {});
+        const detail = Object.fromEntries(present.map(k => [k, r[k]]));
+        return h('td', {}, h('details', {},
+          h('summary', {}, asKeyValueLine(detail, COLLAPSED_SUMMARY_CHARS) + ELLIPSIS),
+          JsonViewer({ value: detail, mode: 'highlight', maxHeight: '260px' })));
+      })() : null))));
+  return sparseNotice ? h('div', {}, sparseNotice, table) : table;
 }
 function toggleEventTableSort(tableId, colKey) {
   const cur = sortStateByTableId.get(tableId);
