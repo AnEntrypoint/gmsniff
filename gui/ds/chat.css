@@ -621,18 +621,39 @@
    one-line rows would put unrelated sessions shoulder to shoulder and destroy
    the vertical scan the density exists to create. */
 .ds-dash-grid.is-compact { grid-template-columns: 1fr; gap: 0; padding: var(--space-1) var(--space-2); }
+/* nowrap, not wrap: with wrapping allowed a long value pushes the next cluster
+   onto its own line and the row grows. Measured that way -- rows came out 37 /
+   55 / 75 / 176px instead of one height, the 176px case being a long phase
+   label that expanded the head to 498px and squeezed meta to 202px so its
+   contents stacked. Every child now elides instead of wrapping, which is what
+   keeps a density a density. */
 .ds-dash-card.is-compact {
-  flex-direction: row; align-items: baseline; flex-wrap: wrap;
+  flex-direction: row; align-items: baseline; flex-wrap: nowrap;
   gap: var(--space-2); padding: var(--space-1-75) var(--space-2);
   background: transparent; border: 0; border-radius: 0;
   border-bottom: var(--bw-hair) solid var(--bg-3);
+  overflow: hidden;
 }
-.ds-dash-card.is-compact .ds-dash-card-head { flex: 0 0 auto; }
+/* The head carries status + agent + model; it may shrink and elide rather than
+   expand past its content and starve the meta cluster. */
+.ds-dash-card.is-compact .ds-dash-card-head {
+  flex: 0 1 auto; min-width: 0; overflow: hidden; white-space: nowrap;
+}
+.ds-dash-card.is-compact .ds-dash-agent,
+.ds-dash-card.is-compact .ds-dash-model,
+.ds-dash-card.is-compact .ds-dash-status {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+}
 /* meta takes the remaining width and stays on one line, so a long cwd elides
    rather than wrapping the row to two lines and defeating the density. */
 .ds-dash-card.is-compact .ds-dash-meta {
   flex: 1 1 0; min-width: 0; display: flex; flex-direction: row;
   align-items: baseline; gap: var(--space-2); overflow: hidden;
+  flex-wrap: nowrap; white-space: nowrap;
+}
+.ds-dash-card.is-compact .ds-dash-stat,
+.ds-dash-card.is-compact .ds-dash-activity {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
 }
 .ds-dash-card.is-compact .ds-dash-cwd {
   min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -642,6 +663,25 @@
    with no border to sit inside, compact carries them as a leading rule. */
 .ds-dash-card.is-compact.is-active { box-shadow: inset 2px 0 0 var(--accent); }
 .ds-dash-card.is-compact:last-child { border-bottom: 0; }
+
+/* Visual weight follows the status the host already computes -- it does NOT
+   invent a severity. A dense list where every row paints identically makes the
+   reader scan all of them; the point of ranking rows is that the eye should
+   land on the one that needs attention. `error` is reserved by the host for
+   something genuinely wrong (a blocked gate, an unparseable state, a dispatch
+   that never completed), `running` for live work, `stale` for idle -- so those
+   three get three weights and nothing else changes. */
+/* Measured baseline before choosing these: .ds-dash-agent is already
+   font-weight 600 / color --fg, and .ds-dash-cwd is already --fg-3. So the
+   differentiator cannot BE --fg-3 (that is the default) -- error must rise
+   above the baseline and idle must fall below it. */
+.ds-dash-card.is-compact.is-error { box-shadow: inset 2px 0 0 var(--flame); }
+.ds-dash-card.is-compact.is-error .ds-dash-agent { font-weight: 700; color: var(--fg); }
+.ds-dash-card.is-compact.is-running .ds-dash-agent { font-weight: 600; color: var(--fg); }
+/* Idle recedes by weight and by the tier-2 tone -- NOT by opacity, which would
+   scale every child including the status word and drop it under the contrast
+   floor. --fg-2 stays a real text tone. */
+.ds-dash-card.is-compact.is-stale .ds-dash-agent { font-weight: 400; color: var(--fg-2); }
 .ds-dash-card.is-error { border-color: var(--flame); }
 .ds-dash-card-head { display: flex; align-items: center; gap: var(--space-2); }
 .ds-dash-status { font-size: var(--fs-tiny); font-weight: 600; text-transform: uppercase; letter-spacing: var(--tr-caps); }

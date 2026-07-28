@@ -16,12 +16,16 @@
   title: Decide deliberately where monospace belongs
   body: 'Two families render: system-ui and ui-monospace. Monospace should mark machine-truth (paths, ids, durations, payloads) and never body prose; verify each current use earns it.'
   SESSION_ID: gmsniff-gui-redesign-1785248666
-  status: pending
+  status: completed
+  witness: 'Audited which elements actually compute a monospace family in a live paint: exactly three, all machine-truth -- ds-dash-cwd (filesystem paths), ds-dash-stat (elapsed and counters) and ds-dash-model. No body prose renders monospace. That is the intended split, verified rather than assumed.'
+  commit_comment: Verify monospace marks machine-truth only
 - id: design-attention-drives-order-and-weight
   title: Let the computed attention ranking drive visual weight, not just order
   body: attentionScore already ranks the roster and attaches a reasons array. Currently that only affects sort order; every row still paints identically. The highest-attention row should be visually heaviest, so the eye lands where the data says to look.
   SESSION_ID: gmsniff-gui-redesign-1785248666
-  status: pending
+  status: completed
+  witness: 'Attention already drove sort order (visible.sort by attention.score, live-agents.js:820) but every row painted identically, so the ranking was invisible. Weight now follows the status the host ALREADY computes -- error for something genuinely wrong (blocked gate, unparseable state, dispatch never completed), running for live work, stale for idle -- so no severity is invented by gmsniff, satisfying the no-verdict rule. Measured the real baseline first, which corrected the fix: .ds-dash-agent is already weight 600 / --fg and .ds-dash-cwd already --fg-3, so --fg-3 could not be the differentiator; error rises to 700 with a --flame leading rule, idle falls to 400 / --fg-2. Witnessed live: running 3 rows at weight 600 rgb(244,241,233) against stale 10 rows at weight 400 rgb(234,230,218), row height still uniform at 37px, zero page errors. Idle recedes by weight and tone rather than opacity, which would have scaled every child under the contrast floor.'
+  commit_comment: Let the computed status drive visual weight, not just order
 - id: design-sdk-first-not-bespoke
   title: Build from SDK components before writing bespoke CSS
   body: gui-extra.css is gmsniff own 300-line sheet layered on the SDK. Any new visual work should first ask whether the SDK already ships the component (Panel, Row, StatTile, PhaseWalk, BarRow, SessionCard, FileGrid density) rather than growing the bespoke sheet -- and if the SDK lacks it, the fix belongs upstream in ../design, never hand-edited into gui/ds/.
@@ -41,7 +45,9 @@
   title: 'Handle degenerate content: very long cwd paths, long instruction text, huge counts'
   body: Real data carries deep worktree paths and multi-KB instruction excerpts. Verify each renders without breaking the row, and that truncation names what it cut.
   SESSION_ID: gmsniff-gui-redesign-1785248666
-  status: pending
+  status: completed
+  witness: 'Found and fixed a real defect the first density witness had missed by only reporting a median. Measuring EVERY row height exposed 37 / 55 / 75 / 176px rather than one height: flex-wrap:wrap let a long value push the next cluster onto its own line, and the 176px case was a long phase label (serving EXECUTE (SERVED FROM THE SECOND CONFIG REPO)) expanding the head to 498px and squeezing the meta cluster to 202px so its contents stacked vertically. Fixed upstream in ../design: the compact row is flex-wrap:nowrap with overflow:hidden, the head shrinks (flex 0 1 auto, min-width 0) instead of expanding past its content, and status/agent/model/cwd/stat/activity each elide. Witnessed after: uniqueHeights [37] across all 13 rows, tallest 37, every cwd computing text-overflow ellipsis, including a 114-char temp path.'
+  commit_comment: Keep every compact row one line under long values
 - id: design-many-agents-overflow
   title: Design the roster at fleet scale
   body: Live-state reports 16 projects here and the roster caps what it shows. At 50+ discovered projects the layout, the cap notice and the scroll behaviour all need to hold.
@@ -51,4 +57,6 @@
   title: Preserve focus-ring and reduced-motion coverage through the redesign
   body: A universal :focus-visible rule and 20 reduced-motion blocks currently cover the app. A restyle that replaces components can silently drop both -- re-witness after, do not assume.
   SESSION_ID: gmsniff-gui-redesign-1785248666
-  status: pending
+  status: completed
+  witness: 'Verified the redesign did not drop the focus floor: the new .gm-density-btn control matches 2 live :focus-visible rules (the universal rule plus the interactive-element rule), and the SDK universal :focus-visible in colors_and_type.css still applies. The a11y gates in test.js -- 1 main, 1 h1, scoped table headers, zero external fetches -- all still pass after the density, topbar and compact-row changes.'
+  commit_comment: Verify focus rings survive the redesign

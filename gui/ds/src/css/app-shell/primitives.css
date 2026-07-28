@@ -165,6 +165,15 @@
 .chip.tone-wip, .chip.tone-neutral {
   background: var(--bg-3); color: var(--fg-2);
 }
+/* tone-dim was applied by five kits (aicat, project_page, signin, system_primer,
+   terminal) with no rule anywhere, so a "dim" chip rendered byte-identical to a
+   plain one — measured at rgb(234,230,218) on rgb(31,31,38), same opacity. It is
+   the recede-into-the-row tone: the tier-3 foreground on the same recessed
+   surface tone-wip uses, which is quieter than the default --fg-2 without
+   dropping to an opacity fade that would take the border and background with it. */
+.chip.tone-dim {
+  background: var(--bg-3); color: var(--fg-3);
+}
 .chip.tone-purple  { background: var(--purple-tint); color: var(--purple-deep); }
 .chip.tone-mascot  { background: var(--mascot-tint); color: var(--ink); }
 .chip.tone-sun, .chip.tone-yellow {
