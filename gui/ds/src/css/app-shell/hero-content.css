@@ -41,6 +41,11 @@
 .ds-hero-stat:last-child { border-bottom: 0; padding-bottom: 0; }
 .ds-hero-title {
   font-family: var(--ff-display); font-weight: 700;
+  /* Bespoke display clamp, deliberately off the --fs-* ladder: --fs-hero is
+     clamp(42px,7cqi,96px) and --fs-mega is clamp(56px,11cqi,168px). This lead
+     runs a steeper 9cqi slope with a LOWER 40px floor so a two-line 16ch title
+     still fits a narrow column, and a 116px ceiling between the two tiers.
+     Snapping to either changes the hero's whole optical weight. */
   font-size: clamp(40px, 9cqi, 116px);
   line-height: 0.96; letter-spacing: var(--tr-tighter);
   margin: 0; max-width: 16ch; text-wrap: balance;
@@ -84,6 +89,12 @@
 .ds-section-compact { margin-top: 0; margin-bottom: var(--space-4); }
 .ds-section > h3 {
   font-family: var(--ff-body); font-weight: 600; font-size: var(--fs-h3);
+  /* Zero top margin looks like it inverts the more-space-above-than-below rule,
+     but it does not: this h3 is always the section's first child and .ds-section
+     itself carries the --space-8 (96px) lead, so the effective space above is
+     96px against 32px below. Adding a top margin here would double the lead.
+     Measured live on project_page: gapAboveInSection 0 with the section margin
+     supplying the separation, gapBelow 32. */
   margin: 0 0 var(--space-5);
   letter-spacing: -0.01em;
 }
@@ -100,7 +111,7 @@
    ============================================================ */
 .ds-grain { position: relative; isolation: isolate; }
 .ds-grain::after {
-  content: ''; position: absolute; inset: 0; z-index: -1;
+  content: ''; position: absolute; inset: 0; z-index: var(--z-below);
   pointer-events: none;
   background-image: var(--grain);
   background-size: 160px 160px;
@@ -175,7 +186,7 @@
 }
 .ds-cli-row {
   display: flex; gap: 10px;
-  font-family: var(--ff-mono); font-size: 13px; line-height: 1.6;
+  font-family: var(--ff-mono); font-size: var(--fs-tiny); line-height: 1.6;
   padding: 3px 0;
 }
 .ds-cli-row .prompt { color: var(--green-2); flex: 0 0 auto; user-select: none; }
@@ -254,6 +265,16 @@ table tr.clickable:focus-visible td { background: var(--bg-2); }
    Changelog
    ============================================================ */
 .ds-changelog-row {
+  /* The !important is load-bearing and was empirically confirmed so -- do not
+     remove it on a specificity argument. A changelog row carries three tracks
+     (date, version, message) where a plain .row carries two, and the responsive
+     blocks in responsive.css legitimately rewrite .row's template at several
+     breakpoints. Those blocks are later in the cascade, so at tablet width the
+     two-track override wins on source order and collapses the version column:
+     measured live, removing this flag changes the computed template from
+     "120.75px 77.625px 70.125px" to "103.5px 0px 165px" -- a zero-width column
+     and the version silently gone. Scoping to .app does not help, because the
+     competing rules would need to be scoped in lockstep. */
   grid-template-columns: minmax(110px, 14ch) minmax(60px, 9ch) minmax(0, 1fr) !important;
 }
 .ds-changelog-ver {
@@ -309,6 +330,10 @@ table tr.clickable:focus-visible td { background: var(--bg-2); }
 }
 .kpi-card .num {
   font-family: var(--ff-body); font-weight: 600;
+  /* Numeric display size, not a heading tier: --fs-h4 is clamp(19px,1.8cqi,
+     24px) — too small and too flat a slope for a KPI figure that must read as
+     the loudest thing in its card, and --fs-h3 (22/30) tops out short of 32.
+     Deliberate off-scale value tuned to the .kpi-card box. */
   font-size: clamp(22px, 3cqi, 32px); line-height: 1;
   letter-spacing: var(--tr-tight);
 }

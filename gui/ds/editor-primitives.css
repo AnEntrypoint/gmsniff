@@ -20,8 +20,8 @@
 }
 .ds-ep-panel-head {
     flex-shrink: 0;
-    display: flex; align-items: center; justify-content: space-between; gap: 8px;
-    padding: 6px 10px;
+    display: flex; align-items: center; justify-content: space-between; gap: var(--space-2);
+    padding: var(--space-1-75) var(--space-2-5);
     border-bottom: 1px solid var(--rule);
     font-size: var(--fs-micro, 11px); font-weight: 600;
     text-transform: uppercase; letter-spacing: 0.1em;
@@ -35,7 +35,7 @@
 }
 .ds-ep-panel-body {
     flex: 1; min-height: 0; overflow: auto;
-    padding: 6px 8px;
+    padding: var(--space-1-75) var(--space-2);
 }
 .ds-ep-panel-body.flush { padding: 0; }
 /* A sub-section divider inside a docked panel (e.g. app-prop mount). Only
@@ -51,36 +51,36 @@
 /* Dense status strip for editor chrome — thin, flush, bordered top. */
 .ds-ep-statusbar {
     flex-shrink: 0;
-    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    display: flex; align-items: center; justify-content: space-between; gap: var(--space-2);
     min-height: 0; height: 26px;
-    padding: 0 10px;
+    padding: 0 var(--space-2-5);
     border-top: 1px solid var(--rule);
     background: var(--panel-1);
     color: var(--panel-text-2);
     font: var(--fs-micro, 11px)/1 var(--ff-mono, monospace);
 }
-.ds-ep-statusbar-left, .ds-ep-statusbar-right { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.ds-ep-statusbar-left, .ds-ep-statusbar-right { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
 .ds-ep-statusbar-left { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Buttons inside the dense strip shrink to fit the 26px band. */
 .ds-ep-statusbar button {
-    min-height: 0; height: 20px; padding: 0 8px;
+    min-height: 0; height: 20px; padding: 0 var(--space-2);
     border-radius: var(--r-1, 4px);
     font: var(--fs-micro, 11px)/1 var(--ff-mono, monospace);
 }
 
 /* Toolbar */
 .ds-ep-toolbar {
-    display: flex; align-items: center; gap: 6px;
-    padding: 8px 10px;
+    display: flex; align-items: center; gap: var(--space-1-75);
+    padding: var(--space-2) var(--space-2-5);
     background: var(--panel-1);
     color: var(--panel-text);
     border-bottom: 1px solid var(--rule);
     font: var(--fs-tiny, 12px)/var(--lh-base, 1.55) var(--ff-mono, monospace);
 }
-.ds-ep-toolbar.dense { padding: 2px 4px; gap: 2px; }
+.ds-ep-toolbar.dense { padding: var(--space-hair) var(--space-1); gap: var(--space-hair); }
 .ds-ep-toolbar-leading,
 .ds-ep-toolbar-center,
-.ds-ep-toolbar-trailing { display: flex; align-items: center; gap: 4px; }
+.ds-ep-toolbar-trailing { display: flex; align-items: center; gap: var(--space-1); }
 .ds-ep-toolbar-trailing { margin-left: auto; }
 .ds-ep-toolbar-center { flex: 1; min-width: 0; }
 
@@ -139,17 +139,45 @@
 @media (prefers-reduced-motion: reduce) {
     .ds-ep-tab-indicator { transition: none; }
 }
+/* scroll: content-sized tabs (min/max-width, no stretch) so overflow-x on the
+   head has real per-tab width to scroll against — the pi-web TabBar shape for
+   an unbounded open-file/open-session strip, vs. the default fixed small set
+   that stretches evenly across the available width. */
+.ds-ep-tabs-head.scroll .ds-ep-tab-wrap { flex: 0 0 auto; min-width: 80px; max-width: 180px; }
+.ds-ep-tabs-head.scroll .ds-ep-tab { flex: 1; min-width: 0; }
+.ds-ep-tab-wrap { display: flex; align-items: stretch; flex: 1; min-width: 0; }
 .ds-ep-tab {
-    flex: 1; appearance: none; background: transparent; border: 0;
+    flex: 1; min-width: 0; appearance: none; background: transparent; border: 0;
     border-bottom: 2px solid transparent;
     color: var(--panel-text-3);
-    padding: 8px 10px;
+    padding: var(--space-2) var(--space-2-5);
     font: inherit; cursor: pointer;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     transition: color var(--dur-snap, 80ms) var(--ease, ease), border-color var(--dur-snap, 80ms) var(--ease, ease);
 }
 .ds-ep-tab:hover { color: var(--panel-text-2); }
+/* Close button — hidden until hover/focus within the tab, matching pi-web's
+   hover-reveal close affordance; always visible on the active tab so touch/
+   keyboard users without hover can still find it. */
+.ds-ep-tab-close {
+    appearance: none; background: transparent; border: 0; border-radius: var(--r-0);
+    display: flex; align-items: center; justify-content: center;
+    width: 22px; height: 22px; margin: var(--space-1-75) var(--space-1) var(--space-1-75) 0; padding: 0;
+    flex-shrink: 0; color: var(--panel-text-3); cursor: pointer;
+    opacity: 0; transition: opacity var(--dur-snap, 80ms) var(--ease, ease), background var(--dur-snap, 80ms) var(--ease, ease), color var(--dur-snap, 80ms) var(--ease, ease);
+}
+.ds-ep-tab-wrap:hover .ds-ep-tab-close,
+.ds-ep-tab-wrap:focus-within .ds-ep-tab-close,
+.ds-ep-tab-wrap.active .ds-ep-tab-close { opacity: 1; }
+.ds-ep-tab-close:hover { background: var(--panel-2); color: var(--panel-text-1); }
+.ds-ep-tab-close:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; opacity: 1; }
 .ds-ep-tab.active {
-    color: var(--accent);
+    /* --accent-ink for the TEXT, bare --accent for the RULE. The lime fill
+       measures 1.07:1 against paper, so as a text colour it is invisible in
+       light theme; --accent-ink is 8.85:1. Both resolve to the same value in
+       dark, which is exactly why this class of bug hides until someone opens
+       the light theme. Borders are fills and keep the lead accent. */
+    color: var(--accent-ink);
     border-bottom-color: var(--accent);
 }
 /* When the JS slider is active, the active tab's own static border is
@@ -166,8 +194,8 @@
     color: var(--panel-text);
 }
 .ds-ep-eventrow {
-    display: flex; align-items: baseline; gap: 8px;
-    padding: 3px 8px;
+    display: flex; align-items: baseline; gap: var(--space-2);
+    padding: var(--space-half) var(--space-2);
     border-bottom: 1px solid color-mix(in oklab, var(--rule) 50%, transparent);
 }
 .ds-ep-eventrow:hover { background: color-mix(in oklab, var(--accent) 6%, transparent); }
@@ -184,8 +212,8 @@
 .ds-ep-tree-item { display: flex; flex-direction: column; }
 .ds-ep-tree-item:focus-visible { outline: var(--focus-w) solid var(--focus-color); outline-offset: var(--focus-offset); }
 .ds-ep-tree-row {
-    display: flex; align-items: center; gap: 6px;
-    padding: 4px 8px 4px 0;
+    display: flex; align-items: center; gap: var(--space-1-75);
+    padding: var(--space-1) var(--space-2) var(--space-1) 0;
     border-radius: var(--r-1, 10px);
     cursor: pointer;
     color: var(--panel-text-2);
@@ -196,8 +224,12 @@
     color: var(--panel-text);
 }
 .ds-ep-tree-item.selected > .ds-ep-tree-row {
+    /* The 22% accent wash is a FILL and stays on the lead accent; the label on
+       top of it is text and takes --accent-ink (bare --accent is 1.07:1 on
+       paper -- invisible in light theme, identical to --accent-ink in dark,
+       which is why it reads fine until someone switches themes). */
     background: color-mix(in oklab, var(--accent) 22%, transparent);
-    color: var(--accent);
+    color: var(--accent-ink);
 }
 .ds-ep-tree-twist {
     width: 12px; flex-shrink: 0; text-align: center;
@@ -208,25 +240,25 @@
 .ds-ep-tree-glyph { flex-shrink: 0; color: var(--panel-text-3); }
 .ds-ep-tree-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ds-ep-tree-tag {
-    flex-shrink: 0; padding-left: 6px;
+    flex-shrink: 0; padding-left: var(--space-1-75);
     font-size: 0.85em; color: var(--panel-text-3);
 }
 .ds-ep-tree-children { display: flex; flex-direction: column; }
 
 /* PropertyGrid / PropertyField */
 .ds-ep-propgrid {
-    display: flex; flex-direction: column; gap: 6px;
-    padding: 8px;
+    display: flex; flex-direction: column; gap: var(--space-1-75);
+    padding: var(--space-2);
     color: var(--panel-text);
     font: var(--fs-tiny, 12px)/var(--lh-base, 1.55) var(--ff-mono, monospace);
 }
 .ds-ep-propfield {
     display: grid;
     grid-template-columns: minmax(80px, 120px) 1fr;
-    gap: 4px 10px;
+    gap: var(--space-1) var(--space-2-5);
     align-items: center;
 }
-.ds-ep-propfield.inline { display: flex; gap: 8px; }
+.ds-ep-propfield.inline { display: flex; gap: var(--space-2); }
 .ds-ep-propfield-label {
     color: var(--panel-text-3);
     font-size: 0.85em;
@@ -235,7 +267,7 @@
 }
 .ds-ep-propfield-value {
     color: var(--panel-text);
-    display: flex; align-items: center; gap: 4px; min-width: 0;
+    display: flex; align-items: center; gap: var(--space-1); min-width: 0;
 }
 .ds-ep-propfield-value input,
 .ds-ep-propfield-value select,
@@ -245,7 +277,7 @@
     color: var(--panel-text);
     border: 1px solid var(--rule);
     border-radius: var(--r-1, 10px);
-    padding: 4px 8px;
+    padding: var(--space-1) var(--space-2);
     font: inherit;
     min-width: 0; width: 100%;
 }
@@ -263,7 +295,7 @@
 }
 /* x/y/z packed on one row, each field equal width, no horizontal overflow. */
 .ds-ep-vec3 {
-    display: flex; gap: 4px; width: 100%; min-width: 0;
+    display: flex; gap: var(--space-1); width: 100%; min-width: 0;
 }
 .ds-ep-vec3 > * { flex: 1 1 0; min-width: 0; }
 /* Each axis cell (axis letter + scrub input) must show its full 3-decimal value
@@ -271,7 +303,7 @@
    fill the rest with tight padding and centered text so 0.000 / -0.0 / 1.000 are
    always legible even in the narrow 3-up layout. */
 .ds-ep-vec3 > * {
-    display: flex; align-items: center; gap: 2px;
+    display: flex; align-items: center; gap: var(--space-hair);
 }
 .ds-ep-vec3 .ds-ep-propfield-hint {
     flex: 0 0 auto; width: 9px; text-align: center;
@@ -279,12 +311,12 @@
 }
 .ds-ep-vec3 .ds-input-bare {
     flex: 1 1 auto; min-width: 0; width: auto;
-    padding: 2px 4px; text-align: center; text-overflow: clip;
+    padding: var(--space-hair) var(--space-1); text-align: center; text-overflow: clip;
 }
 /* Dense numeric inputs in the inspector — compact, tight radius, mono. */
 .ds-ep-propfield-value input,
 .ds-ep-propfield-value .ds-input-bare {
-    padding: 2px 6px;
+    padding: var(--space-hair) var(--space-1-75);
     border-radius: var(--r-1, 4px);
     font: var(--fs-tiny, 12px)/1.3 var(--ff-mono, monospace);
 }
@@ -294,7 +326,7 @@
     color: var(--panel-text);
     border: 1px solid var(--rule);
     border-radius: var(--r-1, 4px);
-    padding: 2px 6px;
+    padding: var(--space-hair) var(--space-1-75);
     font: var(--fs-tiny, 12px)/1.3 var(--ff-mono, monospace);
     min-width: 0;
 }
@@ -303,7 +335,7 @@
    control below) — used for wide segmented controls that would clip in the
    narrow value column. */
 .ds-ep-propfield.block {
-    display: flex; flex-direction: column; align-items: stretch; gap: 4px;
+    display: flex; flex-direction: column; align-items: stretch; gap: var(--space-1);
 }
 .ds-ep-propfield.block > .ds-ep-propfield-value { width: 100%; }
 .ds-ep-propfield.block .ds-ep-btngrp { width: 100%; }
@@ -352,8 +384,8 @@
    Compact buttons, square-ish, bordered top — not big floating pills. */
 .ds-ep-actionbar {
     flex-shrink: 0;
-    display: flex; align-items: center; gap: 6px;
-    padding: 6px 8px;
+    display: flex; align-items: center; gap: var(--space-1-75);
+    padding: var(--space-1-75) var(--space-2);
     border-top: 1px solid var(--rule);
     background: var(--panel-1);
 }
@@ -371,7 +403,7 @@
    IconButtonGroup which manages its own sizing. */
 .ds-ep-tree-row button:not(.ds-ep-btngrp-btn),
 .ds-ep-toolbar button:not(.ds-ep-btngrp-btn) {
-    min-height: 24px; height: 24px; padding: 0 8px;
+    min-height: 24px; height: 24px; padding: 0 var(--space-2);
     border-radius: var(--r-1, 4px);
     font: var(--fs-tiny, 12px)/1 var(--ff-mono, monospace);
 }
@@ -407,7 +439,7 @@
     border: 1px solid var(--rule);
     color: var(--panel-text, var(--fg));
     min-width: 1.75em;
-    padding: var(--space-half, 3px) var(--space-1, 5px);
+    padding: var(--space-half, 3px) var(--space-1, 4px);
     border-radius: var(--r-1, 4px);
     font: inherit;
     text-align: center;
@@ -419,6 +451,15 @@
     border-color: var(--accent);
 }
 .ds-ep-pager-ellipsis { padding: 0 var(--space-hair, 2px); opacity: 0.6; }
+/* Touch floor. Pager controls render ~21px tall, so on a coarse pointer they
+   were the smallest interactive targets in the kit — every other control family
+   here (.ds-sub-btn, .ds-session-row, .ds-file-act, .btn) already floors at
+   44px, and paging is a repeated, mis-tap-prone action. The visible mark stays
+   compact; only the hit area grows. */
+@media (pointer: coarse) {
+  .ds-ep-pager-btn, .ds-ep-pager-num { min-height: 44px; min-width: 44px; }
+  .ds-ep-pager { gap: var(--space-2); }
+}
 .ds-ep-pager-total { white-space: nowrap; margin-left: auto; }
 
 /* Grid / GridItem — 24-column responsive layout. GridItem's flex-basis is
@@ -499,7 +540,7 @@
 /* Collapsible tree mode — native details/summary, indent guides on children. */
 .ds-ep-json-tree { white-space: normal; }
 .ds-ep-json-kids {
-    padding-left: var(--space-3-5, 14px);
+    padding-left: var(--space-3-5, 20px);
     margin-left: var(--space-1, 4px);
     border-left: 1px solid var(--rule);
 }
@@ -511,7 +552,7 @@
 .ds-ep-json-sum::-webkit-details-marker { display: none; }
 .ds-ep-json-sum::before {
     content: '+';
-    display: inline-block; width: var(--space-3, 12px);
+    display: inline-block; width: var(--space-3, 16px);
     color: var(--panel-text-3, var(--fg-3));
 }
 .ds-ep-json-node[open] > .ds-ep-json-sum::before { content: '-'; }
@@ -525,11 +566,11 @@
     font-size: var(--fs-micro, 11px);
     color: var(--panel-text-3, var(--fg-3));
 }
-.ds-ep-json-leaf { padding-left: var(--space-3, 12px); word-break: break-all; }
+.ds-ep-json-leaf { padding-left: var(--space-3, 16px); word-break: break-all; }
 /* Copy affordance (copyable:true) — floats over the viewer's top-right. */
 .ds-ep-json-wrap { position: relative; }
 .ds-ep-json-copy {
-    position: absolute; top: var(--space-1-75, 6px); right: var(--space-1-75, 6px); z-index: 1;
+    position: absolute; top: var(--space-1-75, 6px); right: var(--space-1-75, 6px); z-index: var(--z-raised);
     appearance: none; cursor: pointer;
     background: var(--panel-1, var(--bg-1));
     border: 1px solid var(--rule);
@@ -587,12 +628,12 @@
     overflow: hidden;
     background: var(--panel-2);
 }
-.ds-ep-btngrp.dense .ds-ep-btngrp-btn { padding: 2px 6px; min-width: 22px; }
+.ds-ep-btngrp.dense .ds-ep-btngrp-btn { padding: var(--space-hair) var(--space-1-75); min-width: 22px; }
 .ds-ep-btngrp-btn {
     appearance: none; border: 0;
     background: transparent;
     color: var(--panel-text-2);
-    padding: 4px 10px;
+    padding: var(--space-1) var(--space-2-5);
     font: inherit; cursor: pointer;
     border-right: 1px solid var(--rule);
     transition: background var(--dur-snap, 80ms) var(--ease, ease), color var(--dur-snap, 80ms) var(--ease, ease);
@@ -646,7 +687,7 @@
    ContextMenu
    --------------------------------------------------------------- */
 .ds-ep-ctxmenu-backdrop {
-    position: fixed; inset: 0; z-index: 9000;
+    position: fixed; inset: 0; z-index: var(--z-dropdown);
 }
 .ds-ep-ctxmenu {
     position: absolute;
@@ -661,13 +702,13 @@
     border: 1px solid var(--rule);
     border-radius: var(--r-2, 8px);
     box-shadow: var(--shadow-2);
-    padding: 4px;
+    padding: var(--space-1);
     display: flex; flex-direction: column;
     outline: none;
 }
 .ds-ep-ctxmenu-item {
-    display: flex; align-items: center; gap: 8px;
-    padding: 8px 10px;
+    display: flex; align-items: center; gap: var(--space-2);
+    padding: var(--space-2) var(--space-2-5);
     background: transparent; border: 0;
     color: inherit; font: inherit; text-align: left;
     border-radius: var(--r-1, 4px);
@@ -680,13 +721,13 @@
 .ds-ep-ctxmenu-item.danger { color: var(--danger); }
 .ds-ep-ctxmenu-item.disabled { opacity: 0.45; cursor: not-allowed; }
 .ds-ep-ctxmenu-icon { width: 16px; display: inline-flex; justify-content: center; }
-.ds-ep-ctxmenu-sep { height: 1px; background: var(--rule); margin: 4px 6px; }
+.ds-ep-ctxmenu-sep { height: 1px; background: var(--rule); margin: var(--space-1) var(--space-1-75); }
 
 /* ---------------------------------------------------------------
    Drawer
    --------------------------------------------------------------- */
 .ds-ep-drawer-backdrop {
-    position: fixed; inset: 0; z-index: 8500;
+    position: fixed; inset: 0; z-index: var(--z-drawer);
     background: var(--scrim);
 }
 .ds-ep-drawer {
@@ -696,11 +737,11 @@
     box-shadow: var(--shadow-overlay);
     outline: none;
     transition: transform 180ms ease;
-    padding: 12px;
-    padding-top: max(12px, env(safe-area-inset-top));
-    padding-bottom: max(12px, env(safe-area-inset-bottom));
-    padding-left: max(12px, env(safe-area-inset-left));
-    padding-right: max(12px, env(safe-area-inset-right));
+    padding: var(--space-2-75);
+    padding-top: max(var(--space-2-75), env(safe-area-inset-top));
+    padding-bottom: max(var(--space-2-75), env(safe-area-inset-bottom));
+    padding-left: max(var(--space-2-75), env(safe-area-inset-left));
+    padding-right: max(var(--space-2-75), env(safe-area-inset-right));
 }
 .ds-ep-drawer.side-left   { left: 0; top: 0; bottom: 0; width: 86vw; max-width: 320px; }
 .ds-ep-drawer.side-right  { right: 0; top: 0; bottom: 0; width: 86vw; max-width: 320px; }
@@ -713,10 +754,10 @@
    Dialog
    --------------------------------------------------------------- */
 .ds-ep-dialog-backdrop {
-    position: fixed; inset: 0; z-index: 9500;
+    position: fixed; inset: 0; z-index: var(--z-modal);
     background: var(--scrim-strong);
     display: flex; align-items: center; justify-content: center;
-    padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+    padding: max(var(--space-3), env(safe-area-inset-top)) max(var(--space-3), env(safe-area-inset-right)) max(var(--space-3), env(safe-area-inset-bottom)) max(var(--space-3), env(safe-area-inset-left));
 }
 .ds-ep-dialog {
     background: var(--panel-1, var(--panel-bg));
@@ -731,10 +772,6 @@
     display: flex; flex-direction: column;
     outline: none;
 }
-/* size:"wide" -- for dialog content that genuinely needs more than the default 560px cap
-   (e.g. two panes shown side by side); still respects the same viewport-relative ceiling
-   pattern as the default so it never overflows on narrow viewports. */
-.ds-ep-dialog.is-wide { max-width: min(1100px, 96vw); }
 /* Padding tokenized to the --space-* scale (was raw 14/16/10/6) and shaved to
    app density — a dialog is working chrome, not a marketing card. */
 .ds-ep-dialog-head { padding: var(--space-2-75) var(--space-3) var(--space-1-5); border-bottom: 1px solid var(--rule); }
@@ -770,8 +807,8 @@
     position: fixed;
     top: max(16px, env(safe-area-inset-top));
     right: max(16px, env(safe-area-inset-right));
-    z-index: 9800;
-    display: flex; flex-direction: column; gap: 8px;
+    z-index: var(--z-toast);
+    display: flex; flex-direction: column; gap: var(--space-2);
     pointer-events: none;
 }
 .ds-ep-toast {
@@ -779,7 +816,13 @@
     background: var(--panel-1, var(--panel-bg));
     color: var(--panel-text, var(--fg-text));
     border: 1px solid var(--rule);
-    border-left: 3px solid var(--accent);
+    /* DELIBERATE accent spine (same intent as .panel-spine, expressed as a
+       border because a toast has no free ::before — the host stacks them and
+       .has-action reflows the box). Load-bearing, not decoration: this edge is
+       the ONLY channel carrying toast severity — .kind-success/.kind-warn/
+       .kind-error below recolour border-left-color and nothing else. Do not
+       demote to a hairline; that would erase the status signal. */
+    border-left: var(--bw-chunk) solid var(--accent);
     border-radius: var(--r-1, 6px);
     padding: var(--space-2) var(--space-2-75);
     box-shadow: var(--shadow-3);
@@ -838,8 +881,8 @@
     .ds-ep-tree-row,
     .ds-ep-pager-btn {
         min-height: 44px;
-        padding-top: 10px;
-        padding-bottom: 10px;
+        padding-top: var(--space-2-5);
+        padding-bottom: var(--space-2-5);
     }
     .ds-ep-resize.axis-h { width: 14px; }
     .ds-ep-resize.axis-v { height: 14px; }
@@ -984,6 +1027,10 @@
 
 .sr-only {
     position: absolute; width: 1px; height: 1px;
+    /* margin:-1px is OFF-SCALE ON PURPOSE — it is not rhythm, it is the
+       canonical visually-hidden idiom: the negative margin cancels the 1px
+       box so the clipped element contributes zero layout. Snapping it to a
+       --space-* rung would reintroduce a measurable gap. */
     padding: 0; margin: -1px; overflow: hidden;
     clip: rect(0,0,0,0); white-space: nowrap; border: 0;
 }
@@ -998,7 +1045,7 @@
 .ds-tooltip {
     position: fixed;
     left: 0; top: 0;
-    z-index: 9700;
+    z-index: var(--z-tooltip);
     background: var(--panel-1, var(--panel-bg));
     color: var(--panel-text, var(--fg-text));
     border: 1px solid var(--rule);
@@ -1021,7 +1068,7 @@
 .ds-popover {
     position: fixed;
     left: 0; top: 0;
-    z-index: 9600;
+    z-index: var(--z-dropdown);
     background: var(--panel-1, var(--panel-bg));
     color: var(--panel-text, var(--fg-text));
     border: 1px solid var(--rule);
@@ -1043,10 +1090,10 @@
 /* ---------------------------------------------------------------
    Dropdown
    --------------------------------------------------------------- */
-.ds-dropdown-menu { padding: 4px; }
+.ds-dropdown-menu { padding: var(--space-1); }
 .ds-dropdown-list { display: flex; flex-direction: column; }
 .ds-dropdown-item {
-    display: flex; align-items: center; gap: 8px;
+    display: flex; align-items: center; gap: var(--space-2);
     /* Dense desktop row (was an unconditional 44px touch target — a menu of
        these was very tall on desktop). ~30px here; the 44px tap target is
        restored under @media(pointer:coarse) below, matching the .ds-check-row
@@ -1078,7 +1125,7 @@
 .ds-dropdown-item.is-danger { color: var(--danger); }
 .ds-dropdown-glyph { width: 16px; display: inline-flex; justify-content: center; flex-shrink: 0; }
 .ds-dropdown-label { flex: 1; min-width: 0; }
-.ds-dropdown-separator { height: 1px; background: var(--rule); margin: 4px 6px; }
+.ds-dropdown-separator { height: 1px; background: var(--rule); margin: var(--space-1) var(--space-1-75); }
 .ds-dropdown-trigger {
     appearance: none;
     background: var(--panel-2, transparent);
@@ -1095,6 +1142,87 @@
 @media (pointer: coarse) {
     .ds-dropdown-trigger { min-height: 44px; }
 }
+
+/* ---------------------------------------------------------------
+   MenuButton — checkmarked select menu, mirrors Dropdown's chrome
+   --------------------------------------------------------------- */
+.ov-menubutton-menu { padding: var(--space-1); }
+.ov-menubutton-list { display: flex; flex-direction: column; }
+.ov-menubutton-item {
+    display: flex; align-items: center; gap: var(--space-2);
+    min-height: 30px;
+    padding: var(--space-1-5) var(--space-2-75);
+    background: transparent; border: 0;
+    color: inherit; font: inherit; text-align: left;
+    border-radius: var(--r-1, 4px);
+    cursor: pointer;
+    width: 100%;
+}
+.ov-menubutton-item:hover,
+.ov-menubutton-item:focus-visible {
+    background: var(--panel-2, var(--rule));
+    outline: none;
+}
+@media (pointer: coarse) {
+    .ov-menubutton-item { min-height: 44px; padding: var(--space-2) var(--space-3); }
+}
+.ov-menubutton-item[aria-disabled="true"] {
+    opacity: 0.5;
+    pointer-events: none;
+    cursor: not-allowed;
+}
+.ov-menubutton-check { width: 16px; display: inline-flex; justify-content: center; flex-shrink: 0; color: var(--accent, currentColor); }
+.ov-menubutton-label { flex: 1; min-width: 0; }
+.ov-menubutton-empty { padding: var(--space-2) var(--space-2-75); color: var(--fg-muted); font-size: var(--fs-sm); }
+.ov-menubutton-item.is-unavailable {
+    display: flex; align-items: center; justify-content: space-between; gap: var(--space-2);
+    padding: var(--space-1-5) var(--space-2-75);
+    color: var(--fg-muted);
+}
+.ov-menubutton-retry {
+    appearance: none; background: transparent; border: 1px solid var(--rule);
+    border-radius: var(--r-1, 4px); color: inherit; font: inherit; font-size: var(--fs-sm);
+    padding: var(--space-hair) var(--space-1-5); cursor: pointer;
+}
+.ov-menubutton-retry:hover, .ov-menubutton-retry:focus-visible { background: var(--panel-2, var(--rule)); outline: none; }
+.ov-menubutton-trigger {
+    appearance: none;
+    background: var(--panel-2, transparent);
+    color: inherit; font: inherit;
+    border: 1px solid var(--rule);
+    border-radius: var(--r-1, 6px);
+    padding: 0 var(--space-2-75);
+    cursor: pointer;
+    min-height: var(--ctl-sm); height: var(--ctl-sm);
+    display: inline-flex; align-items: center;
+}
+@media (pointer: coarse) {
+    .ov-menubutton-trigger { min-height: 44px; }
+}
+
+/* ---------------------------------------------------------------
+   InfoRow / InfoSection / DiagnosticsPanel — static debug readouts
+   --------------------------------------------------------------- */
+.ds-ep-diagnostics { display: flex; flex-direction: column; gap: var(--space-3); }
+.ds-ep-diagnostics-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
+.ds-ep-diagnostics-title { margin: 0; font-size: var(--fs-lg); }
+.ds-ep-diagnostics-refresh {
+    appearance: none; background: var(--panel-2, transparent); color: inherit; font: inherit;
+    border: 1px solid var(--rule); border-radius: var(--r-1, 6px);
+    padding: var(--space-1) var(--space-2-75); cursor: pointer;
+}
+.ds-ep-diagnostics-refresh:disabled { opacity: 0.6; cursor: not-allowed; }
+.ds-ep-diagnostics-refresh:hover:not(:disabled), .ds-ep-diagnostics-refresh:focus-visible { background: var(--panel-3, var(--rule)); outline: none; }
+.ds-ep-infosection { border: 1px solid var(--rule); border-radius: var(--r-2, 8px); padding: var(--space-2-75); min-height: 4.5rem; }
+.ds-ep-infosection-title { margin: 0 0 var(--space-1-5); font-size: var(--fs-sm); text-transform: uppercase; letter-spacing: 0.04em; color: var(--fg-muted); }
+.ds-ep-infosection-rows { display: flex; flex-direction: column; gap: var(--space-1); }
+.ds-ep-infosection-loading { padding: var(--space-2) 0; color: var(--fg-muted); font-size: var(--fs-sm); }
+.ds-ep-inforow { display: flex; align-items: baseline; gap: var(--space-2); justify-content: space-between; }
+.ds-ep-inforow-label { color: var(--fg-muted); font-size: var(--fs-sm); flex-shrink: 0; }
+.ds-ep-inforow-value { font-family: var(--font-mono, monospace); font-size: var(--fs-sm); text-align: right; word-break: break-word; }
+
+/* BatchProgressLabel */
+.ds-ep-batchprogress { font-variant-numeric: tabular-nums; }
 
 /* Interaction primitives — drag/drop + keyboard shortcuts */
 .ds-reorderable { display: flex; gap: var(--space-1, 4px); }
@@ -1137,7 +1265,7 @@
     border-radius: var(--r-1, 10px);
     background: var(--panel-2, var(--panel-1)); color: var(--panel-text);
 }
-.ds-kbd-group { margin: var(--space-3, 12px) 0; }
+.ds-kbd-group { margin: var(--space-3, 16px) 0; }
 .ds-kbd-group h3 { font-size: 0.9em; opacity: 0.7; margin: 0 0 var(--space-1, 4px); text-transform: capitalize; }
 /* One shortcut per row: the key chip on the left, its description on the right,
    so the dialog reads as "G  Translate gizmo" rather than a wall of bare keys. */
@@ -1151,7 +1279,7 @@
    --------------------------------------------------------------- */
 .ov-cmd-backdrop {
     position: fixed; inset: 0;
-    z-index: var(--z-overlay, 1000);
+    z-index: var(--z-modal);
     background: color-mix(in oklab, var(--fg) 32%, transparent);
     display: flex; align-items: flex-start; justify-content: center;
     padding: 12vh var(--space-3, 16px) var(--space-3, 16px);
@@ -1206,7 +1334,8 @@
    --------------------------------------------------------------- */
 .ov-emoji-root {
     position: fixed; left: 0; top: 0;
-    z-index: var(--z-overlay, 1000);
+    /* Anchored to a trigger, not a blocking surface — dropdown rung. */
+    z-index: var(--z-dropdown);
     width: 280px;
     display: flex; flex-direction: column;
     background: var(--bg-2); color: var(--fg);
@@ -1244,7 +1373,7 @@
    --------------------------------------------------------------- */
 .ov-boot {
     position: fixed; inset: 0;
-    z-index: calc(var(--z-overlay, 1000) + 100);
+    z-index: var(--z-top);
     background: var(--bg);
     display: flex; align-items: center; justify-content: center;
     color: var(--fg);
@@ -1287,7 +1416,8 @@
    --------------------------------------------------------------- */
 .ov-set-root {
     position: fixed; left: 0; top: 0;
-    z-index: var(--z-overlay, 1000);
+    /* Anchored to a trigger, not a blocking surface — dropdown rung. */
+    z-index: var(--z-dropdown);
     width: 300px; max-height: 70vh;
     display: flex; flex-direction: column;
     background: var(--bg-2); color: var(--fg);
@@ -1336,7 +1466,7 @@ input.ov-set-control[type="range"] { padding: 0; accent-color: var(--accent); }
 
 /* AuthModal — ov-auth-* */
 .ov-auth-backdrop {
-    position: fixed; inset: 0; z-index: var(--z-overlay, 1000);
+    position: fixed; inset: 0; z-index: var(--z-modal);
     display: flex; align-items: center; justify-content: center;
     background: var(--scrim-strong);
 }
@@ -1365,7 +1495,7 @@ input.ov-set-control[type="range"] { padding: 0; accent-color: var(--accent); }
 
 /* VideoLightbox — ov-lightbox-* */
 .ov-lightbox-backdrop {
-    position: fixed; inset: 0; z-index: var(--z-overlay-top, 1100);
+    position: fixed; inset: 0; z-index: var(--z-modal);
     display: flex; align-items: center; justify-content: center;
     background: var(--scrim-media);
 }
@@ -1419,7 +1549,7 @@ input.ov-set-control[type="range"] { padding: 0; accent-color: var(--accent); }
     border: 1px solid var(--rule); border-radius: var(--r-1, 4px);
     background: var(--panel-2); cursor: pointer; flex-shrink: 0;
 }
-.ds-input-color::-webkit-color-swatch-wrapper { padding: 2px; }
+.ds-input-color::-webkit-color-swatch-wrapper { padding: var(--space-hair); }
 .ds-input-color::-webkit-color-swatch { border: none; border-radius: var(--r-hair); }
 .ds-input-color:focus-visible { outline: var(--focus-w) solid var(--focus-color); outline-offset: var(--focus-offset); }
 .ds-input-check {
@@ -1482,8 +1612,8 @@ input.ov-set-control[type="range"] { padding: 0; accent-color: var(--accent); }
 /* Collapsed: shrink to just the header strip, freeing the viewport. */
 .ds-247420 .ds-ep-dock.collapsed { bottom: auto; height: auto; }
 .ds-247420 .ds-ep-dock-head {
-    display: flex; align-items: center; gap: 6px;
-    flex: 0 0 auto; padding: 4px 6px 4px 10px;
+    display: flex; align-items: center; gap: var(--space-1-75);
+    flex: 0 0 auto; padding: var(--space-1) var(--space-1-75) var(--space-1) var(--space-2-5);
     border-bottom: 1px solid var(--rule);
     background: color-mix(in oklab, var(--panel-1) 60%, transparent);
 }
@@ -1514,7 +1644,7 @@ input.ov-set-control[type="range"] { padding: 0; accent-color: var(--accent); }
     border-radius: var(--r-1, 4px);
     background: var(--panel-2, var(--bg-2));
 }
-.ds-ep-collapse + .ds-ep-collapse { margin-top: var(--space-1, 5px); }
+.ds-ep-collapse + .ds-ep-collapse { margin-top: var(--space-1, 4px); }
 .ds-ep-collapse-head {
     appearance: none; cursor: pointer; width: 100%;
     display: flex; align-items: center; gap: var(--space-1-5, 5px);
@@ -1581,7 +1711,7 @@ input.ov-set-control[type="range"] { padding: 0; accent-color: var(--accent); }
 .ov-perm-action {
     flex: 1; appearance: none; border: 1px solid var(--rule); background: transparent;
     color: var(--fg-2); font: inherit; font-size: var(--fs-tiny, 12px);
-    padding: 4px 8px; border-radius: var(--r-1, 10px); cursor: pointer;
+    padding: var(--space-1) var(--space-2); border-radius: var(--r-1, 10px); cursor: pointer;
 }
 .ov-perm-action:hover { background: var(--panel-2, var(--rule)); }
 

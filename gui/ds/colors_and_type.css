@@ -125,6 +125,17 @@
   --cat-flame:   var(--flame);
   --cat-sky:     var(--sky);
 
+  /* Readable TEXT tones for the category hues — the same FILL/TEXT split the
+     lead accent already draws with --accent (fill) vs --accent-ink (text).
+     The bare --cat-* values are chroma-matched to sit behind ink on a swatch,
+     avatar, or tag; as `color:` on newsprint paper they land at ~3.1:1, under
+     the 4.5:1 floor. Any `color:` use of a category hue takes the -ink tone;
+     only background/border-color take the bare one. Each -deep source is
+     already remapped per-theme below, so these follow the theme too. */
+  --cat-green-ink:  var(--green-deep);
+  --cat-purple-ink: var(--purple-deep);
+  --cat-mascot-ink: var(--mascot-deep);
+
   --panel-bg:     var(--bg);
   --panel-bg-2:   var(--bg-2);
   --panel-accent: var(--accent);
@@ -145,6 +156,13 @@
   --ff-body:     system-ui, sans-serif;
   --ff-mono:     ui-monospace, Menlo, Consolas, monospace;
 
+  /* Sub-12px tiers exist ONLY for dense OS/data chrome — taskbar strips,
+     session chips, tool-call headers, file-row metadata, ID/stat columns.
+     Never use them for body copy or ordinary UI text: at these sizes the
+     system stack loses its readable x-height, so they are reserved for
+     glanceable, secondary, non-prose material. --fs-pico is the floor. */
+  --fs-pico:     10px;
+  --fs-nano:     11px;
   --fs-micro:    12px;
   --fs-tiny:     13px;
   --fs-xs:       14px;
@@ -245,8 +263,61 @@
      edges (panel spine, expo numbering). A literal length, not a color. */
   --ink-offset:  3px;
 
-  --z-header:    100;
-  --z-overlay:   1000;
+  /* ============================================================
+     Stacking scale — the ONE ordered set of layers anything may
+     paint into. Rungs are 100 apart so a future layer can be
+     inserted between two neighbours without renumbering the rest,
+     and so a component may locally offset (+1/+2) within its own
+     rung without colliding with the next one.
+
+     Order is the contract; the numbers are just how it is spelled.
+     Read top to bottom as "what paints over what":
+
+       --z-below     -1   decorative texture UNDER its own content
+                          (.ds-grain/.ds-halftone print layer)
+       --z-base       0   in-flow content; the default plane
+       --z-raised     100 a thing lifted above its siblings inside
+                          one component (code-lang tab, timeline dot,
+                          selection checkbox, resize handle)
+       --z-sticky     200 sticky-within-a-scroller chrome: section
+                          labels, sticky table headers, save bars.
+                          Above raised content it scrolls past.
+       --z-header     300 the app's own sticky chrome band
+                          (.app-topbar/.app-chrome)
+       --z-drawer     400 off-canvas panels (sidebar/pane/session
+                          drawers) and their scrim, which must cover
+                          the header they slide over
+       --z-window     500 free-floating window-manager surfaces —
+                          the OS kit's .wm-root canvas of draggable
+                          windows. Above the shell, below all
+                          transient popups.
+       --z-dock       600 persistent OS shell furniture that must
+                          stay above windows: launcher dock, menubar,
+                          taskbar, os-root
+       --z-dropdown   700 menus/popovers anchored to a trigger; they
+                          must escape the dock that spawned them
+       --z-modal      800 blocking dialogs, lightboxes, command
+                          palettes and their backdrops
+       --z-toast      900 transient notifications — above a modal,
+                          because they report on what the modal did
+       --z-tooltip   1000 pointer-following hint; never blocked
+       --z-top       1100 last resort: boot/loading veils and
+                          full-screen takeovers that outrank
+                          everything, including a tooltip
+     ============================================================ */
+  --z-below:      -1;
+  --z-base:        0;
+  --z-raised:    100;
+  --z-sticky:    200;
+  --z-header:    300;
+  --z-drawer:    400;
+  --z-window:    500;
+  --z-dock:      600;
+  --z-dropdown:  700;
+  --z-modal:     800;
+  --z-toast:     900;
+  --z-tooltip:  1000;
+  --z-top:      1100;
 
   --measure:     68ch;
   --measure-wide:   940px;
@@ -362,6 +433,25 @@ select:focus-visible {
      (#E0241A / #3A6EFF) are too dark on ink; these clear AA 4.5:1 on --ink. */
   --warn:      #FF5A52;
   --sky:       #6E9BFF;
+  /* Category/heritage dark-tuned pairs (same convention as flame/amber/warn/
+     sky above): the :root values are the PAPER tones and go dark-on-dark here.
+     Measured on --ink (#0E0E12) / --bg-2 (#1F1F26): mascot-deep #B81F63 was
+     3.13:1 / 2.66:1, purple-2 #7F18A4 2.36:1 / 2.00:1, green #247420 3.30:1 /
+     2.80:1 — all failing AA for the text roles they carry (aicat/community
+     author names, kpi deltas, stamps, rails). The replacements clear 4.5:1 on
+     BOTH ink surfaces: #FF5C9E 6.67/5.67, #C277FF 6.77/5.75, #5CBF52 8.28/7.04.
+     These are text-tone retunes only — the paper values are untouched. */
+  --mascot-deep: #FF5C9E;
+  --purple-2:  #C277FF;
+  --green:     #5CBF52;
+  /* --cat-*-ink text tones for dark. The :root sources (--green-deep #133F10,
+     --purple-deep #220026) are near-black PAPER tones — on ink they land at
+     1.60:1 / 1.01:1, i.e. invisible. Repoint them at the dark-tuned values
+     already proven above: #5CBF52 8.28:1 on ink / 7.04:1 on --bg-2, #C277FF
+     6.77:1 / 5.75:1. --cat-mascot-ink needs no entry here: it tracks
+     --mascot-deep, which this same block already remaps to #FF5C9E. */
+  --cat-green-ink:  #5CBF52;
+  --cat-purple-ink: #C277FF;
   --code-string:  var(--green-2);
   --code-keyword: var(--sky);
   --code-fn:      var(--flame);
@@ -410,6 +500,13 @@ select:focus-visible {
     --amber:     #D9A93A;
     --warn:      #FF5A52;
     --sky:       #6E9BFF;
+    /* Mirrors the [data-theme="ink"] category retune above token-for-token —
+       see that block for the measured before/after ratios. */
+    --mascot-deep: #FF5C9E;
+    --purple-2:  #C277FF;
+    --green:     #5CBF52;
+    --cat-green-ink:  #5CBF52;
+    --cat-purple-ink: #C277FF;
     --code-string:  var(--green-2);
     --code-keyword: var(--sky);
     --code-fn:      var(--flame);
@@ -455,6 +552,9 @@ select:focus-visible {
   --cat-green: inherit;
   --cat-purple: inherit;
   --cat-mascot: inherit;
+  --cat-green-ink: inherit;
+  --cat-purple-ink: inherit;
+  --cat-mascot-ink: inherit;
   --cat-sun: inherit;
   --cat-flame: inherit;
   --cat-sky: inherit;
@@ -589,9 +689,8 @@ select:focus-visible {
      scrim; heavier than --shadow-3 and theme-driven (was raw rgba(0,0,0,.4)). */
   --shadow-overlay: 0 12px 40px color-mix(in oklab, var(--fg) 28%, transparent),
                     0 4px 12px  color-mix(in oklab, var(--fg) 16%, transparent);
-  --z-dropdown:  600;
-  --z-popover:   700;
-  --z-modal:     800;
-  --z-toast:     900;
-  --z-tooltip:  1000;
+  /* --z-popover is an alias, not a rung: popovers and dropdowns are the
+     same anchored-to-a-trigger layer and must never be able to drift
+     apart. The rungs themselves live with the stacking scale above. */
+  --z-popover:   var(--z-dropdown);
 }

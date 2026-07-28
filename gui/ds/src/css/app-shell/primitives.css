@@ -175,6 +175,25 @@
 .chip.tone-orange   { background: color-mix(in oklab, var(--flame) 30%, var(--sun) 70%); color: var(--ink); }
 .chip.tone-yellow   { background: var(--sun);         color: var(--ink); }
 
+/* Removable chip — a trailing dismiss (x) button for editable tag/filter
+   chip lists (session tags, saved-search chips). Reuses the chip's own
+   tone/size; the button itself stays neutral-at-rest, per the standing
+   color-reserved-for-meaning convention, tinting only on hover/focus. */
+.chip.ds-chip-removable { padding-right: var(--space-1); }
+.ds-chip-remove-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 16px; height: 16px; margin-left: var(--space-half);
+  padding: 0; border: none; border-radius: var(--r-pill);
+  background: transparent; color: currentColor; opacity: 0.7;
+  cursor: pointer;
+}
+.ds-chip-remove-btn:hover, .ds-chip-remove-btn:focus-visible { opacity: 1; background: color-mix(in oklab, currentColor 16%, transparent); }
+.ds-chip-remove-btn svg { width: 10px; height: 10px; }
+@media (pointer: coarse) {
+  .ds-chip-remove-btn { width: 24px; height: 24px; margin-left: 0; }
+  .ds-chip-remove-btn svg { width: 12px; height: 12px; }
+}
+
 /* ds-pill — plain neutral chip, distinct from the toned .ds-badge/.chip family
    (gmsniff's .pill: a bare rounded label with no semantic tone). */
 .ds-pill {

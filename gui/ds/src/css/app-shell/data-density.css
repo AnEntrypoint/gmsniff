@@ -13,7 +13,7 @@
 }
 
 /* PhaseWalk */
-.ds-phasewalk { display: inline-flex; gap: 2px; vertical-align: middle; }
+.ds-phasewalk { display: inline-flex; gap: var(--space-hair); vertical-align: middle; }
 .ds-phasewalk-seg {
   width: 18px; height: 10px; border-radius: var(--r-hair);
   background: var(--bg-3); position: relative;
@@ -22,6 +22,10 @@
 .ds-phasewalk-seg.is-gap { background: var(--warn); }
 /* Standalone PhaseWalk reserves headroom for the labels instead of letting
    them escape upward and overlap the element above. */
+/* 15px is load-bearing, not off-scale drift: it must equal the absolute
+   `top: -15px` the label below is lifted by, so the label clears the segments
+   without a gap. Snapping the pad to --space-3 (16px) alone would desync the
+   pair. */
 .ds-phasewalk { padding-top: 15px; }
 .ds-phasewalk-lbl {
   position: absolute; top: -15px; left: 0;
@@ -32,38 +36,27 @@
 .ds-session-row .ds-phasewalk { padding-top: 0; }
 .ds-session-row .ds-phasewalk-lbl { display: none; }
 
-/* SessionCard's optional lifecycle strip: the card's meta column is already
-   tight, so the per-segment labels are suppressed exactly as in SessionRow and
-   the reached phase is spelled out once, in words, beside the strip. */
-.ds-dash-phase { display: inline-flex; align-items: center; gap: var(--space-2); min-width: 0; }
-.ds-dash-phase .ds-phasewalk { padding-top: 0; }
-.ds-dash-phase .ds-phasewalk-lbl { display: none; }
-.ds-dash-phase-name {
-  font-size: var(--fs-micro); color: var(--fg-3);
-  letter-spacing: 0.04em; white-space: nowrap;
-}
-
 /* TreeNode */
 .ds-tree-node {
-  padding: 5px 10px; border-left: var(--bw-rule) solid var(--bg-3);
-  margin: 2px 0 2px 16px; font-size: var(--fs-tiny);
+  padding: var(--space-1-5) var(--space-2-5); border-left: var(--bw-rule) solid var(--bg-3);
+  margin: var(--space-hair) 0 var(--space-hair) var(--space-3); font-size: var(--fs-tiny);
   min-width: 0; overflow-wrap: anywhere;
 }
 @media (max-width: 400px) {
-  .ds-tree-node { margin-left: 8px; padding-left: 8px; }
+  .ds-tree-node { margin-left: var(--space-2); padding-left: var(--space-2); }
 }
 .ds-tree-node.is-phase { border-color: var(--accent); background: var(--bg-3); font-weight: 600; }
 .ds-tree-node.is-deviation { border-color: var(--warn); background: var(--danger-surface); color: var(--warn); }
 .ds-tree-node.is-mutable-resolve { border-color: var(--success); }
 .ds-tree-node.is-prd-add { border-color: var(--amber); }
-.ds-tree-node-ts { margin-right: 8px; color: var(--fg-3); }
-.ds-tree-node-pills { margin-left: 6px; }
-.ds-tree-node-reason { margin-top: 2px; color: var(--fg-2); }
-.ds-tree-node-deviation { margin-top: 2px; }
-.ds-tree-node-residuals { margin-top: 2px; color: var(--fg-3); }
+.ds-tree-node-ts { margin-right: var(--space-2); color: var(--fg-3); }
+.ds-tree-node-pills { margin-left: var(--space-1-75); }
+.ds-tree-node-reason { margin-top: var(--space-hair); color: var(--fg-2); }
+.ds-tree-node-deviation { margin-top: var(--space-hair); }
+.ds-tree-node-residuals { margin-top: var(--space-hair); color: var(--fg-3); }
 
 /* BarRow */
-.ds-bar-row { display: flex; align-items: center; gap: 8px; margin: 3px 0; font-size: var(--fs-tiny); }
+.ds-bar-row { display: flex; align-items: center; gap: var(--space-2); margin: var(--space-half) 0; font-size: var(--fs-tiny); }
 .ds-bar-row-label { width: 100px; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ds-bar-bg { flex: 1; min-width: 60px; background: var(--bg-3); border-radius: var(--r-hair); height: 6px; overflow: hidden; }
 .ds-bar-fill { background: var(--fg-3); height: 100%; border-radius: var(--r-hair); }
@@ -82,31 +75,59 @@
   .ds-stats-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-1); }
 }
 .ds-stats-grid-empty { padding: var(--space-3); color: var(--fg-3); font-size: var(--fs-tiny); }
-.ds-stat { min-width: 0; background: var(--bg-3); border-radius: var(--r-0); padding: 10px 12px; }
+.ds-stat { min-width: 0; background: var(--bg-3); border-radius: var(--r-0); padding: var(--space-2-5) var(--space-2-75); }
 .ds-stat-val { font-size: clamp(18px, 5cqi, 22px); font-weight: 700; color: var(--accent-ink); overflow-wrap: anywhere; }
 .ds-stat-val.rate-big { font-size: clamp(24px, 7cqi, 32px); color: var(--success); }
 .ds-stat-val.err-rate { font-size: clamp(24px, 7cqi, 32px); color: var(--warn); }
-.ds-stat-lbl { font-size: var(--fs-micro); color: var(--fg-3); margin-top: 2px; }
+.ds-stat-lbl { font-size: var(--fs-micro); color: var(--fg-3); margin-top: var(--space-hair); }
+
+/* RateCell — tone-colored numeric table cell (success-rate / percentile-latency
+   columns), ported from docstudio's endpointsView() success-rate coloring.
+   Neutral at rest; color carries meaning only, matching Table's sortable-header
+   restraint pattern. */
+.ds-rate-cell { font-variant-numeric: tabular-nums; font-weight: 600; }
+.ds-rate-cell-neutral { color: var(--fg-2); font-weight: 400; }
+.ds-rate-cell-good { color: var(--success); }
+.ds-rate-cell-warn { color: var(--warn); }
+.ds-rate-cell-bad { color: var(--danger); }
 
 /* Inline row — flex row with centered items and a small gap, for demo/kit
    markup that needs to lay siblings out horizontally without an inline style. */
 .ds-inline-row { display: flex; align-items: center; gap: var(--space-2, 8px); }
 
 /* SubGrid */
-.ds-sub-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 6px; margin-top: 8px; }
+.ds-sub-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: var(--space-1-75); margin-top: var(--space-2); }
 .ds-sub-grid-empty { padding: var(--space-3); color: var(--fg-3); font-size: var(--fs-tiny); }
 .ds-sub-btn {
-  padding: 6px 10px; background: var(--bg-3); border: var(--bw-hair) solid var(--bg-3);
+  padding: var(--space-1-75) var(--space-2-5); background: var(--bg-3); border: var(--bw-hair) solid var(--bg-3);
   border-radius: var(--r-0); font-size: var(--fs-tiny); cursor: pointer; color: var(--fg);
   text-align: left; font-family: var(--ff-body);
 }
 .ds-sub-btn:hover { border-color: var(--accent); color: var(--accent-ink); }
 .ds-sub-btn span { display: block; font-size: 18px; font-weight: 700; color: var(--accent-ink); }
 
-/* SessionRow — base .ds-session-row (layout, hover/focus/active states,
-   rail-tone indicators) is canonically defined in chat.css alongside the
-   rest of the chat session-list component; this file only carries the
-   dev/admin-row sub-parts (id/counts/devcnt/span) that decorate it. */
+/* SessionRow — the RICH treatment (hover/focus/active, rail tones, nesting,
+   inline rename/delete) lives in chat.css with the rest of the chat session
+   list. But SessionRow is part of this data-density family and is used by kits
+   that never link chat.css (gm_inspector links only colors_and_type +
+   app-shell + editor-primitives), where the component rendered with NO layout
+   at all: gap resolved to `normal`, so id/counts/devcnt/phasewalk/span all
+   butted together at 0px. The layout floor therefore belongs here, next to the
+   sub-parts it positions, so the component is never shipped shapeless.
+   chat.css still layers its interactive states on top; these declarations are
+   identical to the ones there, so a kit loading both gets the same result. */
+.ds-session-row {
+  position: relative; display: flex; align-items: center; gap: var(--space-2);
+  width: 100%; padding: var(--space-2); min-height: 52px; margin-bottom: var(--space-hair);
+  background: transparent; border: none; border-radius: var(--r-1);
+  text-align: left; color: var(--fg);
+}
+/* Only an interactive row gets the pointer affordance (chat.css sets cursor
+   unconditionally because every row there is clickable; here rows are often
+   static readouts). */
+.ds-session-row[role="button"], a.ds-session-row { cursor: pointer; }
+
+/* Sub-parts that decorate the row above. */
 .ds-session-row-id {
   font-family: var(--ff-mono); font-size: var(--fs-micro); color: var(--accent-ink);
   flex: 0 1 160px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -125,7 +146,7 @@
 /* DevRow */
 .ds-dev-row {
   background: var(--danger-surface); border-left: var(--bw-chunk) solid var(--warn);
-  padding: 8px 12px; margin: 4px 0; border-radius: var(--r-hair); font-size: var(--fs-tiny);
+  padding: var(--space-2) var(--space-2-75); margin: var(--space-1) 0; border-radius: var(--r-hair); font-size: var(--fs-tiny);
 }
 .ds-dev-row strong { color: var(--warn); }
 
@@ -142,17 +163,17 @@
 /* Embedded in a WM window the viewport calc is meaningless — fill the container. */
 .fd-root .ds-live-log { height: 100%; max-height: none; min-height: 0; flex: 1 1 auto; }
 .ds-live-log-empty { height: auto; min-height: 0; padding: var(--space-3); color: var(--fg-3); }
-.ds-live-log-entry { padding: 2px 8px; border-bottom: var(--bw-hair) solid var(--bg-3); overflow-wrap: anywhere; }
+.ds-live-log-entry { padding: var(--space-hair) var(--space-2); border-bottom: var(--bw-hair) solid var(--bg-3); overflow-wrap: anywhere; }
 .ds-live-log-entry:hover { background: var(--bg-3); }
-.ds-live-log-ts { margin-right: 6px; color: var(--fg-3); }
-.ds-live-log-subtag { margin-right: 6px; padding: 0 5px; border-radius: var(--r-hair); font-size: var(--fs-micro); }
-.ds-live-log-preview { margin-left: 6px; color: var(--fg-3); word-break: break-word; }
+.ds-live-log-ts { margin-right: var(--space-1-75); color: var(--fg-3); }
+.ds-live-log-subtag { margin-right: var(--space-1-75); padding: 0 var(--space-1-5); border-radius: var(--r-hair); font-size: var(--fs-micro); }
+.ds-live-log-preview { margin-left: var(--space-1-75); color: var(--fg-3); word-break: break-word; }
 
 /* Touch floors for the dense controls (not covered by the mobile width blocks). */
 @media (pointer: coarse) {
   .ds-sub-btn { min-height: 44px; }
   .ds-session-row { min-height: 44px; }
-  .ds-live-log-entry { padding-block: 6px; }
+  .ds-live-log-entry { padding-block: var(--space-1-75); }
 }
 
 

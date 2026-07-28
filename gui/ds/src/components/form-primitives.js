@@ -182,3 +182,21 @@ export function useFormValidation(schema = {}) {
     };
     return { errors, validate, validateField };
 }
+
+// focusFirstInvalidField — after a `useFormValidation().validate()` call
+// reports errors, moves keyboard focus to the first invalid field in
+// `order` (schema key order, matching docstudio's requireFields, which
+// validates fields in a fixed order and focuses only the first failure
+// rather than dumping all errors on screen with no navigational aid).
+// `getEl(name)` resolves a field name to its live DOM node (host owns the
+// lookup — a ref map, `querySelector`, etc.); a name with no resolvable
+// element is skipped rather than throwing. No-op if no name in `order` has
+// an error.
+export function focusFirstInvalidField(errors, order, getEl) {
+    for (const name of order) {
+        if (!errors[name]) continue;
+        const el = getEl(name);
+        if (el && typeof el.focus === 'function') { el.focus(); return name; }
+    }
+    return null;
+}

@@ -201,7 +201,11 @@ body.canvas-host { background: transparent !important; }
   border-radius: var(--r-pill);
 }
 /* The lime active pill is the sidebar's one accent moment; its own count
-   chip rides the ink-on-accent pair instead of a second competing hue. */
+   chip rides the ink-on-accent pair instead of a second competing hue.
+   The bare --accent here is deliberate and is NOT the usual accent-as-text
+   defect: the chip's own background is --accent-fg (ink), so this is the
+   INVERTED pair -- lime on ink, which is the high-contrast direction. Only
+   accent-coloured text on a normal background needs --accent-ink. */
 .app-side a.active .count {
   background: color-mix(in oklab, var(--accent-fg) 82%, transparent);
   color: var(--accent);

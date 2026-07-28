@@ -72,7 +72,11 @@
 .gm-health-banner { display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:8px 14px; margin-bottom:10px; border-radius:6px; font-size:12px; border:1px solid var(--panel-3); }
 .gm-health-label { font-weight:600; }
 .gm-health-list { display:flex; gap:2px; flex-wrap:wrap; }
-.gm-health-item { background:none; border:none; padding:0 8px 0 0; margin:0; font:inherit; color:inherit; cursor:pointer; text-decoration:underline; text-align:start; }
+/* Link-styled but a real button, so it needs a real hit area: measured at
+   19px tall in a live browser, under the 24px minimum pointer target. The
+   height comes from padding rather than a fixed size so the label still
+   wraps at narrow widths. */
+.gm-health-item { background:none; border:none; padding:3px 8px 3px 0; margin:0; font:inherit; color:inherit; cursor:pointer; text-decoration:underline; text-align:start; min-height:24px; }
 .gm-health-item:hover { opacity:.8; }
 .gm-health-omitted { color: var(--panel-text-3); }
 
@@ -183,13 +187,16 @@
 /* Attention strip: the "where do I look first" answer, above the roster. */
 .gm-attention { display:flex; align-items:center; gap:8px; flex-wrap:wrap; padding:8px 12px; margin-bottom:10px;
   border:1px solid var(--panel-3); border-inline-start:3px solid var(--warn); border-radius:4px; font-size:12px; }
-.gm-attention-item { background:none; border:none; padding:0 6px 0 0; margin:0; font:inherit; color:inherit;
-  cursor:pointer; text-decoration:underline; text-align:start; }
+/* Same 24px pointer-target floor as .gm-health-item -- measured 19px live. */
+.gm-attention-item { background:none; border:none; padding:3px 6px 3px 0; margin:0; font:inherit; color:inherit;
+  cursor:pointer; text-decoration:underline; text-align:start; min-height:24px; }
 .gm-attention-item:hover { opacity:.8; }
 
 /* One-click reveal of the folded idle/finished majority. */
+/* 24px pointer-target floor, same as .gm-health-item/.gm-attention-item --
+   measured 23px live, one pixel under. */
 .gm-reveal { background:none; border:1px dashed var(--panel-3); border-radius:4px; color:var(--panel-text-3);
-  font:inherit; font-size:11px; padding:2px 8px; cursor:pointer; }
+  font:inherit; font-size:11px; padding:2px 8px; cursor:pointer; min-height:24px; }
 .gm-reveal:hover { color:var(--panel-text); border-color:var(--accent, var(--panel-accent)); }
 
 /* Phase strip that renders a revisit as a revisit (visited SET, not index math). */

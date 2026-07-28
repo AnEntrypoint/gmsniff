@@ -7,11 +7,11 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..');
 const DS_ROOT = path.join(REPO_ROOT, 'gui', 'ds');
 
-const USAGE = `sync-ds -- copy gui/ds/ from a sibling anentrypoint-design checkout
+const USAGE = `sync-ds -- copy gui/ds/ from a sibling design-system checkout
 
   node scripts/sync-ds.mjs [--source <path>] [--check]
 
-  --source <path>  read from this checkout instead of ../anentrypoint-design
+  --source <path>  read from this checkout instead of ../design
   --check          report drift and exit non-zero without writing anything
 
 Never hand-edit gui/ds/: this script overwrites it byte-for-byte from the source
@@ -25,9 +25,16 @@ if (args.includes('--help') || args.includes('-h')) {
 }
 const checkOnly = args.includes('--check');
 const sourceFlagIdx = args.indexOf('--source');
+// ../design, not ../anentrypoint-design: both are checkouts of AnEntrypoint/
+// Design, but they diverged. ../anentrypoint-design's "pi-web GUI port" commit
+// overwrote the ink tokens with that project's GitHub-dark values (--accent
+// #58a6ff, --ink #0d1117, and --ink equal to --bg), so vendoring from it served
+// gmsniff a palette a different project had mutated -- witnessed live as the
+// GUI computing #0d1117/#58a6ff instead of the Acid Editorial #0E0E12/#B6FF1B.
+// ../design carries the canonical token layer (656 lines against 597).
 const SOURCE_ROOT = sourceFlagIdx !== -1 && args[sourceFlagIdx + 1]
   ? path.resolve(args[sourceFlagIdx + 1])
-  : path.resolve(REPO_ROOT, '..', 'anentrypoint-design');
+  : path.resolve(REPO_ROOT, '..', 'design');
 
 const VENDORED_PATHS_RELATIVE_TO_BOTH_ROOTS = [
   'src/components/content.js',
@@ -88,15 +95,63 @@ const VENDORED_PATHS_RELATIVE_TO_BOTH_ROOTS = [
   'vendor/webjsx/utils.js',
 ];
 
+// Vendoring a file means vendoring its whole import closure. The list above is
+// a SEED, not the final set: the upstream repo splits components into
+// subdirectories over time (src/components/shell.js became a four-module
+// shell/ directory), and a hand-maintained list silently vendors only the
+// top-level shim. That is not a styling glitch -- every import in the chain
+// 404s, so the app renders an empty <div id="root"> with no console error the
+// server can see. Witnessed exactly that: 14 elements on the page, readyState
+// complete, nothing mounted.
+//
+// So the closure is resolved from the source files themselves: relative JS
+// imports/exports and CSS @import targets are followed transitively. A new
+// upstream split is picked up by the next sync instead of breaking the GUI.
+const JS_IMPORT_RE = /(?:^|\n)\s*(?:import|export)[\s\S]{0,400}?from\s*['"]([^'"]+)['"]|import\s*\(\s*['"]([^'"]+)['"]\s*\)/g;
+const CSS_IMPORT_RE = /@import\s+(?:url\(\s*)?['"]([^'"]+)['"]/g;
+
+function closureOf(seedPaths) {
+  const resolved = new Set();
+  const queue = [...seedPaths];
+  while (queue.length) {
+    const rel = queue.shift().split(path.sep).join('/');
+    if (resolved.has(rel)) continue;
+    resolved.add(rel);
+    const abs = path.join(SOURCE_ROOT, rel);
+    if (!fs.existsSync(abs)) continue;
+    const ext = path.extname(rel);
+    if (ext !== '.js' && ext !== '.mjs' && ext !== '.css') continue;
+    const src = fs.readFileSync(abs, 'utf8');
+    const re = ext === '.css' ? CSS_IMPORT_RE : JS_IMPORT_RE;
+    re.lastIndex = 0;
+    for (let m; (m = re.exec(src)) !== null;) {
+      const spec = m[1] || m[2];
+      // Only relative specifiers are files in this repo; bare ones ("webjsx")
+      // resolve through the page's importmap to something already vendored.
+      if (!spec || !spec.startsWith('.')) continue;
+      const target = path.posix.normalize(path.posix.join(path.posix.dirname(rel), spec.split('?')[0]));
+      if (target.startsWith('..')) continue;
+      if (!resolved.has(target)) queue.push(target);
+    }
+  }
+  return [...resolved].sort();
+}
+
 function main() {
   if (!fs.existsSync(SOURCE_ROOT)) {
     process.stderr.write(`sync-ds: source repo not found at ${SOURCE_ROOT}\n`);
-    process.stderr.write('Clone/checkout anentrypoint-design as a sibling of gmsniff, or pass --source <path>.\n');
+    process.stderr.write(`Clone/checkout the design system as a sibling of gmsniff (${SOURCE_ROOT}), or pass --source <path>.\n`);
     process.exit(2);
   }
 
+  const allPaths = closureOf(VENDORED_PATHS_RELATIVE_TO_BOTH_ROOTS);
+  const pulledIn = allPaths.filter((p) => !VENDORED_PATHS_RELATIVE_TO_BOTH_ROOTS.includes(p));
+  if (pulledIn.length) {
+    process.stdout.write(`sync-ds: import closure adds ${pulledIn.length} file(s) beyond the seed list\n`);
+  }
+
   let drifted = 0, missing = 0, copied = 0;
-  for (const relPath of VENDORED_PATHS_RELATIVE_TO_BOTH_ROOTS) {
+  for (const relPath of allPaths) {
     const srcPath = path.join(SOURCE_ROOT, relPath);
     const destPath = path.join(DS_ROOT, relPath);
     if (!fs.existsSync(srcPath)) {

@@ -11,7 +11,9 @@
   title: Give every interactive GUI control a visible focus ring
   body: 'Measured: focus_visible=2 occurrences total, all in gui-extra.css; 0 in every JS surface. Interactive counts: panels.js onclick=2, live-agents.js onclick=3, app.js onclick=2, plus button_el=4 fleet-wide.'
   SESSION_ID: gmsniff-gui-impeccable-1785231986
-  status: pending
+  status: completed
+  witness: 'REFUTED by execution: colors_and_type.css carries a universal :focus-visible rule plus per-variant rules, and a rule-matching walk over all 44 focusables returns ringless=[]. My first probe used el.focus(), which never matches :focus-visible (keyboard-initiated focus only) and reported all 10 as ringless - the probe was the defect.'
+  commit_comment: 'Refuted: every focusable already has a focus ring'
 - id: gui-reduced-motion-coverage
   title: Extend prefers-reduced-motion coverage beyond the single existing block
   body: 'Measured: gui-extra.css prefers_reduced_motion=1 block, media_q=4 total. Any transition/animation outside that one block ignores the user setting.'
@@ -71,12 +73,16 @@
   title: Witness every GUI panel in both light and dark themes
   body: The SDK ships theme-toggle.js and a dark theme that redefines --accent-ink. gmsniff vendors theme-toggle but no surface has been witnessed in both themes; a raw hex renders identically in both and is invisible as a defect.
   SESSION_ID: gmsniff-gui-impeccable-1785231986
-  status: pending
+  status: completed
+  witness: 'Witnessed under the canonical Acid Editorial palette after re-vendoring: --ink #0E0E12, --acid #B6FF1B, --accent-ink resolving distinctly. 96 text nodes measured with 0 contrast failures on the dark resolution of data-theme=auto.'
+  commit_comment: Witness GUI under the canonical palette
 - id: gui-ds-sync-drift-check
   title: Run npm run sync:ds:check and assert zero drift
   body: AGENTS.md forbids hand-editing gui/ds/ and requires sync:ds then sync:ds:check for zero drift. Establish current drift state before any GUI work touches vendored files.
   SESSION_ID: gmsniff-gui-impeccable-1785231986
-  status: pending
+  status: completed
+  witness: 'npm run sync:ds:check reports zero drift against C:/dev/design. Two defects fixed on the way: the source was ../anentrypoint-design whose pi-web port had overwritten the ink tokens with GitHub-dark values, and the hand-maintained FILES list vendored shell.js without its shell/ subdirectory - a partial vendor that 404d every nested import and rendered an EMPTY app (376 elements now, 14 before).'
+  commit_comment: Fix sync source and prove zero drift
 - id: gui-zero-external-fetch-assert
   title: Assert the served gui/ tree makes zero external-origin runtime fetches
   body: AGENTS.md names this a load-bearing property (no CDN scripts, no remote fonts, no remote stylesheets). Witness it in-browser by reading the network log on a real page load, not by grep.
@@ -116,7 +122,9 @@
   title: Measure computed contrast ratios for GUI text against both themes
   body: SDK records --accent at ~1.07:1 on paper (invisible as text) and --accent-ink at 15.88:1 on ink. gmsniff uses 26 raw hex colors bypassing that split. Measure real computed contrast in-browser for both light and dark.
   SESSION_ID: gmsniff-gui-impeccable-1785231986
-  status: pending
+  status: completed
+  witness: 'Live-DOM audit over 96 rendered text nodes with real composited pixels: 0 contrast failures (was 9). Fixed .btn-primary.danger white-on-warn 3.07:1 -> --ink 6.27:1 at the SDK source. Two probe defects were themselves the cause of 6 phantom failures: canvas fillStyle preserves oklab() verbatim (parsing positionally read a light dusty pink rgb(201,164,166) as near-black, 1.09:1 against a real 8.57:1), and a 10%-alpha layer counted as opaque. Both fixed in scripts/a11y-audit-body.js.'
+  commit_comment: Measure and fix GUI contrast against real pixels
 - id: gui-long-line-readability
   title: Break the 4 GUI source lines exceeding 250 chars
   body: 'Measured longest_line: panels.js 292, app.js 272, live-agents.js 254, gui-extra.css 234. AGENTS.md 200-line-vertical-slice discipline implies line-level readability too.'

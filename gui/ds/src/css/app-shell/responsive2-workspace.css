@@ -10,8 +10,16 @@
    even on a wide desktop. Drawer/scrim/toggle are absolute (anchored to .app), so
    they overlay the window, not the page. */
 @container (max-width: 900px) {
-  .app-body,
-  .app-body.no-side { grid-template-columns: 1fr !important; }
+  /* `.app`-scoped for specificity instead of an !important flag. The bare
+     `.app-body` half of this list is (0,1,0) and was out-specified by
+     `.app-body.no-side` (0,2,0) in topbar.css; scoping lifts both halves to
+     (0,2,0)/(0,3,0), which also lands later in source than topbar.css, so the
+     drawer collapse wins on merit. `.app` is guaranteed: `.app-body` is
+     emitted only as a direct child of `.app` (single call site, shell.js
+     AppShell), and this @container query already requires `.app` as its
+     container ancestor. */
+  .app .app-body,
+  .app .app-body.no-side { grid-template-columns: 1fr; }
   .app-side-shell {
     position: absolute;
     /* Full-height overlay drawer: the merged .app-chrome wraps and its real
@@ -22,8 +30,9 @@
     width: 280px; max-width: 80%;
     transform: translateX(-100%);
     transition: transform var(--dur-base, 240ms) var(--ease, ease);
-    /* Above the sticky chrome (z-header): scrim > chrome > content budget. */
-    z-index: calc(var(--z-header, 100) + 2);
+    /* Drawer rung, above the sticky chrome it slides over. +1 puts the panel
+       itself over its own scrim (--z-drawer), which is the layer below it. */
+    z-index: calc(var(--z-drawer) + 1);
     background: var(--bg);
     border-right: 1px solid color-mix(in oklab, var(--fg) 8%, transparent);
     overflow-y: auto;
@@ -35,9 +44,13 @@
   .app-side-shell.open,
   .app-side.open,
   .app-body.side-open .app-side-shell { transform: translateX(0); }
+  /* No flags needed: the ONLY other rule that touches these properties is the
+     `.app-side` base in topbar.css, which already sets `flex-direction: column`
+     and never sets `flex-wrap` (nowrap is the initial value anyway). This rule
+     is equal-specificity and later in source, so it wins unaided. */
   .app-side {
-    flex-direction: column !important;
-    flex-wrap: nowrap !important;
+    flex-direction: column;
+    flex-wrap: nowrap;
     gap: var(--space-2);
     padding: var(--space-3);
     font-size: var(--fs-sm);
@@ -64,8 +77,9 @@
   display: none;
   position: absolute; inset: 0;
   background: color-mix(in oklab, var(--bg) 60%, transparent);
-  /* Above the sticky chrome so nav behind an open drawer is not clickable. */
-  z-index: calc(var(--z-header, 100) + 1);
+  /* Above the sticky chrome so nav behind an open drawer is not clickable.
+     Base of the drawer rung — the panel itself sits one above this. */
+  z-index: var(--z-drawer);
 }
 @container (max-width: 900px) {
   .app-body.side-open .app-side-scrim { display: block; }
@@ -77,9 +91,10 @@
 .app-side-toggle {
   display: none;
   position: absolute; top: calc((var(--app-topbar-h) - 44px) / 2); left: 10px;
-  /* Above the sticky topbar/chrome (z-header) and the drawer/scrim so the
-     translucent blurred chrome never paints over or intercepts the toggle. */
-  z-index: calc(var(--z-header, 100) + 3);
+  /* Above the sticky topbar/chrome and the drawer/scrim so the translucent
+     blurred chrome never paints over or intercepts the toggle. Top of the
+     drawer rung: scrim < panel < toggle. */
+  z-index: calc(var(--z-drawer) + 2);
   /* 44x44 minimum hit area (WCAG 2.5.5 / Apple HIG) - 36px is below the
      reliable-tap threshold on touch. */
   width: 44px; height: 44px;
@@ -181,7 +196,7 @@
 /* Column resize handles: a thin keyboard-accessible separator pinned to the
    right edge of each chrome track; drag (or ArrowLeft/Right) writes a clamped
    inline --ws-*-w. */
-.ws-resizer { grid-row: 1 / -1; align-self: stretch; justify-self: end; width: 8px; margin-right: -4px; z-index: 5; cursor: col-resize; background: transparent; border: none; padding: 0; touch-action: none; }
+.ws-resizer { grid-row: 1 / -1; align-self: stretch; justify-self: end; width: 8px; margin-right: -4px; z-index: var(--z-raised); cursor: col-resize; background: transparent; border: none; padding: 0; touch-action: none; }
 .ws-resizer::after { content: ""; display: block; width: 2px; height: 100%; margin: 0 auto; background: transparent; transition: background var(--dur-snap) var(--ease); }
 .ws-resizer:hover::after, .ws-resizer:focus-visible::after { background: var(--accent); }
 .ws-resizer:focus-visible { outline: var(--focus-w) solid var(--focus-color); outline-offset: -2px; }
@@ -370,7 +385,7 @@
   .ws-pane {
     position: fixed; inset: 0 0 0 auto;
     width: min(340px, 85vw);
-    z-index: 42; transform: translateX(110%);
+    z-index: calc(var(--z-drawer) + 1); transform: translateX(110%);
     transition: transform var(--dur-base) var(--ease);
   }
   .ws-shell.ws-pane-open .ws-pane { transform: translateX(0); width: min(340px, 85vw); }
@@ -379,7 +394,7 @@
   .ws-pane-drawer-toggle { display: inline-flex; }
   /* Scrim is always present from this stage down so it FADES with the drawer
      instead of hard-appearing; pointer-events gate keeps it inert while closed. */
-  .ws-scrim { display: block; opacity: 0; pointer-events: none; position: fixed; inset: 0; z-index: 41; background: color-mix(in srgb, var(--fg) 38%, transparent); transition: opacity var(--dur-base) var(--ease); }
+  .ws-scrim { display: block; opacity: 0; pointer-events: none; position: fixed; inset: 0; z-index: var(--z-drawer); background: color-mix(in srgb, var(--fg) 38%, transparent); transition: opacity var(--dur-base) var(--ease); }
   .ws-shell.ws-sessions-open .ws-scrim, .ws-shell.ws-pane-open .ws-scrim { opacity: 1; pointer-events: auto; }
 }
 
@@ -401,7 +416,7 @@
     /* Immune to the desktop collapse var (--ws-sessions-w:0px persisted from
        a desktop session would open an invisible 0-width drawer). */
     width: min(max(var(--ws-sessions-w), 280px), 80vw);
-    z-index: 42; transform: translateX(-110%);
+    z-index: calc(var(--z-drawer) + 1); transform: translateX(-110%);
     transition: transform var(--dur-base) var(--ease);
     border-right: var(--bw-hair) solid var(--bg-3);
     overscroll-behavior: contain;
@@ -428,7 +443,9 @@
     grid-template-columns: minmax(0, 1fr);
     grid-template-areas: "content";
   }
-  .ws-rail { position: fixed; inset: 0 auto 0 0; width: var(--ws-rail-w-collapsed); z-index: 40; }
+  /* Persistent chrome, not a drawer: it stays put while the session/pane
+     drawers slide over it, so it sits on the header rung below them. */
+  .ws-rail { position: fixed; inset: 0 auto 0 0; width: var(--ws-rail-w-collapsed); z-index: var(--z-header); }
   .ws-rail .ws-rail-brand,
   .ws-rail .ws-rail-action-label,
   .ws-rail .ws-rail-item-label,

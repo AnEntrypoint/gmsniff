@@ -55,7 +55,12 @@
 }
 .panel-body { padding: var(--space-2) var(--space-3) var(--space-3); }
 .panel-body > * { margin: 0; }
-.panel-body > * + * { margin-top: var(--space-3); }
+/* Inner sibling rhythm scales with density like the outer panel rhythm, so a
+   compact/spacious surface stays proportional instead of only its outer
+   intervals moving while the panel interiors hold still. Kept strictly below
+   the outer .ds-panel-gap interval at every density — that ordering is what
+   makes proximity report grouping truthfully. */
+.panel-body > * + * { margin-top: calc(var(--space-3) * var(--density)); }
 .panel.panel-wide .panel-body { padding: 0; }
 
 /* ============================================================

@@ -121,6 +121,13 @@
   transition: color var(--dur-base) var(--ease), background var(--dur-base) var(--ease);
 }
 .ds-segmented .ds-seg-btn:hover { color: var(--fg); }
+/* Touch floor — a segmented control is a primary mode switch but renders ~30px
+   tall from its 4px padding, below the 44px minimum the rest of the system
+   holds. Grows the hit area only; the pill's visual size is unchanged at
+   fine-pointer sizes. */
+@media (pointer: coarse) {
+  .ds-segmented .ds-seg-btn { min-height: 44px; padding-inline: var(--space-3); }
+}
 .ds-segmented .ds-seg-btn:focus-visible { outline: var(--focus-w) solid var(--focus-color); outline-offset: var(--focus-offset); }
 .ds-segmented .ds-seg-btn.is-on {
   background: var(--bg); color: var(--fg);

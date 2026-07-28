@@ -56,11 +56,16 @@ button:disabled, [disabled] {
   animation: spinner-rotate 0.8s linear infinite;
 }
 
-/* Error state */
+/* Error state.
+   No !important: the only rule in the kit that also resets a matching element's
+   border-color is the bare-control base below (`textarea:where(:not(.input))`
+   et al, which use the `border: 0` shorthand). Those selectors are (0,0,1) —
+   the :where() guard adds nothing — so every selector in this list out-specifies
+   them on merit, and specificity beats the later source position. */
 .error, [data-state="error"],
 .row.error, input.error,
 textarea.error {
-  border-color: var(--warn) !important;
+  border-color: var(--warn);
   background-color: color-mix(in oklab, var(--warn) 6%, var(--bg));
 }
 .error::placeholder { color: color-mix(in oklab, var(--warn) 60%, var(--fg-3)); }
@@ -147,7 +152,12 @@ input[type="checkbox"], input[type="radio"] {
   min-height: 120px;
   display: flex; align-items: center; justify-content: center;
   text-align: center; color: var(--fg-3);
-  transition: all var(--dur-snap) var(--ease);
+  /* Explicit list, never `all` — the only things `.drop-zone.active` changes
+     are the dashed border tone, the tinted fill and the label colour. `all`
+     also animated padding/min-height/border-width, so a drop target visibly
+     resized mid-drag instead of snapping. */
+  transition: background var(--dur-snap) var(--ease), border-color var(--dur-snap) var(--ease),
+    color var(--dur-snap) var(--ease);
 }
 .drop-zone.active {
   border-color: var(--accent);
@@ -187,7 +197,7 @@ input[type="checkbox"], input[type="radio"] {
   border-radius: var(--r-2);
   box-shadow: var(--shadow-overlay);
   min-width: 160px;
-  z-index: calc(var(--z-overlay, 1000) + 1);
+  z-index: var(--z-dropdown);
   padding: 4px 0;
 }
 
@@ -385,6 +395,16 @@ hr.rule-dotted { border-top: 1px dotted var(--rule-strong); }
   padding: var(--space-2) var(--space-1);
   font: inherit; color: var(--fg);
 }
+/* Touch floor for the BASE input. Several specific inputs already carried this
+   (ds-file-filter-input, ds-modal-input, ds-term-input) but the primitive every
+   form actually uses did not, so a plain field measured 34px under a coarse
+   pointer -- measured live on the settings and gm_inspector kits. The 16px
+   font-size is not cosmetic: below 16px iOS auto-zooms the viewport on focus,
+   and max() keeps it from ever shrinking under a reduced typescale. */
+@media (pointer: coarse) {
+  .input { min-height: 44px; font-size: max(16px, var(--fs-body)); }
+  textarea.input { min-height: 88px; }
+}
 .input::placeholder { color: var(--fg-3); }
 .input:focus-visible {
   outline: none;
@@ -566,12 +586,22 @@ input[type="password"]:not(:placeholder-shown) + .input-clear {
   position: absolute; top: -40px; left: 0;
   background: var(--fg); color: var(--bg);
   padding: 8px 16px; border-radius: var(--r-1);
-  text-decoration: none; z-index: var(--z-overlay, 1000);
+  text-decoration: none; z-index: var(--z-top);
 }
 .skip-to-main:focus { top: 10px; }
 
 /* Reduced motion preferences — scoped to the DS surface so it doesn't reach
-   into and neutralize the host document's own motion. */
+   into and neutralize the host document's own motion.
+   The !important flags here are LOAD-BEARING and must not be "cleaned up":
+   `.ds-247420 *` / `.app *` is only (0,1,0) — the universal selector adds
+   nothing — yet it has to defeat every animation/transition declaration in the
+   kit, many of which are strictly more specific. Concrete rules it would
+   otherwise lose to: `.ds-dropzone.dragover` (0,2,0, files.css),
+   `.ds-upload-bar.indeterminate .ds-upload-fill` (0,3,0, files.css),
+   `.list-item.drag-after::after` (0,2,1, this file). Raising this selector to
+   out-specify an open-ended set of future component rules is not possible, so
+   the flag is the only correct mechanism — this is a WCAG 2.3.3 guarantee,
+   not a stylistic preference. */
 @media (prefers-reduced-motion: reduce) {
   .ds-247420 *, .app * {
     animation-duration: 0.01ms !important;
@@ -579,7 +609,9 @@ input[type="password"]:not(:placeholder-shown) + .input-clear {
     transition-duration: 0.01ms !important;
   }
   /* Kill the residual paint frame of looping skeleton/shimmer placeholders and
-     give reduced-motion users a steady placeholder fill instead. */
+     give reduced-motion users a steady placeholder fill instead.
+     Also load-bearing: `.skeleton` is (0,1,0) and must override
+     `.ds-session-row-skeleton .ds-skel` (0,2,0), which sets its own shimmer. */
   .skeleton, .ds-skeleton, .ds-session-row-skeleton .ds-skel {
     animation: none !important;
     background: var(--bg-2) !important;
@@ -689,7 +721,7 @@ input[type="password"]:not(:placeholder-shown) + .input-clear {
   padding: var(--space-3) var(--space-4);
   max-width: 320px;
   box-shadow: var(--shadow-overlay);
-  z-index: calc(var(--z-overlay, 1000) + 10);
+  z-index: var(--z-toast);
 }
 
 @keyframes toast-slide-in {

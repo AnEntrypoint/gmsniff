@@ -8,7 +8,7 @@
 .ds-file-grid {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-1);
 }
 .ds-file-grid:focus-visible { outline: var(--focus-w) solid var(--focus-color); outline-offset: var(--focus-offset); border-radius: var(--r-2); }
 
@@ -19,7 +19,7 @@
 /* The filter is now an inline item in the single .ds-file-controls toolbar row
    (the standalone right-aligned .ds-file-filter strip was removed). */
 .ds-file-filter-input {
-  width: min(280px, 100%); padding: 6px 12px; font-size: var(--fs-sm);
+  width: min(280px, 100%); padding: var(--space-1-75) var(--space-2-75); font-size: var(--fs-sm);
   background: var(--bg); color: var(--fg);
   border: var(--bw-hair) solid var(--rule); border-radius: var(--r-1);
 }
@@ -29,7 +29,7 @@
 .ds-file-sort { display: flex; gap: var(--space-2); padding: 0 var(--space-2) var(--space-1); }
 .ds-file-sort-btn {
   font-size: var(--fs-tiny); font-family: var(--ff-mono); color: var(--fg-3);
-  background: none; border: none; cursor: pointer; padding: 2px 4px; border-radius: var(--r-1);
+  background: none; border: none; cursor: pointer; padding: var(--space-hair) var(--space-1); border-radius: var(--r-1);
 }
 .ds-file-sort-btn:hover { color: var(--fg-2); background: var(--bg-2); }
 .ds-file-sort-btn.active { color: var(--accent-ink); }
@@ -44,9 +44,9 @@
   .ds-file-grid { transition: opacity .15s var(--ease); }
 }
 /* EventList loading skeleton (shares the .ds-skel shimmer base above). */
-.ds-event-row-skeleton { display: flex; align-items: center; gap: var(--space-3); padding: 12px 16px; pointer-events: none; }
+.ds-event-row-skeleton { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-2-75) var(--space-3); pointer-events: none; }
 .ds-skel-rank { height: 12px; width: 2.5ch; }
-.ds-event-state { padding: var(--space-2) 16px; }
+.ds-event-state { padding: var(--space-2) var(--space-3); }
 .ds-skel { display: inline-block; border-radius: var(--r-1); background: var(--bg-2); position: relative; overflow: hidden; }
 .ds-skel::after {
   content: ''; position: absolute; inset: 0;
@@ -65,8 +65,13 @@
    because FileRow wraps the row content in a real button for native keyboard
    semantics. */
 .ds-file-row {
-  display: flex; align-items: center; gap: 10px;
-  padding: 11px 16px; background: var(--bg);
+  display: flex; align-items: center; gap: var(--space-2-5);
+  /* 11px vertical is an optical half-step between --space-2-5 (10) and
+     --space-2-75 (12), deliberately off-scale: with the 26px .ds-file-icon
+     and the hairline borders it lands the row at ~50px, comfortably over the
+     44px touch floor without the 52px a 12px pad would give. Snapping either
+     way visibly re-pitches every row in a long listing. */
+  padding: 11px var(--space-3); background: var(--bg);
   border: var(--bw-hair) solid transparent;
   border-radius: var(--r-2); color: var(--fg);
   cursor: pointer;
@@ -75,7 +80,7 @@
               transform var(--dur-snap) var(--ease);
 }
 .ds-file-open {
-  display: flex; align-items: center; gap: 14px;
+  display: flex; align-items: center; gap: var(--space-2-75);
   flex: 1 1 auto; min-width: 0;
   background: none; border: 0; padding: 0; margin: 0;
   color: inherit; font: inherit; text-align: left; cursor: pointer;
@@ -123,7 +128,7 @@
 /* File icon — glyph chip, tinted per type. */
 .ds-file-icon {
   display: inline-flex; align-items: center; justify-content: center;
-  width: 26px; height: 26px; font-size: 15px; line-height: 1;
+  width: 26px; height: 26px; font-size: var(--fs-sm); line-height: 1;
   color: var(--fg-2);
 }
 .ds-file-row[data-file-type="dir"]      .ds-file-icon { color: var(--accent-ink); }
@@ -138,7 +143,7 @@
    hidden, which left mouse/trackpad users unable to find rename/move/delete
    without accidentally hovering a row), full opacity on hover/focus. */
 .ds-file-actions {
-  display: inline-flex; gap: 2px; align-items: center;
+  display: inline-flex; gap: var(--space-hair); align-items: center;
   opacity: 0.35; transition: opacity var(--dur-base) var(--ease);
 }
 .ds-file-row:hover .ds-file-actions,
@@ -147,7 +152,7 @@
   display: inline-flex; align-items: center; justify-content: center;
   width: 28px; height: 28px; padding: 0;
   background: transparent; border: 0; border-radius: var(--r-1);
-  color: var(--fg-3); font-size: 14px; cursor: pointer;
+  color: var(--fg-3); font-size: var(--fs-xs); cursor: pointer;
   transition: background var(--dur-snap) var(--ease), color var(--dur-snap) var(--ease);
 }
 .ds-file-act:hover { background: var(--bg-3); color: var(--fg); }
@@ -183,7 +188,7 @@
 
 .ds-file-check {
   display: inline-flex; align-items: center; justify-content: center;
-  min-width: 28px; height: 28px; padding: 0 4px;
+  min-width: 28px; height: 28px; padding: 0 var(--space-1);
   background: transparent; border: 0; border-radius: var(--r-1);
   color: var(--fg-3);
   cursor: pointer;
@@ -215,7 +220,7 @@
    quiet destructive outline - the app arm-confirms destructive bulk actions
    via ConfirmDialog, so the strip never needs a loud CTA. */
 .ds-bulkbar .btn, .ds-bulkbar .btn-primary {
-  padding: 5px 12px; min-height: 32px; border-radius: var(--r-1); font-weight: 500;
+  padding: var(--space-1-5) var(--space-2-75); min-height: 32px; border-radius: var(--r-1); font-weight: 500;
 }
 .ds-bulkbar .btn { background: transparent; border: var(--bw-hair) solid var(--rule); color: var(--fg-2); }
 .ds-bulkbar .btn:hover { background: var(--bg-2); color: var(--fg); }
@@ -227,7 +232,7 @@
 
 /* Density picker — list / compact / thumbnails. */
 .ds-density {
-  display: inline-flex; gap: 2px; padding: 2px;
+  display: inline-flex; gap: var(--space-hair); padding: var(--space-hair);
   background: var(--bg-2); border: var(--bw-hair) solid var(--rule); border-radius: var(--r-1);
 }
 .ds-density-btn {
@@ -242,11 +247,11 @@
 .ds-density-btn:focus-visible { outline: var(--focus-w) solid var(--focus-color); outline-offset: var(--focus-offset); }
 
 /* Compact density — tighter rows for long listings. */
-.ds-file-grid[data-density="compact"] { gap: 2px; }
-.ds-file-grid[data-density="compact"] .ds-file-row { padding: 5px 12px; gap: 10px; }
+.ds-file-grid[data-density="compact"] { gap: var(--space-hair); }
+.ds-file-grid[data-density="compact"] .ds-file-row { padding: var(--space-1-5) var(--space-2-75); gap: var(--space-2-5); }
 .ds-file-grid[data-density="compact"] .ds-file-row .title { font-size: var(--fs-xs); }
 .ds-file-grid[data-density="compact"] .ds-file-row .ds-file-meta { font-size: var(--fs-micro); }
-.ds-file-grid[data-density="compact"] .ds-file-icon { width: 20px; height: 20px; font-size: 13px; }
+.ds-file-grid[data-density="compact"] .ds-file-icon { width: 20px; height: 20px; font-size: var(--fs-tiny); }
 
 /* Thumbnail density — tile grid; image entries carry a real lazy thumbnail. */
 .ds-file-grid-thumb {
@@ -265,11 +270,14 @@
 .ds-file-cell.is-locked { opacity: 0.6; }
 .ds-file-row.is-locked { opacity: 0.6; }
 .ds-file-row.is-restricted .title { color: var(--fg-2); }
-/* A fourth, deliberately bordered/mono tag variant for file-permission tags
+/* 1px vertical pad is deliberately below --space-hair (2px): this mono tag
+   sits inline in a file row and must not add height to it; --space-hair would
+   double the vertical pad and push the tag past the row cap height.
+   A fourth, deliberately bordered/mono tag variant for file-permission tags
    specifically (distinct from .ds-badge for numeric counts and .chip for
    status/label words) - is-noaccess reuses the shared --flame tone token
    so 'no access' reads the same red as chip.tone-error/miss elsewhere. */
-.ds-file-perm-tag { font-family: var(--ff-mono); font-size: var(--fs-micro); color: var(--fg-3); padding: 1px 6px; border: var(--bw-hair) solid var(--rule); border-radius: var(--r-1); white-space: nowrap; }
+.ds-file-perm-tag { font-family: var(--ff-mono); font-size: var(--fs-micro); color: var(--fg-3); padding: 1px var(--space-1-75); border: var(--bw-hair) solid var(--rule); border-radius: var(--r-1); white-space: nowrap; }
 .ds-file-perm-tag.is-noaccess { color: var(--flame); border-color: var(--flame); }
 .ds-file-cell-open {
   display: flex; flex-direction: column; align-items: stretch; gap: var(--space-1);
@@ -283,6 +291,10 @@
   width: 100%; aspect-ratio: 4 / 3;
   background: var(--bg-2); border-radius: var(--r-1); overflow: hidden;
 }
+/* 24px is the ICON size inside a 34px chip, not a type tier — it is matched to
+   the chip box, not to the text scale (the --fs-* rungs jump 21px -> fluid
+   heading clamps, so neither substitutes without resizing the icon). Same
+   reasoning for the other four .ds-*-glyph rules in this sheet. */
 .ds-file-cell-media .ds-file-icon { width: 34px; height: 34px; font-size: 24px; }
 .ds-file-cell-thumb { width: 100%; height: 100%; object-fit: cover; }
 /* Per-type icon tints on thumb tiles so the grid keeps the colour-coding the
@@ -301,7 +313,7 @@
 }
 .ds-file-cell-meta { font-family: var(--ff-mono); font-size: var(--fs-micro); color: var(--fg-3); text-align: left; }
 .ds-file-cell-check {
-  position: absolute; top: 4px; left: 4px; z-index: 1;
+  position: absolute; top: 4px; left: 4px; z-index: var(--z-raised);
   background: color-mix(in oklab, var(--bg) 78%, transparent);
 }
 
@@ -338,12 +350,12 @@
 
 /* Breadcrumb path */
 .ds-crumb-path {
-  display: flex; align-items: center; flex-wrap: wrap; gap: 2px;
+  display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-hair);
   font-size: var(--fs-sm);
 }
 .ds-crumb-seg {
   background: transparent; border: 0; cursor: pointer;
-  padding: 4px 8px; border-radius: var(--r-1);
+  padding: var(--space-1) var(--space-2); border-radius: var(--r-1);
   color: var(--fg-3); font-family: inherit; font-size: var(--fs-sm);
   transition: background var(--dur-snap) var(--ease), color var(--dur-snap) var(--ease);
   /* A single long unbroken segment (hash-named dir) must never force the
@@ -391,7 +403,7 @@
 /* Toolbar-scoped buttons: quiet, compact, rectangular - a toolbar is chrome,
    not a CTA row; the stadium pill stays for real page-level actions. */
 .ds-file-toolbar .btn, .ds-file-toolbar .btn-ghost {
-  padding: 5px 12px; min-height: 32px;
+  padding: var(--space-1-5) var(--space-2-75); min-height: 32px;
   border-radius: var(--r-1);
   font-weight: 500;
   background: transparent;
@@ -408,7 +420,7 @@
 
 /* Error banner — dismissible toast row. */
 .ds-error-banner {
-  padding: 10px 14px; border-radius: var(--r-2);
+  padding: var(--space-2-5) var(--space-2-75); border-radius: var(--r-2);
   background: color-mix(in oklab, var(--warn) 14%, var(--bg));
   border: var(--bw-hair) solid color-mix(in oklab, var(--warn) 40%, transparent);
   color: var(--warn); font-size: var(--fs-sm); cursor: pointer;
@@ -426,6 +438,7 @@
   gap: var(--space-2); flex-wrap: wrap;
   padding: var(--space-4) var(--space-3); text-align: center;
 }
+/* Icon size, not type — see .ds-file-cell-media .ds-file-icon above. */
 .ds-dropzone-glyph { font-size: 22px; color: var(--fg-3); }
 .ds-dropzone-label { font-size: var(--fs-sm); color: var(--fg-3); }
 .ds-dropzone.dragover {
@@ -447,7 +460,7 @@
 .ds-dropzone--wrap { position: relative; border: none; border-radius: 0; background: transparent; }
 .ds-dropzone--wrap > .ds-dropzone-inner { display: none; }
 .ds-dropzone--wrap.dragover > .ds-dropzone-inner {
-  display: flex; position: absolute; inset: 0; z-index: 5;
+  display: flex; position: absolute; inset: 0; z-index: var(--z-raised);
   margin: 0; padding: var(--space-3);
   align-items: center; justify-content: center;
   background: color-mix(in srgb, var(--bg) 84%, transparent);
@@ -465,11 +478,11 @@
 }
 
 /* Upload progress */
-.ds-upload-progress { display: flex; flex-direction: column; gap: 6px; }
+.ds-upload-progress { display: flex; flex-direction: column; gap: var(--space-1-75); }
 .ds-upload-item {
   display: grid; grid-template-columns: minmax(0, 1fr) 120px 44px;
   gap: var(--space-2); align-items: center;
-  padding: 8px 12px; border-radius: var(--r-2);
+  padding: var(--space-2) var(--space-2-75); border-radius: var(--r-2);
   background: var(--bg-2); font-size: var(--fs-xs);
 }
 .ds-upload-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -513,7 +526,7 @@
 }
 .ds-upload-actions { display: inline-flex; gap: var(--space-1); justify-content: flex-end; }
 .ds-upload-act {
-  padding: 2px 10px; min-height: 24px; cursor: pointer;
+  padding: var(--space-hair) var(--space-2-5); min-height: 24px; cursor: pointer;
   background: var(--bg); border: var(--bw-hair) solid var(--rule); border-radius: var(--r-1);
   color: var(--fg-2); font-family: var(--ff-body); font-size: var(--fs-micro);
 }
@@ -534,12 +547,13 @@
   gap: var(--space-2); padding: var(--space-6) var(--space-3);
   color: var(--fg-3); text-align: center;
 }
+/* Icon size, not type — see .ds-file-cell-media .ds-file-icon above. */
 .ds-file-empty-glyph { font-size: 34px; opacity: 0.55; }
 .ds-file-empty-text { font-size: var(--fs-sm); }
 
 /* -- Modals ------------------------------------------------- */
 .ds-modal-backdrop {
-  position: fixed; inset: 0; z-index: var(--z-modal, 800);
+  position: fixed; inset: 0; z-index: var(--z-modal);
   display: flex; align-items: center; justify-content: center;
   /* Notch/home-indicator safe: near-fullscreen modals must not slide under. */
   padding: max(var(--space-3), env(safe-area-inset-top))
@@ -583,22 +597,26 @@
   border-top: var(--bw-hair) solid var(--rule);
 }
 .ds-modal-input {
-  width: 100%; padding: 10px 12px;
+  width: 100%; padding: var(--space-2-5) var(--space-2-75);
   background: var(--bg-2); border: var(--bw-hair) solid var(--rule);
   border-radius: var(--r-2); color: var(--fg);
   font-family: inherit; font-size: var(--fs-sm);
 }
 .ds-modal-input:focus-visible { outline: var(--focus-w) solid var(--focus-color); outline-offset: var(--focus-offset); }
-/* iOS auto-zooms inputs under 16px on focus, breaking the modal layout. */
+/* iOS auto-zooms inputs under 16px on focus, breaking the modal layout.
+   Deliberately a literal, NOT var(--fs-body): --fs-body is re-declared to
+   15px under [data-typescale="sm"], which would silently drop this input back
+   under the zoom threshold on any density-reduced page. The 16px here is a
+   platform constant, not a point on the type scale. */
 @media (hover: none), (pointer: coarse) {
   .ds-modal-input { font-size: 16px; min-height: 44px; }
 }
 /* PromptDialog's optional roots-chip row (destination-path prompts with more
    than one allowed root) - same chip idiom the cwd editor's roots row uses. */
-.ds-prompt-roots { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.ds-prompt-roots { display: flex; align-items: center; gap: var(--space-1-75); flex-wrap: wrap; margin-top: var(--space-2); }
 .ds-prompt-root-chip {
   background: var(--bg-2); border: var(--bw-hair) solid var(--rule); color: var(--fg-2);
-  border-radius: var(--r-pill); padding: 3px 10px; font: inherit; font-size: var(--fs-tiny);
+  border-radius: var(--r-pill); padding: var(--space-half) var(--space-2-5); font: inherit; font-size: var(--fs-tiny);
   cursor: pointer;
 }
 .ds-prompt-root-chip:hover { border-color: var(--accent); color: var(--fg); }
@@ -607,15 +625,20 @@
 /* In-body modal error (role=alert): mutation failures (409/403) surface INSIDE
    the dialog, not behind the fixed overlay. */
 .ds-modal-error {
-  margin: var(--space-2) 0 0; padding: 8px 10px;
+  margin: var(--space-2) 0 0; padding: var(--space-2) var(--space-2-5);
   border: var(--bw-hair) solid var(--flame); border-radius: var(--r-2);
   background: color-mix(in oklab, var(--flame) 12%, var(--bg));
   color: var(--flame); font-size: var(--fs-xs);
 }
+/* --ink, not --on-color: --on-color is a fixed #fff, which reads fine on a dark
+   fill but measures 3.07:1 on --warn (#FF5A52, a light red) -- below the 4.5:1
+   floor. --ink on the same fill measures 6.27:1. Same principle as the
+   --accent/--accent-ink split the token layer documents: a light saturated fill
+   takes the dark text tone. Measured in a live browser. */
 .btn-primary.danger {
   background: var(--warn);
   border-color: var(--warn);
-  color: var(--on-color);
+  color: var(--ink);
 }
 .btn-primary.danger:hover { filter: brightness(0.92); border-color: var(--warn); }
 
@@ -635,7 +658,7 @@
   color: var(--fg-3); white-space: nowrap;
   flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
 }
-.ds-preview-actions { display: inline-flex; gap: 2px; margin-left: auto; }
+.ds-preview-actions { display: inline-flex; gap: var(--space-hair); margin-left: auto; }
 .ds-preview-body {
   flex: 1; min-height: 0; overflow: auto;
   padding: var(--space-3) var(--space-4);
@@ -659,6 +682,24 @@
 }
 .ds-preview-text { white-space: pre-wrap; word-break: break-word; }
 .ds-preview-code code, .ds-preview-text code { font: inherit; color: inherit; background: none; }
+/* wrap-lines toggle (ported from pi-web's DisplayMode word-wrap control) */
+.ds-preview-code.is-wrapped { white-space: pre-wrap; overflow-wrap: anywhere; }
+.ds-preview-wrap-toggle.active { color: var(--paper); background: color-mix(in oklab, var(--paper) 18%, transparent); }
+/* source/preview mode switch (ported from pi-web's markdown/HTML DisplayMode
+   tabs) — the host supplies already-rendered, already-sanitized HTML via
+   `previewHtml`; this component only toggles visibility. */
+.ds-preview-mode-switch { display: inline-flex; gap: var(--space-1); margin-right: var(--space-1); }
+.ds-preview-mode-btn {
+  font-family: var(--ff-mono); font-size: var(--fs-micro);
+  padding: var(--space-1) var(--space-2); border-radius: var(--r-1);
+  color: var(--paper-3); background: none; border: none; cursor: pointer;
+}
+.ds-preview-mode-btn.active { color: var(--paper); background: color-mix(in oklab, var(--paper) 18%, transparent); }
+.ds-preview-html {
+  flex: 1; min-height: 0; overflow: auto;
+  padding: var(--space-3) var(--space-4);
+  background: var(--bg-0); border-radius: var(--r-2);
+}
 .ds-preview-truncated {
   margin-top: var(--space-2); padding-top: var(--space-2);
   border-top: var(--bw-hair) solid color-mix(in oklab, var(--paper) 20%, transparent);
@@ -668,6 +709,7 @@
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: var(--space-2); padding: var(--space-6); color: var(--fg-3);
 }
+/* Icon size, not type — see .ds-file-cell-media .ds-file-icon above. */
 .ds-preview-glyph { font-size: 34px; opacity: 0.6; }
 
 /* Thin scrollbars inside preview bodies. */
@@ -704,6 +746,6 @@
   .ds-file-stage { padding: var(--space-3) var(--space-2); }
   /* Preview head: let it wrap and drop the nowrap meta (duplicated in body)
      so the close button can never be pushed past the modal edge. */
-  .ds-preview-head { flex-wrap: wrap; row-gap: 4px; }
+  .ds-preview-head { flex-wrap: wrap; row-gap: var(--space-1); }
   .ds-preview-meta { display: none; }
 }

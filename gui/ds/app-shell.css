@@ -22,3 +22,19 @@
 @import url('./src/css/app-shell/row-print.css');
 @import url('./src/css/app-shell/data-density.css');
 @import url('./src/css/app-shell/kits-appended.css');
+/* The four below were bundled into dist by the appShellSplitFiles list in
+   scripts/build.mjs but were never imported here, so the two delivery paths
+   disagreed: the dist bundle carried their rules while every consumer that
+   links this barrel directly -- the preview pages and the per-kit index pages
+   -- rendered those components unstyled. 113 class names across 471 lines,
+   used by the skills-config, plugins-config, models-config and git-status
+   components under src/components/. Importing them here makes the barrel the
+   complete set again, which is the invariant the header comment above already
+   claims. scripts/lint-tokens.mjs now enforces that every sheet in
+   src/css/app-shell/ is reachable from this file, so the set cannot silently
+   diverge again. Order matches appShellSplitFiles exactly; the two must stay
+   identical or a page cascades differently depending on which path loaded it. */
+@import url('./src/css/app-shell/git-status.css');
+@import url('./src/css/app-shell/plugins-config.css');
+@import url('./src/css/app-shell/models-config.css');
+@import url('./src/css/app-shell/skills-config.css');

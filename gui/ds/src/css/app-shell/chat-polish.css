@@ -8,7 +8,7 @@
   flex: 1; min-height: 0; gap: var(--space-3);
 }
 .chat-head {
-  display: flex; align-items: baseline; gap: 8px;
+  display: flex; align-items: baseline; gap: var(--space-2);
   padding: var(--space-3) 0 var(--space-2);
   font-family: var(--ff-mono); font-size: var(--fs-xs);
   color: var(--fg-3); text-transform: lowercase; letter-spacing: 0.02em;
@@ -46,16 +46,16 @@
 .chat-empty-title { font-size: var(--fs-sm); margin: 0 0 var(--space-1); }
 .chat-empty-sub { font-size: var(--fs-tiny); margin: 0; opacity: .7; }
 
-.chat-msg { display: flex; gap: 12px; align-items: flex-start; padding: 6px 0; position: relative; min-width: 0; }
+.chat-msg { display: flex; gap: var(--space-2-75); align-items: flex-start; padding: var(--space-1-75) 0; position: relative; min-width: 0; }
 .chat-msg.you { flex-direction: row-reverse; }
 .chat-msg.you .chat-stack { align-items: flex-end; }
-.chat-msg:hover { background: color-mix(in oklab, var(--fg) 4%, transparent); padding: 6px 0; margin: 0; border-radius: var(--r-0); transition: background var(--dur-base) var(--ease); }
+.chat-msg:hover { background: color-mix(in oklab, var(--fg) 4%, transparent); padding: var(--space-1-75) 0; margin: 0; border-radius: var(--r-0); transition: background var(--dur-base) var(--ease); }
 
 .chat-avatar {
   width: 36px; height: 36px; flex-shrink: 0;
   border-radius: 50%; background: var(--bg-3); color: var(--fg);
   display: inline-flex; align-items: center; justify-content: center;
-  font-family: var(--ff-mono); font-size: 12px; font-weight: 600;
+  font-family: var(--ff-mono); font-size: var(--fs-micro); font-weight: 600;
   text-transform: lowercase; letter-spacing: 0.02em; user-select: none;
   transition: transform 0.12s ease, box-shadow 0.12s ease;
   position: relative;
@@ -71,13 +71,16 @@
 }
 
 .chat-stack {
-  display: flex; flex-direction: column; gap: 4px;
+  display: flex; flex-direction: column; gap: var(--space-1);
   max-width: min(70%, 56ch); min-width: 0;
   flex: 0 1 auto; overflow: hidden;
 }
 
 .chat-bubble {
-  padding: 10px 14px; background: var(--bg-2); color: var(--fg);
+  /* 14px inline has no tier (--space-2-75 is 12, --space-3 is 16). It is the
+     shared bubble/attachment inset used by .chat-file/.chat-pdf-head below;
+     snapping only this one would visibly desync the bubble from its cards. */
+  padding: var(--space-2-5) 14px; background: var(--bg-2); color: var(--fg);
   max-width: 100%;
   border-radius: var(--r-2); line-height: 1.55;
   word-wrap: break-word; overflow-wrap: anywhere;
@@ -93,9 +96,14 @@
   border: 1px solid color-mix(in oklab, var(--mascot) 28%, transparent);
 }
 .chat-bubble code {
+  /* em-relative on purpose: inline code tracks the size of the prose it sits
+     inside (the mono face runs optically large next to the system stack, hence
+     0.92). An absolute --fs-* tier would decouple it from its own paragraph. */
   font-family: var(--ff-mono); font-size: 0.92em;
   background: color-mix(in oklab, var(--fg) 10%, transparent);
-  padding: 1px 6px; border-radius: var(--r-0);
+  /* 1px block is deliberately under --space-hair (2px): inline <code> must not
+     grow the line box of the prose it sits inside. */
+  padding: 1px var(--space-1-75); border-radius: var(--r-0);
 }
 .chat-msg.you .chat-bubble code { background: color-mix(in oklab, var(--fg) 10%, transparent); }
 .chat-bubble a {
@@ -117,22 +125,34 @@
   font-family: var(--ff-body); font-weight: 600;
   margin: var(--space-2) 0 var(--space-1); line-height: var(--lh-snug);
 }
+/* em-relative on purpose, NOT --fs-h1..h3: markdown headings inside a chat
+   bubble are a hierarchy WITHIN the bubble's own type size, not page headings.
+   The --fs-h* tiers are fluid clamp()s tuned to page container queries and
+   would render a bubble heading at 34px+, dwarfing the message it labels.
+   These stay a tight ratio ladder off whatever size the bubble is set at. */
 .chat-bubble.chat-md h1 { font-size: 1.15em; }
 .chat-bubble.chat-md h2 { font-size: 1.08em; }
 .chat-bubble.chat-md h3 { font-size: 1.04em; }
 .chat-bubble.chat-md p { margin: var(--space-2) 0; }
 .chat-bubble.chat-md ul,
+/* 22px is the list-marker hang, matched to the mono digit+period width so
+   ordered markers align with the bubble text edge - not a spacing-scale value. */
 .chat-bubble.chat-md ol { margin: var(--space-2) 0; padding-left: 22px; }
 .chat-bubble.chat-md li { margin: var(--space-1) 0; }
 .chat-bubble.chat-md blockquote {
-  margin: var(--space-2) 0; padding: 4px 12px;
-  border-left: 3px solid color-mix(in oklab, currentColor 30%, transparent);
+  margin: var(--space-2) 0; padding: var(--space-1) var(--space-2-75);
+  /* DELIBERATE, but slimmed to the --bw-rule tier. This is a real markdown
+     <blockquote> inside a chat bubble: the left rule is the standard
+     typographic quotation mark, not a colored alert stripe (the tone is a
+     currentColor mix that inherits the bubble's own ink — never an accent).
+     A 3px off-scale literal read as the generic tell; 2px reads as type. */
+  border-left: var(--bw-rule) solid color-mix(in oklab, currentColor 30%, transparent);
   color: color-mix(in oklab, currentColor 75%, transparent); font-style: italic;
 }
 .chat-bubble.chat-md pre {
   background: var(--bg);
   border: 1px solid color-mix(in oklab, var(--fg) 12%, transparent);
-  padding: 12px 16px; border-radius: var(--r-1); overflow-x: auto;
+  padding: var(--space-2-75) var(--space-3); border-radius: var(--r-1); overflow-x: auto;
   font-family: var(--ff-mono); font-size: var(--fs-xs); line-height: 1.55;
   color: var(--fg); margin: var(--space-2) 0;
 }
@@ -146,11 +166,36 @@
 }
 /* Markdown tables + horizontal rules: agents routinely emit them, but they were
    unstyled (bare unspaced cells, vanished rules). */
-.chat-bubble.chat-md table { border-collapse: collapse; width: auto; max-width: 100%; margin: 8px 0; font-size: .95em; display: block; overflow-x: auto; }
+.chat-bubble.chat-md table { border-collapse: collapse; width: auto; max-width: 100%; margin: var(--space-2) 0; font-size: .95em; /* em-relative: a table inside a bubble reads one notch down from the bubble's own copy, not off an absolute tier */ display: block; overflow-x: auto; }
 .chat-bubble.chat-md th,
-.chat-bubble.chat-md td { border: var(--bw-hair) solid var(--rule); padding: 4px 10px; text-align: left; }
+.chat-bubble.chat-md td { border: var(--bw-hair) solid var(--rule); padding: var(--space-1) var(--space-2-5); text-align: left; }
 .chat-bubble.chat-md th { background: color-mix(in oklab, var(--fg) 5%, transparent); font-weight: 600; }
-.chat-bubble.chat-md hr { border: 0; border-top: var(--bw-hair) solid var(--rule); margin: 12px 0; }
+.chat-bubble.chat-md hr { border: 0; border-top: var(--bw-hair) solid var(--rule); margin: var(--space-2-75) 0; }
+
+/* Mermaid diagram blocks — rendered SVG swapped in over the fenced source by
+   src/mermaid.js's renderMermaidBlocksUnder(); the source .pre stays in the
+   DOM (display:none) behind a source/diagram toggle button. */
+.ds-mermaid-block {
+  position: relative; margin: var(--space-2) 0;
+  border: 1px solid color-mix(in oklab, var(--fg) 12%, transparent);
+  border-radius: var(--r-1); background: var(--bg); padding: var(--space-2-75) var(--space-3);
+}
+.ds-mermaid-diagram { overflow-x: auto; display: flex; justify-content: center; }
+.ds-mermaid-diagram svg { max-width: 100%; height: auto; }
+.ds-mermaid-toggle {
+  position: absolute; top: 6px; right: 6px;
+  font: inherit; font-size: var(--fs-xs); line-height: 1;
+  background: color-mix(in oklab, var(--fg) 8%, transparent);
+  color: var(--fg); border: none; border-radius: var(--r-1);
+  padding: var(--space-1) var(--space-2); cursor: pointer;
+}
+.ds-mermaid-toggle:hover { background: color-mix(in oklab, var(--fg) 14%, transparent); }
+
+/* Inline/display math — KaTeX HTML swapped into text nodes by
+   src/math.js's renderMathBlocksUnder(). Display math centers on its own line;
+   inline math sits within running text. */
+.ds-math-display { display: block; margin: var(--space-2) 0; text-align: center; overflow-x: auto; }
+.ds-math-inline { display: inline-block; }
 
 .chat-msg .chat-bubble.chat-code,
 .chat-msg.you .chat-bubble.chat-code,
@@ -175,8 +220,8 @@
   min-width: 0;
 }
 .chat-code-head {
-  display: flex; align-items: center; gap: 10px;
-  padding: 8px 12px;
+  display: flex; align-items: center; gap: var(--space-2-5);
+  padding: var(--space-2) var(--space-2-75);
   background: color-mix(in oklab, var(--fg) 6%, var(--bg-2));
   border-bottom: 1px solid color-mix(in oklab, var(--fg) 12%, transparent);
   font-family: var(--ff-mono); font-size: var(--fs-xs); color: var(--fg-3);
@@ -186,7 +231,7 @@
 .chat-code-head .name { color: var(--fg-2); font-weight: 500; }
 .chat-code-head .spread { flex: 1; }
 .chat-bubble.chat-code pre {
-  margin: 0; padding: 12px 16px; background: transparent;
+  margin: 0; padding: var(--space-2-75) var(--space-3); background: transparent;
   font-family: var(--ff-mono); font-size: var(--fs-xs); line-height: 1.55;
   overflow-x: auto; color: var(--fg); border-radius: 0;
 }
@@ -218,12 +263,12 @@
 }
 .chat-image img { display: block; width: 100%; height: auto; max-height: 360px; object-fit: cover; }
 .chat-image .cap,
-.chat-image .caption { display: block; padding: 8px 12px; font-size: var(--fs-xs); color: var(--fg-3); font-family: var(--ff-mono); }
+.chat-image .caption { display: block; padding: var(--space-2) var(--space-2-75); font-size: var(--fs-xs); color: var(--fg-3); font-family: var(--ff-mono); }
 
 .chat-msg.you .chat-file,
 .chat-msg .chat-file,
 .chat-file {
-  display: flex; align-items: center; gap: 12px; padding: 12px 14px;
+  display: flex; align-items: center; gap: var(--space-2-75); padding: var(--space-2-75) 14px;
   background: var(--bg-2); border: 1px solid color-mix(in oklab, var(--fg) 10%, transparent);
   border-radius: var(--r-1); text-decoration: none; color: var(--fg);
   max-width: min(100%, 360px);
@@ -231,19 +276,22 @@
 }
 .chat-file:hover { background: var(--bg-3); }
 .chat-file .glyph {
+  /* 22px is the ICON size inside a 36px chip — matched to the chip box, not to
+     the type scale (--fs-xl is 21px, and above it every rung is a fluid
+     heading clamp). Snapping it visibly resizes the mark. */
   font-size: 22px; width: 36px; height: 36px;
   display: inline-flex; align-items: center; justify-content: center;
   background: var(--bg-3);
   color: var(--fg-2); border-radius: var(--r-0); flex-shrink: 0; font-family: var(--ff-mono);
 }
-.chat-file > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.chat-file > div { display: flex; flex-direction: column; gap: var(--space-hair); min-width: 0; }
 .chat-file .name {
   font-weight: 600; font-size: var(--fs-sm);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
 }
-.chat-file .meta { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.chat-file .meta { display: flex; flex-direction: column; gap: var(--space-hair); min-width: 0; flex: 1; }
 .chat-file .size { font-family: var(--ff-mono); font-size: var(--fs-xs); color: var(--fg-3); }
-.chat-file .go { font-family: var(--ff-mono); font-size: 16px; color: var(--fg-3); flex-shrink: 0; }
+.chat-file .go { font-family: var(--ff-mono); font-size: var(--fs-body); color: var(--fg-3); flex-shrink: 0; }
 .chat-file:hover .go { color: var(--accent-ink); }
 
 .chat-msg.you .chat-pdf,
@@ -257,11 +305,11 @@
 }
 .chat-msg:hover .chat-pdf { border-color: var(--rule); }
 .chat-pdf-head {
-  display: flex; align-items: center; gap: 10px; padding: 10px 14px;
+  display: flex; align-items: center; gap: var(--space-2-5); padding: var(--space-2-5) 14px;
   background: color-mix(in oklab, var(--fg) 5%, var(--bg-2));
   border-bottom: 1px solid color-mix(in oklab, var(--fg) 10%, transparent);
 }
-.chat-pdf-head .glyph { font-size: 18px; color: var(--mascot); flex-shrink: 0; }
+.chat-pdf-head .glyph { font-size: var(--fs-lg); color: var(--mascot); flex-shrink: 0; }
 .chat-pdf-head .name { flex: 1; font-weight: 600; font-size: var(--fs-sm); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .chat-pdf-head .size { font-family: var(--ff-mono); font-size: var(--fs-xs); color: var(--fg-3); }
 .chat-pdf-head a { color: var(--accent-ink); font-family: var(--ff-mono); font-size: var(--fs-xs); text-decoration: none; }
@@ -272,7 +320,7 @@
 .chat-msg.you .chat-link,
 .chat-msg .chat-link,
 .chat-link {
-  display: grid; grid-template-columns: 80px 1fr; gap: 12px; padding: 10px;
+  display: grid; grid-template-columns: 80px 1fr; gap: var(--space-2-75); padding: var(--space-2-5);
   background: var(--bg-2);
   border: 1px solid color-mix(in oklab, var(--fg) 10%, transparent);
   border-radius: var(--r-1); text-decoration: none; color: var(--fg);
@@ -286,28 +334,28 @@
 .chat-link:not(:has(.thumb)):not(:has(img)) { grid-template-columns: 1fr; }
 .chat-link .thumb,
 .chat-link img.thumb { width: 80px; height: 80px; border-radius: var(--r-0); object-fit: cover; background: var(--bg-3) center/cover no-repeat; }
-.chat-link .meta { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.chat-link .meta { display: flex; flex-direction: column; gap: var(--space-1); min-width: 0; }
 .chat-link .host { font-family: var(--ff-mono); font-size: var(--fs-xs); color: var(--fg-3); text-transform: lowercase; }
 .chat-link .title { font-weight: 600; font-size: var(--fs-sm); line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .chat-link .desc { font-size: var(--fs-xs); color: var(--fg-2); line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 
 .chat-meta {
-  display: flex; align-items: center; gap: 6px;
+  display: flex; align-items: center; gap: var(--space-1-75);
   font-family: var(--ff-mono); font-size: var(--fs-xs); color: var(--fg-3);
-  padding: 0 6px; letter-spacing: 0.02em;
+  padding: 0 var(--space-1-75); letter-spacing: 0.02em;
 }
 .chat-meta .who { font-weight: 600; color: var(--fg-2); }
 .chat-meta .who::after { content: ' ·'; color: var(--fg-3); font-weight: 400; }
 .chat-meta .t { color: var(--fg-3); }
-.chat-meta .tick { color: var(--fg-3); margin-left: 2px; letter-spacing: -2px; font-family: var(--ff-mono); }
+.chat-meta .tick { color: var(--fg-3); margin-left: var(--space-hair); letter-spacing: -2px; font-family: var(--ff-mono); }
 .chat-meta .tick.read { color: var(--accent-ink); }
 
 .chat-reactions {
-  display: flex; gap: 4px; flex-wrap: wrap; margin-top: 2px;
+  display: flex; gap: var(--space-1); flex-wrap: wrap; margin-top: var(--space-hair);
 }
 .chat-reactions .rxn {
-  display: inline-flex; align-items: center; gap: 4px;
-  padding: 2px 8px; background: var(--bg-2);
+  display: inline-flex; align-items: center; gap: var(--space-1);
+  padding: var(--space-hair) var(--space-2); background: var(--bg-2);
   border: 1px solid color-mix(in oklab, var(--fg) 10%, transparent);
   border-radius: var(--r-pill); font-size: var(--fs-xs);
   cursor: pointer; user-select: none;
@@ -320,11 +368,11 @@
   border-color: color-mix(in oklab, var(--accent) 55%, transparent);
   color: var(--accent-ink);
 }
-.chat-reactions .rxn .e { font-size: 14px; line-height: 1; }
-.chat-reactions .rxn .n { font-family: var(--ff-mono); font-weight: 600; font-size: 11px; color: var(--fg-2); }
+.chat-reactions .rxn .e { font-size: var(--fs-xs); line-height: 1; }
+.chat-reactions .rxn .n { font-family: var(--ff-mono); font-weight: 600; font-size: var(--fs-nano); color: var(--fg-2); }
 .chat-reactions .rxn.you .n { color: var(--accent-ink); }
 
-.chat-typing { display: inline-flex; gap: 4px; align-items: center; }
+.chat-typing { display: inline-flex; gap: var(--space-1); align-items: center; }
 .chat-typing span {
   width: 6px; height: 6px; border-radius: 50%; background: var(--fg-3);
 }
@@ -392,7 +440,7 @@
   box-shadow: 0 0 0 2px color-mix(in oklab, var(--flame) 22%, transparent);
 }
 .chat-composer textarea {
-  flex: 1; min-width: 0; padding: 8px 4px;
+  flex: 1; min-width: 0; padding: var(--space-2) var(--space-1);
   background: none; color: var(--fg);
   border: none; border-radius: 0;
   font-family: inherit; font-size: var(--fs-sm);
@@ -446,14 +494,24 @@
   .composer-btn { transition: none; }
 }
 
-.aicat-portrait { display: inline-flex; align-items: center; gap: 10px; padding: 4px 0; }
+.aicat-portrait { display: inline-flex; align-items: center; gap: var(--space-2-5); padding: var(--space-1) 0; }
 .aicat-face {
+  /* 24px is the ICON size inside a 32px round chip — see .chat-file .glyph. */
   width: 32px; height: 32px; font-size: 24px;
   display: inline-flex; align-items: center; justify-content: center;
   background: color-mix(in oklab, var(--mascot) 22%, var(--bg-2));
   border-radius: 50%; flex-shrink: 0;
+  /* Cancels the global `pre { overflow-x: auto }`. This is a fixed 32px
+     decorative chip, so the art overflowing its own box made it an
+     unreachable keyboard scroll container (WCAG scrollable-region-focusable)
+     rather than something a user could ever usefully scroll. */
+  overflow: hidden;
 }
 .aicat-meta { display: flex; flex-direction: column; font-family: var(--ff-mono); font-size: var(--fs-xs); color: var(--fg-3); }
+/* --mascot-deep is now theme-tuned at the token layer (paper #B81F63 /
+   ink #FF5C9E), so this needs no per-theme override. The previous
+   [data-theme="dark"],[data-theme="ink"] override missed data-theme="auto"
+   under OS-dark, which is how the kits actually render — the author name
+   fell back to the paper tone at 3.13:1 on ink. */
 .aicat-meta .name { color: var(--mascot-deep, var(--mascot)); font-weight: 600; }
-[data-theme="dark"] .aicat-meta .name, [data-theme="ink"] .aicat-meta .name { color: var(--mascot); }
 
