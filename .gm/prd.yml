@@ -6,22 +6,30 @@
   title: Make the onclick-bearing div in panels.js keyboard-operable
   body: 'Measured: panels.js clickable_div=1 (a div carrying onclick with no button semantics). onkeydown=2 across the whole file. A div with onclick is unreachable by keyboard and invisible to AT.'
   SESSION_ID: gmsniff-gui-impeccable-1785231986
-  status: pending
+  status: completed
+  witness: 'REFUTED by execution: walked every element in all 8 panels for a click handler on a non-button/link with no role and no tab stop -- [] on every panel. My static regex flagged one div in panels.js; the rendered DOM has none.'
+  commit_comment: 'Refuted: no non-semantic clickables in any panel'
 - id: gui-reduced-motion-coverage
   title: Extend prefers-reduced-motion coverage beyond the single existing block
   body: 'Measured: gui-extra.css prefers_reduced_motion=1 block, media_q=4 total. Any transition/animation outside that one block ignores the user setting.'
   SESSION_ID: gmsniff-gui-impeccable-1785231986
-  status: pending
+  status: completed
+  witness: 'Measured in the live browser: 20 prefers-reduced-motion blocks are active, led by a universal ''.ds-247420 *, ::before, ::after'' rule plus per-component blocks for toggle/tooltip/popover/drawer/dialog/toast/tabs/tree/reorder. Of 414 elements carrying a transition or animation, the suppressed ones report a 1e-05s duration - the SDK neutralises rather than removes, which keeps transitionend handlers firing. My earlier count of 1 block came from grepping gui-extra.css alone and ignored the whole vendored layer.'
+  commit_comment: Verify reduced-motion coverage across the vendored layer
 - id: gui-panels-aria-floor
   title: Raise accessibility floor in panels.js (1137 lines, 49 divs, 1 aria, 1 role, 0 sr-only)
   body: 'Measured panels.js: aria=1, role=1, sr_only=0, focus_visible=0, tabindex=1 across 1137 lines and 49 div elements. Largest GUI surface with the thinnest a11y annotation.'
   SESSION_ID: gmsniff-gui-impeccable-1785231986
-  status: pending
+  status: completed
+  witness: 'Fixed the real gap the aria count stood in for: both data tables rendered 0 scoped headers and no accessible name (events 38/0, days 7/0 measured live). Now events is 13/13 scoped with aria-label "100 event row(s), 13 columns", days 14/14 via aria-labelledby its own h2, both with thead/tbody and th scope=row on the identifying column.'
+  commit_comment: Give every data table scoped headers and a name
 - id: gui-live-agents-aria-floor
   title: Raise accessibility floor in live-agents.js (886 lines, 34 divs, 1 aria, 0 sr-only)
   body: 'Measured live-agents.js: aria=1, role=2, sr_only=0, aria_live=0, focus_visible=0. This is the primary product surface (live manager view) and it announces nothing to a screen reader.'
   SESSION_ID: gmsniff-gui-impeccable-1785231986
-  status: pending
+  status: completed
+  witness: 'Measured live rather than by grep: the agents panel renders 30 focusables, 2 live regions, 0 non-semantic clickables, and every focusable resolves an accessible name through the full aria-label/aria-labelledby/label-for/wrapping-label/text/title chain. The source aria= count is not the measurement; the rendered accessibility tree is.'
+  commit_comment: Verify the live-agents accessibility tree
 - id: gui-responsive-coverage
   title: Audit and extend responsive behavior (4 media queries for a 187KB GUI)
   body: 'Measured: media_q=4 in gui-extra.css, 0 elsewhere; the SDK ships src/css/app-shell/responsive.css and responsive2-workspace.css as the reference. A 3-panel manager view with 4 breakpoints has unverified narrow-viewport behavior.'
@@ -51,7 +59,9 @@
   title: Witness the Ctrl+K command palette against focus-trap and escape semantics
   body: 'AGENTS.md states demoted panels stay reachable via the Ctrl+K palette and #panel= deep links - so the palette is the sole affordance for tier-2 panels. Its focus trap, escape, aria-modal and result-announcement are unwitnessed.'
   SESSION_ID: gmsniff-gui-impeccable-1785231986
-  status: pending
+  status: completed
+  witness: 'Witnessed the full open/navigate/close cycle: Ctrl+K opens with the input focused (document.activeElement === the input), role=combobox with aria-controls=ov-cmd-list, aria-expanded=true, and aria-activedescendant tracking arrow keys (ov-cmd-item-0 -> ov-cmd-item-1 on ArrowDown) across 23 options; Escape empties the host (innerHTML length 0) and restores focus to the previously-focused element. An earlier ''focus not moved into dialog'' reading was a probe defect - it tested containment against a matched inner node rather than the palette host.'
+  commit_comment: Witness the command palette focus and ARIA cycle
 - id: gui-keyboard-nav-roving
   title: Give GUI lists roving-focus keyboard navigation
   body: 'SDK FileGrid implements ArrowDown/ArrowUp/Home/End/Backspace/Ctrl+A roving focus over a grid. Measured gmsniff: onkeydown=2 in panels.js, 1 in live-agents.js, 0 in app.js - the live-agents list has no keyboard traversal.'
@@ -61,7 +71,9 @@
   title: Assert the served gui/ tree makes zero external-origin runtime fetches
   body: AGENTS.md names this a load-bearing property (no CDN scripts, no remote fonts, no remote stylesheets). Witness it in-browser by reading the network log on a real page load, not by grep.
   SESSION_ID: gmsniff-gui-impeccable-1785231986
-  status: pending
+  status: completed
+  witness: 'Witnessed via the browser verb debug channel: 242 network requests on a full page load, all to origin 127.0.0.1:7799, zero external hosts, pageErrors empty. Also gated statically in test.js across the whole gui tree; negative-tested by injecting a CDN <link> (the assertion fired) and restoring.'
+  commit_comment: Witness and gate zero external-origin fetches
 - id: gui-test-js-extension
   title: Extend root test.js with GUI assertions for every fixed row
   body: 'AGENTS.md: test.js is the single mock-free integration test; never add a second test file. Each GUI defect fixed here needs its assertion added there so it cannot silently regress.'
@@ -76,7 +88,9 @@
   title: 'Witness #panel= deep-link restore for every panel id'
   body: 'AGENTS.md names #panel= deep links as the reachability guarantee for demoted panels. Enumerate every panel id and witness each deep link actually restores that panel.'
   SESSION_ID: gmsniff-gui-impeccable-1785231986
-  status: pending
+  status: completed
+  witness: 'Walked every #panel= id in the live DOM: all 8 (agents, deviations, live, events, sessions, tree, overview, days) restore their panel, each rendering the correct h1 and real content (1210 to 23184 chars), with location.hash preserved after render. AGENTS.md names deep links as the reachability guarantee for demoted panels; that guarantee holds.'
+  commit_comment: 'Witness every #panel= deep link restores'
 - id: gui-panels-js-size-split
   title: Split panels.js (1137 lines, 59KB) toward the 200-line vertical-slice rule
   body: Measured panels.js 1137 lines / 58942 bytes and live-agents.js 886 lines / 43220 bytes against the AGENTS.md 200-line one-responsibility-per-file rule. Both are 4-5x over.
@@ -91,17 +105,23 @@
   title: Break the 4 GUI source lines exceeding 250 chars
   body: 'Measured longest_line: panels.js 292, app.js 272, live-agents.js 254, gui-extra.css 234. AGENTS.md 200-line-vertical-slice discipline implies line-level readability too.'
   SESSION_ID: gmsniff-gui-impeccable-1785231986
-  status: pending
+  status: completed
+  witness: 'Measured 3 lines over 250 chars (app.js:335 at 272, panels.js:861 at 322, live-agents.js:531 at 254); all three broken across lines and re-measured at 0. Witnessed in the browser afterwards: all 8 panels still render (1212 to 23184 chars each) with root mounted.'
+  commit_comment: Break the three 250+ char GUI lines
 - id: gui-node18-floor-in-gui
   title: Verify gui/ JS holds the node>=18 / browser-baseline floor
   body: AGENTS.md holds engines node>=18 by source review only, with no runtime in CI. Browser code has its own baseline; enumerate any syntax in gui/ newer than the intended floor.
   SESSION_ID: gmsniff-gui-impeccable-1785231986
-  status: pending
+  status: completed
+  witness: 'Scanned all 8 gui JS files for syntax newer than the declared floor: zero hits for toSorted, toReversed, Array.fromAsync, Promise.withResolvers, Object.groupBy, structuredClone, or the RegExp v-flag. The engines >=18 contract holds in the browser tree.'
+  commit_comment: Verify the node18/browser baseline holds in gui/
 - id: gui-var-fallback-policy
   title: Decide one policy for var() fallbacks across gui-extra.css
   body: 'Measured: 14 of 16 raw literals exist ONLY as var() fallbacks, and 3 other vars carry no fallback at all - two contradictory conventions in one 265-line sheet. Pick one (token guaranteed present -> no fallback, or fallback -> must itself be a token) and apply it uniformly.'
   SESSION_ID: gmsniff-gui-impeccable-1785231986
-  status: pending
+  status: completed
+  witness: 'One policy applied and documented: a var() carries a fallback only when the token is written per-instance at runtime. That is exactly one token, --kind-tone (set inline per feed row). The var(--accent, var(--panel-accent)) and var(--surface-2, var(--panel-bg)) chains were dead weight -- both tokens are declared by the vendored layer in every theme (witnessed live: --accent #B6FF1B, --surface-2 #464650) -- and read as if the token might be missing when it never is. Re-measured: 1 token with a fallback, 0 used both ways (was --accent used both ways).'
+  commit_comment: Apply one var() fallback policy
 - id: gui-danger-token-chain
   title: Collapse the nested --danger/--flame fallback chains
   body: 'Measured gui-extra.css:49,:201,:235 use var(--danger, var(--flame, #hex)) - a two-level chain ending in a literal. Resolve which token the SDK actually declares and use it directly.'
@@ -116,7 +136,9 @@
   title: Verify color-mix() usages degrade correctly
   body: Measured 3 color-mix() calls (gui-extra.css:122,:244,:256) each mixing a fallback-bearing token. color-mix with an invalid color makes the whole declaration invalid - witness the computed value in-browser for both themes.
   SESSION_ID: gmsniff-gui-impeccable-1785231986
-  status: pending
+  status: completed
+  witness: 'All 3 color-mix() usages in gui-extra.css mix a token the vendored layer declares in every theme (--flame, --warn, --accent, each against --panel-bg or transparent), so none can produce an invalid colour that would void the whole declaration. Witnessed live: the health banner border computes to a real oklab value rather than falling back to initial.'
+  commit_comment: Verify color-mix usages degrade safely
 - id: gui-heading-outline-audit
   title: Audit the whole heading outline across every panel
   body: Live-DOM witness found only 3 headings for a 3363-char body across a multi-panel app. Panel titles are not headings, so no AT user can navigate by heading. Enumerate every panel and decide its heading level.

@@ -332,7 +332,14 @@ function renderShell() {
   const advancedSections = [
     { group: 'Subsystems', items: subsystemList().map(s => navItem(SUBSYSTEM_PANEL_PREFIX + s, s)) },
     { group: 'Analytics', items: [navItem('codeinsight', 'CodeInsight'), navItem('memory-graph', 'Memory Graph')] },
-    { group: 'Control', items: [navItem('prd', 'PRD Editor'), navItem('mutables', 'Mutables Editor'), navItem('lifecycle', 'Lifecycle Control'), navItem('codesearch', 'Codesearch'), navItem('console', 'GM Call Console'), navItem('browser-sessions', 'Browser Sessions')] },
+    { group: 'Control', items: [
+      navItem('prd', 'PRD Editor'),
+      navItem('mutables', 'Mutables Editor'),
+      navItem('lifecycle', 'Lifecycle Control'),
+      navItem('codesearch', 'Codesearch'),
+      navItem('console', 'GM Call Console'),
+      navItem('browser-sessions', 'Browser Sessions'),
+    ] },
   ];
   const advancedPanelCount = advancedSections.reduce((n, s) => n + s.items.length, 0);
   // Exactly ONE live view leads: Live Agents is the manager surface and

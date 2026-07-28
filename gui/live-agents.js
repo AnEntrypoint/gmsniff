@@ -528,7 +528,11 @@ function AgentDrilldown(setBody) {
       children: LIVENESS_LABEL[live],
     }),
     running
-      ? Chip({ key: 'run', tone: 'warn', children: `running ${running.verb}${running.ageMs != null ? ' for ' + fmtDuration(running.ageMs) : ''}${runningVsMedian ? ` (${runningVsMedian.toFixed(1)}x median ${fmtDuration(medianMsForRunningVerb)})` : ''}` })
+      ? Chip({ key: 'run', tone: 'warn', children: [
+          `running ${running.verb}`,
+          running.ageMs != null ? ` for ${fmtDuration(running.ageMs)}` : '',
+          runningVsMedian ? ` (${runningVsMedian.toFixed(1)}x median ${fmtDuration(medianMsForRunningVerb)})` : '',
+        ].join('') })
       : null,
     abandoned.length
       ? Chip({ key: 'ab', tone: 'danger', children: `${abandoned.length} dispatch${abandoned.length === 1 ? '' : 'es'} never completed` })

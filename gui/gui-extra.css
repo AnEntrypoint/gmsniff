@@ -9,6 +9,13 @@
    (--warn is #FF5A52, --flame #FF5A1F, --accent #B6FF1B), so a fallback would
    have painted the wrong colour in exactly the case it claimed to cover.
 
+   One fallback policy, not two: a var() here carries a fallback only when the
+   token is set per-instance at runtime and is genuinely absent on some
+   elements. That is exactly one token -- --kind-tone, written inline per feed
+   row. Every other token is declared by the vendored layer for all themes, so
+   `var(--accent, var(--panel-accent))` chains were dead weight that read as if
+   the token might be missing when it never is.
+
    Left/right properties are logical (inset-inline-start, margin-inline-*,
    border-inline-*, text-align:start) so the sheet mirrors under [dir="rtl"];
    the SDK's scripts/lint-rtl-physical-properties.mjs enforces the same rule on
@@ -32,24 +39,24 @@
 
 .gm-toolbar { display:flex; gap:8px; margin-bottom:10px; align-items:center; flex-wrap:wrap; }
 .gm-toolbar input, .gm-toolbar select, .gm-toolbar textarea {
-  background: var(--surface-2, var(--panel-bg)); border:1px solid var(--panel-3);
+  background: var(--surface-2); border:1px solid var(--panel-3);
   color: var(--panel-text); padding:5px 10px; border-radius:4px; font-size:12px; font-family:inherit;
 }
 .gm-toolbar input { flex:1; min-width:140px; }
-.gm-toolbar input:focus, .gm-toolbar select:focus, .gm-toolbar textarea:focus { outline:none; border-color: var(--accent, var(--panel-accent)); }
+.gm-toolbar input:focus, .gm-toolbar select:focus, .gm-toolbar textarea:focus { outline:none; border-color: var(--accent); }
 
 .gm-table { width:100%; border-collapse:collapse; font-size:12px; }
 .gm-table th { text-align:start; padding:6px 10px; border-bottom:1px solid var(--panel-3); color: var(--panel-text-3); font-weight:500; position:sticky; top:0; background: var(--panel-bg); }
 .gm-table td { padding:5px 10px; border-bottom:1px solid var(--panel-3); vertical-align:top; word-break:break-all; max-width:320px; }
-.gm-table tr:hover td { background: var(--surface-2, var(--panel-bg)); }
+.gm-table tr:hover td { background: var(--surface-2); }
 .gm-table th.gm-th-sortable { cursor:pointer; user-select:none; white-space:nowrap; }
 .gm-table th.gm-th-sortable:hover { color: var(--panel-text); }
-.gm-table th.gm-th-sortable:focus-visible { outline:2px solid var(--accent, var(--panel-accent)); outline-offset:-2px; }
-.gm-table th.gm-th-sorted { color: var(--accent, var(--panel-accent)); }
+.gm-table th.gm-th-sortable:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }
+.gm-table th.gm-th-sorted { color: var(--accent); }
 
-.gm-json { font-size:10px; font-family: ui-monospace, Consolas, monospace; white-space:pre-wrap; word-break:break-all; background: var(--surface-2, var(--panel-bg)); padding:8px; border-radius:3px; max-height:300px; overflow-y:auto; }
+.gm-json { font-size:10px; font-family: ui-monospace, Consolas, monospace; white-space:pre-wrap; word-break:break-all; background: var(--surface-2); padding:8px; border-radius:3px; max-height:300px; overflow-y:auto; }
 .gm-empty { color: var(--panel-text-3); padding:16px; text-align:center; }
-.gm-pill { display:inline-block; padding:1px 7px; border-radius:10px; font-size:11px; background: var(--surface-2, var(--panel-bg)); margin:1px; }
+.gm-pill { display:inline-block; padding:1px 7px; border-radius:10px; font-size:11px; background: var(--surface-2); margin:1px; }
 .gm-flex-row { display:flex; gap:12px; align-items:flex-start; flex-wrap:wrap; }
 .gm-flex-row > .ds-panel, .gm-flex-row > div { flex:1; min-width:260px; }
 .gm-textarea { width:100%; height:160px; font-family: ui-monospace, Consolas, monospace; font-size:11px; }
@@ -58,7 +65,7 @@
    .ds-ep-toast-host styling (editor-primitives.css) -- stacking host, kind-based
    tone classes, leave transition. See toast-stacking-and-lifecycle-audit PRD row. */
 .gm-inline-input { background:transparent; border:1px solid transparent; color:inherit; font:inherit; width:100%; }
-.gm-inline-input:focus { outline:none; border-color: var(--accent, var(--panel-accent)); background: var(--surface-2, var(--panel-bg)); }
+.gm-inline-input:focus { outline:none; border-color: var(--accent); background: var(--surface-2); }
 .gm-inline-input.gm-field-error, select.gm-field-error { border-color: var(--danger); }
 
 .gm-propgrid-row { border-bottom:1px solid var(--panel-3); padding:8px 0; }
@@ -80,13 +87,13 @@
 .gm-health-item:hover { opacity:.8; }
 .gm-health-omitted { color: var(--panel-text-3); }
 
-.gm-force-svg { width:100%; height:520px; display:block; background: var(--surface-2, var(--panel-bg)); border:1px solid var(--panel-3); border-radius:6px; touch-action:none; }
+.gm-force-svg { width:100%; height:520px; display:block; background: var(--surface-2); border:1px solid var(--panel-3); border-radius:6px; touch-action:none; }
 .gm-force-edge { stroke: var(--panel-3); stroke-width:1; opacity:.6; }
 .gm-force-edge.dim { opacity:.08; }
-.gm-force-edge.hi { stroke: var(--accent, var(--panel-accent)); opacity:1; stroke-width:1.6; }
+.gm-force-edge.hi { stroke: var(--accent); opacity:1; stroke-width:1.6; }
 .gm-force-node circle { stroke: var(--panel-3); stroke-width:1.5; cursor:grab; }
 .gm-force-node.dim circle { opacity:.15; }
-.gm-force-node.hi circle { stroke: var(--accent, var(--panel-accent)); stroke-width:2.5; }
+.gm-force-node.hi circle { stroke: var(--accent); stroke-width:2.5; }
 .gm-force-node.dragging circle { cursor:grabbing; }
 .gm-force-node text { fill: var(--panel-text); font-size:9px; pointer-events:none; user-select:none; }
 .gm-force-node.dim text { opacity:.15; }
@@ -197,14 +204,14 @@
    measured 23px live, one pixel under. */
 .gm-reveal { background:none; border:1px dashed var(--panel-3); border-radius:4px; color:var(--panel-text-3);
   font:inherit; font-size:11px; padding:2px 8px; cursor:pointer; min-height:24px; }
-.gm-reveal:hover { color:var(--panel-text); border-color:var(--accent, var(--panel-accent)); }
+.gm-reveal:hover { color:var(--panel-text); border-color:var(--accent); }
 
 /* Phase strip that renders a revisit as a revisit (visited SET, not index math). */
 .gm-phase-strip { display:flex; gap:3px; flex-wrap:wrap; margin:6px 0; }
 .gm-phase-step { font-size:10px; padding:1px 7px; border-radius:9px; border:1px solid var(--panel-3);
   color:var(--panel-text-3); background:transparent; }
-.gm-phase-step.is-reached { color:var(--panel-text); border-color:var(--accent, var(--panel-accent)); }
-.gm-phase-step.is-current { background:var(--accent, var(--panel-accent)); color:var(--panel-bg); font-weight:600; }
+.gm-phase-step.is-reached { color:var(--panel-text); border-color:var(--accent); }
+.gm-phase-step.is-current { background:var(--accent); color:var(--panel-bg); font-weight:600; }
 
 /* Output feed: newest last, terminal-like, expand-to-payload. */
 /* The pane headings inherit the shell's h2 scale, which is display-sized for a
@@ -216,9 +223,9 @@
 .gm-feed-scroll { max-height:58vh; overflow-y:auto; border:1px solid var(--panel-3); border-radius:4px; }
 .gm-feed-row { padding:3px 8px; border-bottom:1px solid var(--panel-3); cursor:pointer; font-size:11px; }
 .gm-feed-row:last-child { border-bottom:none; }
-.gm-feed-row:hover { background: var(--surface-2, var(--panel-bg)); }
-.gm-feed-row:focus-visible { outline:2px solid var(--accent, var(--panel-accent)); outline-offset:-2px; }
-.gm-feed-row.is-open { background: var(--surface-2, var(--panel-bg)); }
+.gm-feed-row:hover { background: var(--surface-2); }
+.gm-feed-row:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }
+.gm-feed-row.is-open { background: var(--surface-2); }
 .gm-feed-head { display:flex; align-items:center; flex-wrap:wrap; gap:2px; }
 .gm-feed-kind { color: var(--kind-tone, var(--panel-text)); }
 .gm-feed-dur { color: var(--panel-text-3); font-family: ui-monospace, Consolas, monospace; }
@@ -238,7 +245,7 @@
 /* Driving prompt + rendered instruction. */
 .gm-prompt { margin:8px 0; font-size:11px; }
 .gm-prompt > summary { cursor:pointer; color: var(--panel-text-3); }
-.gm-prompt-body { white-space:pre-wrap; word-break:break-word; background: var(--surface-2, var(--panel-bg));
+.gm-prompt-body { white-space:pre-wrap; word-break:break-word; background: var(--surface-2);
   padding:8px; border-radius:3px; max-height:200px; overflow:auto; font-size:11px; margin:4px 0 0; }
 .gm-instruction-body { max-height:52vh; overflow-y:auto; border:1px solid var(--panel-3); border-radius:4px; padding:10px; }
 .gm-provenance, .gm-metrics { margin-top:10px; font-size:11px; }
@@ -255,9 +262,9 @@
 .gm-md .gm-md-list { margin:6px 0; padding-inline-start:20px; }
 .gm-md .gm-md-quote { margin:6px 0; padding-inline-start:10px; border-inline-start:2px solid var(--panel-3); color: var(--panel-text-3); }
 .gm-md .gm-md-hr { border:none; border-top:1px solid var(--panel-3); margin:10px 0; }
-.gm-md .gm-md-code { background: var(--surface-2, var(--panel-bg)); padding:8px; border-radius:3px;
+.gm-md .gm-md-code { background: var(--surface-2); padding:8px; border-radius:3px;
   overflow-x:auto; font-size:11px; margin:6px 0; }
-.gm-md code { background: var(--surface-2, var(--panel-bg)); padding:1px 4px; border-radius:3px;
+.gm-md code { background: var(--surface-2); padding:1px 4px; border-radius:3px;
   font-family: ui-monospace, Consolas, monospace; font-size:11px; }
 
 /* Honest empty/degraded states (gui/honest-state.js): every zero says which

@@ -858,7 +858,13 @@ export async function BrowserSessions() {
     h('div', { class: 'ds-panel' }, h('h2', { id: 'browser-sessions-heading' }, `Sessions (${sessions.length})`),
       sessions.length ? h('table', { class: 'gm-table', 'aria-labelledby': 'browser-sessions-heading' },
         h('thead', {}, h('tr', {}, h('th', { scope: 'col' }, 'id'), h('th', { scope: 'col' }, 'alive'), h('th', { scope: 'col' }, 'url'), h('th', { scope: 'col' }, 'port'))),
-        h('tbody', {}, ...sessions.map((s, i) => h('tr', { key: i }, h('th', { scope: 'row' }, s.id || s.session_id || '?'), h('td', {}, s.alive ? Badge({ children: 'alive', tone: 'positive' }) : Badge({ children: 'dead', tone: 'neutral' })), h('td', {}, s.url || s.target_url || ''), h('td', {}, String(s.port || ''))))))
+        h('tbody', {}, ...sessions.map((s, i) => h('tr', { key: i },
+          h('th', { scope: 'row' }, s.id || s.session_id || '?'),
+          h('td', {}, s.alive
+            ? Badge({ children: 'alive', tone: 'positive' })
+            : Badge({ children: 'dead', tone: 'neutral' })),
+          h('td', {}, s.url || s.target_url || ''),
+          h('td', {}, String(s.port || ''))))))
         : Empty('No open browser sessions.')),
     h('div', { class: 'ds-panel' }, h('h2', { id: 'browser-ports-heading' }, `Ports (${ports.length})`),
       ports.length ? h('table', { class: 'gm-table', 'aria-labelledby': 'browser-ports-heading' },
