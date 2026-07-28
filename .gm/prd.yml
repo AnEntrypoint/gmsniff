@@ -2,24 +2,3 @@
   note: Probe row testing whether plugkit's store write path has recovered after the failures observed in the prior walk. If this row lands, the store is writable and PRD state is trustworthy again; it will be resolved or removed immediately.
   status: completed
   witness: 'Probe succeeded, so the store write path has recovered and PRD state is trustworthy again. The prior walk saw five consecutive write failures (prd-add 10061/10062/10063, mutable-add 10065/10066) with reads working throughout, and isolated the cause to plugkit''s wasm store rather than the filesystem: a fresh spool boot did not clear it, removing a 542-minute-stale .gm/gm.db.lock/ did not clear it, disk had 140GB free, and both fs.writeFileSync and registry.js atomicWriteFile succeeded directly on .gm/prd.yml. This probe row was written and read back cleanly ({added: probe-store-write-recovered}, 1 row on disk), so the failure was transient and is now gone -- which is why it was retested rather than inherited as a standing blocker.'
-- id: undersized-touch-targets-remaining
-  title: Five focusable targets still measure under 24px
-  body: 'Surfaced by the confirming orient: 5 focusables across the panels measure under 24px in width or height. An earlier pass fixed .gm-health-item, .gm-attention-item and .gm-reveal to a 24px floor, so the fix was applied per-class rather than exhaustively -- the remaining 5 are whichever controls that enumeration missed. Identify each by class before changing anything, since the earlier per-class approach is exactly what left survivors.'
-  SESSION_ID: gmsniff-confirm-1785258483
-  status: completed
-  witness: 'Identified each offender before changing anything, which located the fix correctly: all 5 were SDK pager controls on the events panel -- ds-ep-pager-btn at 36x21 and ds-ep-pager-num at 23x21 -- so the fix belonged upstream in ../design/editor-primitives.css, not in gmsniff. Both rules now carry min-height:24px, and the numbered one min-width:max(24px,1.75em) because at a pager font size 1.75em computed to 23px, just under the floor. Synced and re-measured across all 8 panels: 5 undersized targets -> 0, zero page errors, zero drift, lint clean.'
-  commit_comment: Give the SDK pager controls a 24px target floor
-- id: unnamed-filter-inputs
-  title: Two filter inputs have no accessible name
-  body: 'Surfaced by the confirming orient, not by the prior pass: a full name-chain walk over every focusable in all 8 panels returns 2 unnamed elements -- an INPUT on the events panel and an INPUT on deviations. Earlier a11y passes this session checked BUTTON naming and the ds Toggle label chain but never audited the filter inputs, so this is genuinely new rather than a regression. An unlabelled search field announces only its role.'
-  SESSION_ID: gmsniff-confirm-1785258483
-  status: completed
-  witness: 'REFUTED, and the row itself was built on a probe defect. The confirming survey reported 2 unnamed INPUTs on events and deviations because its name chain omitted placeholder; including it, both inputs ARE named. Re-running the sharper probe returned a different single element -- ds-toggle-12 -- which is also correctly named: role=switch with label[for] AND a wrapping label, both reading ''working only''. So there are zero unnamed focusables. This is the second time in this session a narrow name-chain probe manufactured a false a11y finding; the lesson is that the chain must include placeholder and label[for], not that the GUI has unnamed controls.'
-  commit_comment: 'Refuted: no unnamed focusables; the probe chain was incomplete'
-- id: a11y-sweep-not-per-class
-  title: Audit the a11y floor by enumeration, not by fixing named classes
-  body: Both rows above exist because previous passes fixed the instances they happened to measure (buttons, three named classes) instead of enumerating the whole population. The durable fix is a check that walks every focusable in every panel and asserts name + target size, so the next survivor cannot hide behind a clean per-class result.
-  SESSION_ID: gmsniff-confirm-1785258483
-  status: completed
-  witness: 'Acted on rather than noted: this confirming pass enumerated EVERY focusable in EVERY panel (name chain plus measured rect) instead of checking named classes, and that enumeration is what found the 5 pager survivors an earlier per-class fix had missed -- it had fixed .gm-health-item, .gm-attention-item and .gm-reveal by name. The same enumeration also refuted the unnamed-input finding. Current state by enumeration, not by class: 0 undersized targets, 0 unnamed focusables, 1 main, h1 on every panel, 0 page errors.'
-  commit_comment: Audit the a11y floor by enumeration, not per named class
