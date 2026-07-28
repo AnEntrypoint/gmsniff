@@ -1117,6 +1117,38 @@ assert(schemaOut.subcommands.every(s => typeof s.tier === 'string'), 'schema sub
       `gui/ must stay clean under the SDK ${rule} rule, found ${list.length}: ${list.slice(0, 3).join(' | ')}`);
   }
 
+  // Zero external-origin runtime fetches is a load-bearing property (AGENTS.md):
+  // gmsniff must install and run air-gapped and must never become a supply-chain
+  // surface for the agent host it observes. Witnessed live at 242 requests, all
+  // to 127.0.0.1; asserted here so a CDN script, remote font or remote
+  // stylesheet cannot land silently in a later edit.
+  {
+    const guiFiles = [];
+    const walkGui = (dir) => {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        if (e.name === 'node_modules') continue;
+        const p = path.join(dir, e.name);
+        if (e.isDirectory()) walkGui(p);
+        else if (/\.(html|js|mjs|css)$/.test(e.name)) guiFiles.push(p);
+      }
+    };
+    walkGui(path.join(process.cwd(), 'gui'));
+    // A protocol-relative or absolute URL in a src/href/@import/url()/fetch is
+    // an external origin; a bare "http" inside a comment or a string of prose is
+    // not, so the match is anchored to the positions that actually load.
+    const EXTERNAL_LOAD = /(?:src|href)\s*=\s*["'](?:https?:)?\/\/|@import\s+(?:url\()?["'](?:https?:)?\/\/|url\(\s*["']?(?:https?:)?\/\/|fetch\(\s*["'](?:https?:)?\/\//gi;
+    const offenders = [];
+    for (const f of guiFiles) {
+      const src = fs.readFileSync(f, 'utf8');
+      for (const m of src.matchAll(EXTERNAL_LOAD)) {
+        offenders.push(path.relative(process.cwd(), f).split(path.sep).join('/') + ': ' + m[0]);
+      }
+    }
+    assert.deepStrictEqual(offenders, [],
+      `gui/ must make zero external-origin runtime fetches, found: ${offenders.join(' | ')}`);
+    assert.ok(guiFiles.length > 20, `the external-fetch scan must actually see the gui tree, saw ${guiFiles.length} files`);
+  }
+
   // The browser cannot import src/index.js, so gui/shared.js re-declares the
   // subsystem seed by hand. It had already drifted (SUBSYSTEMS carries rs_learn,
   // the seed did not), which silently shortened the first paint's list until

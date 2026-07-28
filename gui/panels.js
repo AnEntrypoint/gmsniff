@@ -131,11 +131,17 @@ export async function Dashboard({ onNav, devTotal, health } = {}) {
 export async function ByDay() {
   const days = await api('/api/days');
   if (!Array.isArray(days) || !days.length) return Empty('No day-bucketed data yet.');
-  return h('div', { class: 'ds-panel' }, h('h2', {}, 'Events by Day'),
-    h('table', { class: 'gm-table' },
-      h('tr', {}, h('th', {}, 'Day'), h('th', {}, 'Total'), ...subsystemList().map(s => h('th', { class: 'gm-sub-color', style: `--sub-color:${colorFor(s)}` }, s))),
-      ...days.map(d => h('tr', { key: d.day }, h('td', {}, d.day), h('td', {}, String(d.total)),
-        ...subsystemList().map(s => h('td', {}, String(d.bySub[s] || '')))))));
+  // scope="col" on every header and a caption naming the table: without them a
+  // screen reader reads 8 rows of bare numbers with no way to associate a cell
+  // with its column (measured live: 7 headers, 0 scoped, no caption, no label).
+  return h('div', { class: 'ds-panel' }, h('h2', { id: 'by-day-heading' }, 'Events by Day'),
+    h('table', { class: 'gm-table', 'aria-labelledby': 'by-day-heading' },
+      h('thead', {},
+        h('tr', {}, h('th', { scope: 'col' }, 'Day'), h('th', { scope: 'col' }, 'Total'),
+          ...subsystemList().map(s => h('th', { scope: 'col', class: 'gm-sub-color', style: `--sub-color:${colorFor(s)}` }, s)))),
+      h('tbody', {},
+        ...days.map(d => h('tr', { key: d.day }, h('th', { scope: 'row' }, d.day), h('td', {}, String(d.total)),
+          ...subsystemList().map(s => h('td', {}, String(d.bySub[s] || ''))))))));
 }
 
 const LIVE_BUFFER_MAX_ENTRIES = 2000;
@@ -228,12 +234,16 @@ export function renderEventTable(rows, tableId, setBody) {
   const sortable = !!(tableId && setBody);
   const sortSpec = sortable ? sortStateByTableId.get(tableId) : null;
   const sortedRows = sortable ? sortRows(rows, sortSpec) : rows;
+  // scope="col" on every header: this table renders up to 38 columns against
+  // 100 rows, and without the association a screen reader reads each cell as a
+  // bare value with no column name (measured live: 38 headers, 0 scoped).
   const headerCell = (colKey, label) => {
-    if (!sortable) return h('th', {}, label);
+    if (!sortable) return h('th', { scope: 'col' }, label);
     const active = sortSpec && sortSpec.key === colKey;
     const dir = active ? sortSpec.dir : null;
     const indicator = active ? (dir === 'asc' ? ' ^' : ' v') : '';
     return h('th', {
+      scope: 'col',
       class: 'gm-th-sortable' + (active ? ' gm-th-sorted' : ''),
       role: 'button', tabindex: '0',
       'aria-sort': active ? (dir === 'asc' ? 'ascending' : 'descending') : 'none',
@@ -242,8 +252,10 @@ export function renderEventTable(rows, tableId, setBody) {
       onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleEventTableSort(tableId, colKey); setBody(); } },
     }, label + indicator);
   };
-  return h('table', { class: 'gm-table' },
-    h('tr', {}, headerCell(SUBSYSTEM_BADGE_COLUMN_KEY, SUBSYSTEM_BADGE_COLUMN_KEY), ...display.map(k => headerCell(k, k))),
+  return h('table', { class: 'gm-table', 'aria-label': `${sortedRows.length} event row(s), ${display.length + 1} columns` },
+    h('thead', {},
+      h('tr', {}, headerCell(SUBSYSTEM_BADGE_COLUMN_KEY, SUBSYSTEM_BADGE_COLUMN_KEY), ...display.map(k => headerCell(k, k)))),
+    h('tbody', {},
     ...sortedRows.map((r, i) => h('tr', { key: i },
       h('td', {}, Badge({ children: r._sub || '?', tone: 'neutral' })),
       ...display.map(k => {
@@ -261,7 +273,7 @@ export function renderEventTable(rows, tableId, setBody) {
         const sv = String(v);
         const overflows = sv.length > MAX_CELL_CHARS;
         return h('td', { title: overflows ? sv : null }, overflows ? sv.slice(0, MAX_INLINE_OBJECT_CHARS) + ELLIPSIS : sv);
-      }))));
+      })))));
 }
 function toggleEventTableSort(tableId, colKey) {
   const cur = sortStateByTableId.get(tableId);
@@ -843,15 +855,15 @@ export async function BrowserSessions() {
   const ports = Array.isArray(r.ports) ? r.ports : Object.entries(r.ports || {}).map(([id, v]) => ({ id, ...(v || {}) }));
   if (!r.sessionsFileFound && !r.portsFileFound) return Empty('No browser-sessions.json or browser-ports.json found for this project -- no browser verb has run yet.');
   return h('div', { class: 'gm-flex-row' },
-    h('div', { class: 'ds-panel' }, h('h2', {}, `Sessions (${sessions.length})`),
-      sessions.length ? h('table', { class: 'gm-table' },
-        h('tr', {}, h('th', {}, 'id'), h('th', {}, 'alive'), h('th', {}, 'url'), h('th', {}, 'port')),
-        ...sessions.map((s, i) => h('tr', { key: i }, h('td', {}, s.id || s.session_id || '?'), h('td', {}, s.alive ? Badge({ children: 'alive', tone: 'positive' }) : Badge({ children: 'dead', tone: 'neutral' })), h('td', {}, s.url || s.target_url || ''), h('td', {}, String(s.port || '')))))
+    h('div', { class: 'ds-panel' }, h('h2', { id: 'browser-sessions-heading' }, `Sessions (${sessions.length})`),
+      sessions.length ? h('table', { class: 'gm-table', 'aria-labelledby': 'browser-sessions-heading' },
+        h('thead', {}, h('tr', {}, h('th', { scope: 'col' }, 'id'), h('th', { scope: 'col' }, 'alive'), h('th', { scope: 'col' }, 'url'), h('th', { scope: 'col' }, 'port'))),
+        h('tbody', {}, ...sessions.map((s, i) => h('tr', { key: i }, h('th', { scope: 'row' }, s.id || s.session_id || '?'), h('td', {}, s.alive ? Badge({ children: 'alive', tone: 'positive' }) : Badge({ children: 'dead', tone: 'neutral' })), h('td', {}, s.url || s.target_url || ''), h('td', {}, String(s.port || ''))))))
         : Empty('No open browser sessions.')),
-    h('div', { class: 'ds-panel' }, h('h2', {}, `Ports (${ports.length})`),
-      ports.length ? h('table', { class: 'gm-table' },
-        h('tr', {}, h('th', {}, 'id'), h('th', {}, 'port')),
-        ...ports.map((p, i) => h('tr', { key: i }, h('td', {}, p.id), h('td', {}, String(p.port || '')))))
+    h('div', { class: 'ds-panel' }, h('h2', { id: 'browser-ports-heading' }, `Ports (${ports.length})`),
+      ports.length ? h('table', { class: 'gm-table', 'aria-labelledby': 'browser-ports-heading' },
+        h('thead', {}, h('tr', {}, h('th', { scope: 'col' }, 'id'), h('th', { scope: 'col' }, 'port'))),
+        h('tbody', {}, ...ports.map((p, i) => h('tr', { key: i }, h('th', { scope: 'row' }, p.id), h('td', {}, String(p.port || ''))))))
         : Empty('No registered browser ports.')));
 }
 

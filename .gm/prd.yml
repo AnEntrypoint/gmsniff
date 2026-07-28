@@ -41,7 +41,9 @@
   title: Audit every GUI panel empty state for a dead-panel read
   body: 'SDK ContextPane precedent: four placeholder rows read as a dead panel, replaced by one honest line. gmsniff has 10 GUI surfaces with panels.js div_el=49 / live-agents.js div_el=34; zero-project, zero-event, and zero-agent states are unwitnessed.'
   SESSION_ID: gmsniff-gui-impeccable-1785231986
-  status: pending
+  status: completed
+  witness: 'Swept all 8 panels live. Every zero-row panel states which zero it is: live stream renders "LIVE all projects (0) Pause - No live events yet"; the events table distinguishes filtered from empty and carries the matched-row count; gui/honest-state.js supplies is-error/is-stale/is-unscoped variants. No dead-panel read found.'
+  commit_comment: Verify honest empty states across panels
 - id: gui-loading-skeleton-vs-refresh
   title: Distinguish cold-load skeleton from refresh dimming
   body: 'SDK FileGrid precedent: skeleton ONLY on cold load; flashing a populated grid to shimmer on every mutation reads as data loss. gmsniff GUI polls live data (app.js setTimeout=5) - a full re-skeleton on each poll would read identically.'
@@ -91,7 +93,9 @@
   title: Every capped GUI list must print the omitted count
   body: AGENTS.md records three lists here truncating silently and the memory-graph panel hiding 732 of 882 nodes behind a heading reading 150 nodes. Enumerate every client-side cap in panels.js/live-agents.js and assert each prints what it left out.
   SESSION_ID: gmsniff-gui-impeccable-1785231986
-  status: pending
+  status: completed
+  witness: 'Swept every panel in the live DOM (8 panels, hash-navigated). No silent cap: the events panel renders 100 of 42,477 behind a pager reading "<- 1 2 ... 425 -> 42477 events"; agents states "8 shown / 10 reported by live-state"; deviations and overview name their omissions; the rest are complete. A grep sweep had flagged 7 of 10 caps as silent, all false - it could not see the Pager component wording. The rendered DOM is the authority.'
+  commit_comment: Verify no silent list truncation in any panel
 - id: gui-null-children-lint
   title: Verify gui/ passes the SDK null-children lint
   body: SDK ships scripts/lint-null-children.mjs and its ContextPane comments note webjsx breaks on mixed keyed/unkeyed sibling arrays. gmsniff builds children arrays with .filter(Boolean) patterns unverified against that linter.
