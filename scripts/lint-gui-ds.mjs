@@ -18,6 +18,7 @@
 // SDK_RULE_SOURCES below names the exact upstream files to diff against.
 import fs from 'node:fs';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -25,13 +26,40 @@ const REPO = path.resolve(__dirname, '..');
 const GUI = path.join(REPO, 'gui');
 const DS = path.join(GUI, 'ds');
 
-export const SDK_RULE_SOURCES = [
-  'scripts/lint-tokens.mjs',
-  'scripts/lint-rtl-physical-properties.mjs',
-  'scripts/lint-inline-styles.mjs',
-  'scripts/lint-duplicate-selectors.mjs',
-  'scripts/lint-glyphs.mjs',
-];
+// The upstream rule files this copy was derived from, pinned by content hash.
+// A comment saying "keep these in sync" is not a guard: it cannot fire. When
+// ../design changes one of these rules, the hash stops matching and
+// checkSdkRuleDrift() reports it by name, so the divergence surfaces as a
+// failing check instead of as gui/ silently passing an outdated rule.
+//
+// A mismatch is NOT automatically a bug -- it means: read the upstream diff and
+// decide whether the rule change applies to a consumer of the design system.
+// Re-pin the hash in the same commit that carries that decision.
+export const SDK_RULE_SOURCES = {
+  'scripts/lint-tokens.mjs': 'e592fe6c2957f781',
+  'scripts/lint-rtl-physical-properties.mjs': '33d650e25ec9d5a1',
+  'scripts/lint-inline-styles.mjs': '9f5f7a7c91c1db96',
+  'scripts/lint-duplicate-selectors.mjs': 'a2c781dc24e09692',
+  'scripts/lint-glyphs.mjs': '4f934a0200d73bee',
+};
+
+// Returns {checked, drifted:[{file, expected, actual}], missing:[file]}.
+// `sourceRoot` defaults to the same sibling checkout sync-ds.mjs vendors from;
+// when that checkout is absent (an installed copy of gmsniff, an air-gapped
+// machine) there is nothing to compare against and `checked` is 0 -- an absent
+// source is not drift.
+export function checkSdkRuleDrift(sourceRoot = path.resolve(REPO, '..', 'design')) {
+  const drifted = [], missing = [];
+  let checked = 0;
+  for (const [rel, pinned] of Object.entries(SDK_RULE_SOURCES)) {
+    const abs = path.join(sourceRoot, rel);
+    if (!fs.existsSync(abs)) { missing.push(rel); continue; }
+    checked++;
+    const actual = createHash('sha256').update(fs.readFileSync(abs)).digest('hex').slice(0, 16);
+    if (actual !== pinned) drifted.push({ file: rel, expected: pinned, actual });
+  }
+  return { checked, drifted, missing, sourceRoot };
+}
 
 // gui/ds is vendored from ../design and must never be hand-edited, so it is
 // scanned only as a source of DECLARED tokens, never for violations.
@@ -172,5 +200,15 @@ if (process.argv[1] && process.argv[1].endsWith('lint-gui-ds.mjs')) {
     for (const v of list) console.log('  ' + v);
   }
   console.log(total ? `\n${total} violation(s) across ${Object.values(f).filter((v) => v.length).length} rule(s)` : 'gui/ clean across all 9 SDK rule classes');
-  process.exit(total ? 1 : 0);
+  const drift = checkSdkRuleDrift();
+  if (drift.checked === 0) {
+    console.log(`(no design-system checkout at ${drift.sourceRoot} -- upstream rule drift not checked)`);
+  } else if (drift.drifted.length) {
+    console.log(`\n${drift.drifted.length} upstream rule(s) changed since these copies were pinned:`);
+    for (const d of drift.drifted) console.log(`  ${d.file}: pinned ${d.expected}, now ${d.actual}`);
+    console.log('Read the upstream diff, decide whether it applies here, then re-pin in the same commit.');
+  } else {
+    console.log(`upstream rules unchanged (${drift.checked} pinned)`);
+  }
+  process.exit(total || drift.drifted.length ? 1 : 0);
 }

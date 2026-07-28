@@ -1110,12 +1110,22 @@ assert(schemaOut.subcommands.every(s => typeof s.tier === 'string'), 'schema sub
 // right properties, 16 raw colour literals, 3 var() refs to tokens declared
 // nowhere, and 2 !important, and a threshold would let any of them back.
 {
-  const { findGuiViolations } = await import('./scripts/lint-gui-ds.mjs');
+  const { findGuiViolations, checkSdkRuleDrift } = await import('./scripts/lint-gui-ds.mjs');
   const violations = findGuiViolations();
   for (const [rule, list] of Object.entries(violations)) {
     assert.strictEqual(list.length, 0,
       `gui/ must stay clean under the SDK ${rule} rule, found ${list.length}: ${list.slice(0, 3).join(' | ')}`);
   }
+
+  // The rules above are re-derived from ../design because the SDK's own linters
+  // hardcode their repo root. That duplication has to sync, so the upstream
+  // sources are pinned by hash: a change there fails here by name rather than
+  // leaving gui/ quietly passing an outdated rule. An absent sibling checkout
+  // (installed copy, air-gapped machine) is not drift and skips the check.
+  const drift = checkSdkRuleDrift();
+  assert.deepStrictEqual(drift.drifted, [],
+    `upstream SDK lint rules changed since these copies were pinned: ${drift.drifted.map((d) => `${d.file} (pinned ${d.expected}, now ${d.actual})`).join(', ')}`
+    + ' -- read the upstream diff, decide whether it applies to gui/, then re-pin in the same commit');
 
   // Zero external-origin runtime fetches is a load-bearing property (AGENTS.md):
   // gmsniff must install and run air-gapped and must never become a supply-chain
