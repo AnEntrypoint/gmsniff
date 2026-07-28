@@ -43,6 +43,12 @@
   --mascot-2:    #FF3CA7;
   --mascot-tint: #F7CEDD;
   --mascot-deep: #B81F63;
+  /* Fixed ink-surface mascot text tone (6.67:1 on --ink). Unlike
+     --mascot-deep, this NEVER follows the theme: it is for always-dark
+     surfaces like the .cli card, which stay ink under a light theme and so
+     need a tone chosen for ink rather than for the active theme. Same role
+     --paper-3-dark plays for the tier-3 text ramp. */
+  --mascot-on-ink: #FF5C9E;
 
   /* Signals */
   --sun:         #F5C344;
@@ -555,6 +561,7 @@ select:focus-visible {
   --cat-green-ink: inherit;
   --cat-purple-ink: inherit;
   --cat-mascot-ink: inherit;
+  --mascot-on-ink: inherit;
   --cat-sun: inherit;
   --cat-flame: inherit;
   --cat-sky: inherit;

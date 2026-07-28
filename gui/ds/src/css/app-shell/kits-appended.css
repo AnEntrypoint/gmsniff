@@ -536,20 +536,21 @@
 /* --- terminal kit ------------------------------------------ */
 .ds-section-pad-sm { padding: var(--space-2); }
 .ds-kit-head-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); flex-wrap: wrap; }
-/* `.cli` (hero-content.css) is an ALWAYS-INK card — `background: var(--ink);
-   color: var(--paper)` in every theme, by design. So its text tones must be
-   ink-surface tones, NOT the theme-relative --fg-*/--accent-ink/--mascot-deep
-   ramps: those resolve to the PAPER tier under a light theme and paint dark
-   text on this permanently dark card (--fg-3 #52525A = 2.48:1, --fg-2 #1F1F26
-   = 1.18:1, --mascot-deep #B81F63 = 3.13:1 — all failing AA). The fixed
-   ink-surface tones below are theme-independent and measured on --ink #0E0E12:
-   --paper-3-dark 9.35:1, --paper-2 13.26:1, --acid 15.88:1, and #FF5C9E
-   6.67:1. This is the same FILL-vs-TEXT discipline --accent/--accent-ink
+/* `.cli` (hero-content.css) is an ALWAYS-INK card: it sets a var(--ink)
+   background with var(--paper) text in every theme, by design. So its text
+   tones must be ink-surface tones, NOT the theme-relative fg / accent-ink /
+   mascot-deep ramps. Those resolve to the PAPER tier under a light theme and
+   paint dark text on this permanently dark card: --fg-3 lands at 2.48:1,
+   --fg-2 at 1.18:1, --mascot-deep at 3.13:1 — all failing AA, and all
+   invisible on a machine whose browser defaults to a dark color-scheme.
+   The tones below are theme-independent and measured on --ink:
+   --paper-3-dark 9.35:1, --paper-2 13.26:1, --acid 15.88:1, and the dark
+   mascot tone 6.67:1. Same FILL-vs-TEXT discipline --accent/--accent-ink
    draws, applied to a surface that never follows the theme. */
 .ds-cli-cmt .cmd { color: var(--paper-3-dark); }
 .ds-cli-out .cmd { color: var(--paper-2); }
 .ds-cli-ok .prompt, .ds-cli-ok .cmd { color: var(--acid); }
-.ds-cli-warn .prompt, .ds-cli-warn .cmd { color: #FF5C9E; }
+.ds-cli-warn .prompt, .ds-cli-warn .cmd { color: var(--mascot-on-ink); }
 .ds-cli-log .prompt { color: var(--paper-3-dark); }
 .ds-cli-log .cmd { color: var(--paper-2); font-family: var(--ff-mono); }
 .ds-term-body { padding: var(--space-2-75) var(--space-3-5); display: flex; flex-direction: column; gap: var(--space-1); background: var(--bg-2); border-radius: var(--r-1); }

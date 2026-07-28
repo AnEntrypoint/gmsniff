@@ -38,7 +38,24 @@ export function Table({ headers = [], rows = [], onRowClick, emptyText = 'nothin
                 h('span', { class: 'ds-table-sort-label' }, hd),
                 isActive ? Icon(sortDir === 'desc' ? 'chevron-down' : 'chevron-up', { size: 12 }) : null));
     };
-    return h('div', { class: wrapClass }, h('table', {},
+    // The wrapper is an `overflow-x: auto` scroll container, so when a table is
+    // wider than its box the only way to reach the clipped columns is by
+    // scrolling. A mouse/touch user can drag it; a keyboard-only user cannot
+    // reach it at all unless the container itself is focusable — that is
+    // WCAG 2.1.1 Keyboard, and axe's `scrollable-region-focusable`. tabindex="0"
+    // puts it in the tab order and arrow keys then scroll it natively.
+    // A bare focusable div with no role/name is itself a violation, so it is
+    // labelled and given the `group` role: `region` would inject an
+    // unconditional landmark into every page that renders a Table.
+    // NOTE this fires only when the table actually overflows, which is
+    // viewport-dependent — it reproduces at 1024x768 but not at 1280x900,
+    // which is why it surfaced only in CI's viewport.
+    return h('div', {
+        class: wrapClass,
+        tabindex: '0',
+        role: 'group',
+        'aria-label': 'table, scrollable',
+    }, h('table', {},
         h('thead', {}, h('tr', {}, ...headers.map((hd, i) => thFor(hd, i)))),
         h('tbody', {}, ...rows.map((row, i) => h('tr', {
             key: i,

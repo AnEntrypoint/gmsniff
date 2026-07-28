@@ -107,16 +107,31 @@ export function JsonViewer({ value, emptyText = 'no data', maxHeight, mode = 'pl
     else { try { text = JSON.stringify(value, null, 2); knownJson = text != null; parsed = value; } catch { text = String(value); } }
     if (!text) return h('div', { class: 'ds-ep-json ds-ep-json-empty' }, emptyText);
     const style = maxHeight ? ('max-height:' + maxHeight) : null;
+    // Every viewer is a scroll container, so these are UNCONDITIONAL. The
+    // `maxHeight` prop only overrides a height the stylesheet already sets:
+    // `.ds-ep-json` carries `max-height: 300px; overflow-y: auto` in
+    // editor-primitives.css, so a viewer rendered with no prop at all still
+    // clips and still scrolls. Gating the attributes on the prop therefore
+    // missed the common case — measured live: a prop-less viewer reported
+    // scrollHeight 1265 against clientHeight 300 while sitting at tabindex -1.
+    //
+    // Clipped content reachable by wheel but not by keyboard is WCAG 2.1.1
+    // Keyboard, axe's `scrollable-region-focusable`. tabindex puts the box in
+    // the tab order and arrow keys then scroll it natively; a bare focusable
+    // region with no name is its own violation, so it is labelled. `group`
+    // rather than `region` so a page rendering several viewers does not gain a
+    // landmark each.
+    const scrollable = { tabindex: '0', role: 'group', 'aria-label': 'JSON, scrollable' };
     if (!knownJson && (mode === 'highlight' || mode === 'tree')) {
         try { parsed = JSON.parse(text); knownJson = true; } catch { /* swallow: not JSON — render plain */ }
     }
     let body;
     if (mode === 'tree' && knownJson && parsed !== null && typeof parsed === 'object') {
-        body = h('div', { class: 'ds-ep-json ds-ep-json-tree', style }, jsonTreeNode(null, parsed, 0, treeDepth));
+        body = h('div', { class: 'ds-ep-json ds-ep-json-tree', style, ...scrollable }, jsonTreeNode(null, parsed, 0, treeDepth));
     } else if ((mode === 'highlight' || mode === 'tree') && knownJson) {
-        body = h('pre', { class: 'ds-ep-json ds-ep-json-hl', style }, ...highlightJsonSpans(text));
+        body = h('pre', { class: 'ds-ep-json ds-ep-json-hl', style, ...scrollable }, ...highlightJsonSpans(text));
     } else {
-        body = h('pre', { class: 'ds-ep-json', style }, text);
+        body = h('pre', { class: 'ds-ep-json', style, ...scrollable }, text);
     }
     if (!copyable) return body;
     return h('div', { class: 'ds-ep-json-wrap' }, jsonCopyButton(text), body);
