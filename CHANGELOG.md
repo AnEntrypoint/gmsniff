@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-07-28 — Attribute event volume to the project producing it
+
+- **Group `--stats` by project**: `C:/dev/design` emitted 15,065 `config_resolved` events at 3.3/s against `spoint`'s 19 and `gm`'s 23 — a ~650× outlier, invisible inside a single fleet-wide `config_resolved 15410` line, because the groupings covered `sub`, `event`, `sess` and `day` but never `cwd`. The loudest signal in the data was unreachable from the question the tool exists to answer. Attribution needed no new plumbing: the raw log carries `cwd` on only 73% of records, but the replay layer attaches it per source log, so stored events are complete (300 of 300 measured).
+- **Assert the reconciliation instead of assuming it**: the per-project buckets are summed against the fleet total on every run and a mismatch prints an explicit warning, so the two numbers can never quietly disagree. Anything unattributed lands in a named bucket rather than being folded into a real project.
+- **Let `--top` reach every group**: `--stats` hardcoded its caps and ignored the flag, so with 71 project buckets the omission notice named the 51 it hid while nothing could display them — the count was reachable and the rows were not. Defaults are unchanged; `--top 100` now renders all 71.
+
 ## 2026-07-28 — Collapse repeated feed lines and correct an inverted comment
 
 - **Fold consecutive identical feed lines into one line with its repeat count**: measured 98 exact consecutive duplicates across 1,900 rendered lines, one second repeating the same `config_resolved` line 19 times — each repeat evicting a different event from a fixed-height feed. The collapse runs *before* the `--output-lines` window, so the window spends its lines on distinct events. No event is lost: 1,875 rendered lines now represent 2,363 occurrences, a single occurrence still renders with no `(x1)` suffix, and identical lines separated by a different line deliberately stay separate because the gap is itself information. The omission notice was corrected in the same change to count events rather than collapsed groups.

@@ -772,22 +772,43 @@ function listEvents(all, sub) {
   process.stderr.write(`# ${m.size} distinct events${sub ? ` in sub=${sub}` : ''}\n`);
 }
 
-function stats(rows) {
+// `top` is honoured here because the per-project group has 71 real buckets on
+// this machine: the omission notice named the 51 it hid, but with the cap
+// hardcoded no flag could reach them, so the count was reachable and the rows
+// were not. --top now raises every group's cap; the defaults are unchanged.
+function stats(rows, { top } = {}) {
   const bump = (m, k) => m.set(k, (m.get(k) || 0) + 1);
-  const bySub = new Map(), byEv = new Map(), bySess = new Map(), byDay = new Map();
+  const bySub = new Map(), byEv = new Map(), bySess = new Map(), byDay = new Map(), byProject = new Map();
   for (const e of rows) {
     bump(bySub, e._sub || '?');
     bump(byEv, e.event || '?');
     bump(bySess, (e.sess || '(none)').slice(0, 16));
     bump(byDay, e._day || '?');
+    // Grouped by cwd because the fleet aggregate cannot answer "which agent is
+    // producing this": measured C:/dev/design emitting 15065 config_resolved at
+    // 3.3/s against spoint's 19 and gm's 23, invisible inside a single
+    // "config_resolved 15410" line. The replay layer attaches cwd per source
+    // log, so this is complete on stored events (300/300 measured) even where
+    // the raw log line omits it; anything genuinely unattributed gets its own
+    // named bucket rather than being folded into a real project.
+    bump(byProject, e.cwd ? path.basename(e.cwd) : '(no cwd on event)');
   }
-  const dump = (label, m, top = 15) => {
+  const dump = (label, m, defaultTop = 15) => {
+    const cap = Number.isFinite(top) && top > 0 ? top : defaultTop;
     process.stdout.write(`\n# ${label}\n`);
     const ranked = [...m.entries()].sort((a, b) => b[1] - a[1]);
-    ranked.slice(0, top).forEach(([k, v]) => process.stdout.write(`  ${String(v).padStart(7)}  ${k}\n`));
-    writeOmittedRowsNote(ranked.length - Math.min(top, ranked.length), top, 'group', 'groups');
+    ranked.slice(0, cap).forEach(([k, v]) => process.stdout.write(`  ${String(v).padStart(7)}  ${k}\n`));
+    writeOmittedRowsNote(ranked.length - Math.min(cap, ranked.length), cap, 'group', 'groups');
   };
   process.stdout.write(`# total: ${rows.length}\n`);
+  dump('by project', byProject, 20);
+  // Stated rather than assumed: if the per-project buckets ever stop summing to
+  // the fleet total the reader is told, instead of one number quietly
+  // contradicting the other.
+  const attributed = [...byProject.values()].reduce((n, v) => n + v, 0);
+  if (attributed !== rows.length) {
+    process.stdout.write(color(`  ! per-project buckets sum to ${attributed} but total is ${rows.length} -- ${rows.length - attributed} unaccounted\n`, 31));
+  }
   dump('by sub', bySub);
   dump('by event', byEv, 20);
   // The label said "top 15" while the cap was a parameter, so a changed cap
@@ -1827,7 +1848,7 @@ if (argv[0] === 'gui') {
     const limit = opts.limit || opts.head || 0;
     if (limit) rows = rows.slice(0, limit);
 
-    if (opts.stats) { stats(rows); process.exit(0); }
+    if (opts.stats) { stats(rows, { top: opts.top }); process.exit(0); }
     if (opts.count) { process.stdout.write(`${rows.length}\n`); process.exit(0); }
     for (const e of rows) process.stdout.write(formatRow(e, opts));
     process.stderr.write(`# ${all.length} total - ${rows.length} matched\n`);
