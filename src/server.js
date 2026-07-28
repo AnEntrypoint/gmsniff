@@ -325,6 +325,8 @@ function extractCodeInsightItems(entries, summary) {
 // reading it showed a stale snapshot forever. The .gm/memories/*.md corpus has no
 // cross-reference convention (no [[wikilink]]-style links in any real memory file), hence
 // `edges` is always empty rather than fabricated.
+const MEMORY_NODE_TEXT_PREVIEW_CHARS = 500;
+
 function readMemoryGraph(cwd) {
   const memoriesDir = path.join(cwd, '.gm', 'memories');
   const nodes = [];
@@ -351,7 +353,18 @@ function readMemoryGraph(cwd) {
     }
     // This repo's own .gm/memories/*.md are CRLF (confirmed live), which otherwise leaves
     // embedded \r bytes in every returned node's text.
-    nodes.push({ key, text: body.replace(/\r\n/g, '\n').trim().slice(0, 500), namespace: ns, mtime: updated || created });
+    // 742 of this machine's 882 gm memos exceed the preview length (longest
+    // 3658 chars), so cutting without a signal left 84% of nodes looking like
+    // short memos. Same shape as instruction_preview's truncated/length pair.
+    const fullText = body.replace(/\r\n/g, '\n').trim();
+    nodes.push({
+      key,
+      text: fullText.slice(0, MEMORY_NODE_TEXT_PREVIEW_CHARS),
+      text_truncated: fullText.length > MEMORY_NODE_TEXT_PREVIEW_CHARS,
+      text_length: fullText.length,
+      namespace: ns,
+      mtime: updated || created,
+    });
   }
   return { nodes, edges: [], note: nodes.length ? undefined : 'no memory files found in .gm/memories for this project' };
 }
@@ -1377,16 +1390,24 @@ class Store {
     };
   }
 
+  // Stops at `limit` rather than scanning on, so a true match count is not
+  // available without doubling the work over every event. Reporting `truncated`
+  // is therefore the honest signal -- the caller learns the list was cut even
+  // though no total can be given -- where returning a bare array left a capped
+  // result indistinguishable from an exhaustive one.
   search(q, { sub, limit = 100 } = {}) {
-    if (!q) return [];
+    if (!q) return { results: [], returned: 0, truncated: false, scanned_all: true };
     const lq = q.toLowerCase();
     let arr = this.events;
     if (sub) arr = arr.filter(e => e._sub === sub);
-    const out = [];
+    const results = [];
+    let stoppedEarly = false;
     for (const e of [...arr].reverse()) {
-      if (JSON.stringify(e).toLowerCase().includes(lq)) { out.push(e); if (out.length >= limit) break; }
+      if (!JSON.stringify(e).toLowerCase().includes(lq)) continue;
+      results.push(e);
+      if (results.length >= limit) { stoppedEarly = true; break; }
     }
-    return out;
+    return { results, returned: results.length, truncated: stoppedEarly, scanned_all: !stoppedEarly };
   }
 
   allEvents({ limit = 200, offset = 0, sub, event: evFilter, day, q } = {}) {
@@ -1414,10 +1435,12 @@ class Store {
       const k = typeof v === 'object' ? JSON.stringify(v) : String(v);
       counts.set(k, (counts.get(k) || 0) + 1);
     }
-    return [...counts.entries()]
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, limit)
-      .map(([value, count]) => ({ value, count }));
+    // Returned the sliced array alone, so a caller could not tell a complete
+    // list from a cut one: measured 56 distinct `event` values against a default
+    // limit of 50, six of them vanishing with nothing in the response to say so.
+    const ranked = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+    const values = ranked.slice(0, limit).map(([value, count]) => ({ value, count }));
+    return { values, total: ranked.length, returned: values.length, truncated: values.length < ranked.length };
   }
 
   query(spec) {
@@ -1851,12 +1874,12 @@ const API_ROUTES = [
   { path: '/api/recall', method: 'GET', params: [], response: '{total, hits, misses, hitRate, avgDur, recent}' },
   { path: '/api/exec', method: 'GET', params: [], response: '{total, byRuntime, errors, recent}' },
   { path: '/api/hooks', method: 'GET', params: [], response: '{total, byEvent, recent}' },
-  { path: '/api/search', method: 'GET', params: ['q', 'sub', 'limit'], response: '{q, results}' },
+  { path: '/api/search', method: 'GET', params: ['q', 'sub', 'limit'], response: '{q, results, returned, truncated, scanned_all}. The scan STOPS at `limit`, so no true match count exists without doubling the work over every event -- `truncated`/`scanned_all` report whether the list was cut, which a bare array could not.' },
   { path: '/api/deviations', method: 'GET', params: ['sess', 'sessionId', 'limit'], response: '{total, byKind, bySession, recent}' },
   { path: '/api/sessions', method: 'GET', params: ['limit'], response: '{total, rows}' },
   { path: '/api/process-tree', method: 'GET', params: ['sess', 'sessionId'], response: '{sess, nodes, gaps, phase_reached}' },
   { path: '/api/observed-subsystems', method: 'GET', params: [], response: '{subsystems}' },
-  { path: '/api/distinct', method: 'GET', params: ['field', 'sub', 'limit'], response: '{field, values: [{value, count}]}' },
+  { path: '/api/distinct', method: 'GET', params: ['field', 'sub', 'limit'], response: '{field, values: [{value, count}], total, returned, truncated}. `total` is the whole distinct-value count and `returned` what this page holds, so a caller can state what it omitted -- the bare array previously made a 50-of-56 result indistinguishable from a complete one.' },
   { path: '/api/query', method: 'GET', params: ['q (JSON-encoded query spec)'], response: '{total, groupBy?, groups?} or {total, returned, rows}' },
   { path: '/api/query', method: 'POST', params: ['body: {filter, projection, groupBy, sort, limit}'], response: '{total, groupBy?, groups?} or {total, returned, rows}' },
   { path: '/api/projects', method: 'GET', params: [], response: '{projects: [{cwd, alive, version, prd_pending, prd_total, mut_unknown, mut_total, watching}]}' },
@@ -1927,12 +1950,12 @@ export function createServer({ logDir, port = 0, host = '127.0.0.1' } = {}) {
       if (p === '/api/recall') return send(res, 200, store.recallStats());
       if (p === '/api/exec') return send(res, 200, store.execStats());
       if (p === '/api/hooks') return send(res, 200, store.hookStats());
-      if (p === '/api/search') return send(res, 200, { q: q.q || '', results: store.search(q.q, q) });
+      if (p === '/api/search') return send(res, 200, { q: q.q || '', ...store.search(q.q, q) });
       if (p === '/api/deviations') return send(res, 200, store.deviations(q));
       if (p === '/api/sessions') return send(res, 200, store.sessions(q));
       if (p === '/api/process-tree') return send(res, 200, store.processTree(q.sess, q.sessionId));
       if (p === '/api/observed-subsystems') return send(res, 200, { subsystems: store.observedSubsystems() });
-      if (p === '/api/distinct') return send(res, 200, { field: q.field, values: store.distinctValues(q.field, q) });
+      if (p === '/api/distinct') return send(res, 200, { field: q.field, ...store.distinctValues(q.field, q) });
       if (p === '/api/query') {
         if (req.method === 'GET') {
           let spec = {};

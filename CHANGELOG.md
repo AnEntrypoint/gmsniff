@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-07-28 — Audit every route's real JSON for truncation it never reported
+
+- **Report what `/api/distinct` and `/api/search` leave out**: `distinct` returned a bare `{field, values}` while capping, so a default call showing 50 of 56 distinct event types was indistinguishable from a complete list; it now carries `total`/`returned`/`truncated`. `search` was capped too, measured returning exactly 2,000 results, but its scan stops at the limit rather than counting on — so it reports `truncated`/`scanned_all` instead of a total it cannot compute without a second full pass.
+- **Signal truncated memory-node text**: 742 of one project's 882 memos exceed the 500-character preview, so 84% of graph nodes were cut with nothing saying so. They now carry `text_truncated` and `text_length`, matching the pattern `instruction_preview` already used.
+- **Audit the rest by reading real responses, not source**: fifteen routes were requested with limits small enough to force truncation. Nine were already honest, two were the gaps above, and the remaining five were verified to return genuinely complete sets — `event-types` returns 56, which equals `distinct`'s measured total, and `project-signals` returns 174, which equals the whole project roster — so a truncation field there would report a cut that never happens.
+
 ## 2026-07-28 — Stop the CLI lists from truncating in silence, and make session keys identify their session
 
 - **Report what every ranked CLI list left out**: `--stats` printed four "by sub" rows against 231,715 events with nothing saying more existed, and the same silence covered the verb-frequency list, the embed-failure dumps, and both `--top`-driven surfaces. One shared helper now names the cap actually applied — "+71 more groups not shown (list caps at 20)" — and prints nothing when the list fits, so a list exactly at its cap never renders a bare "+0 more".
