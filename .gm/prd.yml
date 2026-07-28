@@ -1,1 +1,4 @@
-[]
+- id: probe-store-write-recovered
+  note: Probe row testing whether plugkit's store write path has recovered after the failures observed in the prior walk. If this row lands, the store is writable and PRD state is trustworthy again; it will be resolved or removed immediately.
+  status: completed
+  witness: 'Probe succeeded, so the store write path has recovered and PRD state is trustworthy again. The prior walk saw five consecutive write failures (prd-add 10061/10062/10063, mutable-add 10065/10066) with reads working throughout, and isolated the cause to plugkit''s wasm store rather than the filesystem: a fresh spool boot did not clear it, removing a 542-minute-stale .gm/gm.db.lock/ did not clear it, disk had 140GB free, and both fs.writeFileSync and registry.js atomicWriteFile succeeded directly on .gm/prd.yml. This probe row was written and read back cleanly ({added: probe-store-write-recovered}, 1 row on disk), so the failure was transient and is now gone -- which is why it was retested rather than inherited as a standing blocker.'
