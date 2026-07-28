@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-07-28 — Show a record's explanation instead of its schema version
+
+- **Rank `why` above `version` in the event-detail chain**: `config_resolved` rendered as the bare detail `1` — its schema version — while the actual explanation, "no config found in any tier; using builtin defaults", was discarded. Measured across 43,677 real records, 566 carried a `why` and every one lost it this way. A scan for other keys shadowed by `version` found none, so the set is closed rather than sampled.
+
 ## 2026-07-28 — Make the queue route and the CLI answer from one counter
 
 - **Delete the duplicate spool counter**: `/api/spool-queue` walked `in/` itself instead of calling the counter the CLI uses, and the two had drifted — the route reported 35 pending for a tree the CLI reported as 0 pending with 34 unconsumable. Two surfaces disagreeing about one filesystem is worse than either being wrong alone, because the reader cannot tell which to trust. The route now calls `spoolQueueDepth`, so they cannot disagree again; a sweep confirmed these were the only two implementations.

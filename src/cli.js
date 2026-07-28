@@ -1480,7 +1480,13 @@ function fmtDispatchMs(ms) {
 // deferred_files count a reboot-loop diagnosis depends on. `error` was absent
 // from the chain entirely, so embed_init_fail printed its name and nothing else
 // while its full explanation sat in that field.
-const EVENT_DETAIL_KEYS = ['detail', 'reason', 'error', 'summary', 'note', 'verb', 'phase', 'id', 'key', 'query', 'path', 'model', 'sha', 'version'];
+// `why` sits ahead of `version` because a schema version is the least
+// informative thing a record carries: measured over 43677 real evt records,
+// 566 carried a `why` and every one was discarded in favour of `version`,
+// rendering config_resolved as the bare detail "1" while its actual
+// explanation -- "no config found in any tier; using builtin defaults" -- was
+// thrown away. A scan for other keys shadowed this way found none.
+const EVENT_DETAIL_KEYS = ['detail', 'reason', 'error', 'why', 'summary', 'note', 'verb', 'phase', 'id', 'key', 'query', 'path', 'model', 'sha', 'version'];
 
 // Keys worth showing as name=value once no prose field exists. Ordered so the
 // operator-relevant counts lead; cwd/sess are excluded because the row already
