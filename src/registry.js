@@ -269,27 +269,49 @@ export const PROJECT_ACTIVE_MS = parseInt(process.env.GM_PROJECT_ACTIVE_MS, 10) 
 // -- so a single number made a real backlog indistinguishable from dead residue.
 const SPOOL_CONSUMABLE_EXT = '.txt';
 
-function spoolQueueDepth(spoolDir) {
+// Exported so /api/spool-queue reads the SAME counter the CLI does. The route
+// carried its own readdir walk that skipped neither dot-directories nor
+// dot-files and called every file pending, so the two surfaces reported 35 and
+// 0 for one directory tree -- a reader had no way to tell which to trust.
+export function spoolQueueDepth(spoolDir) {
   let consumable = 0;
   let unconsumable = 0;
   let oldestUnconsumableMs = null;
+  const byVerb = {};
+  const unknownVerbs = [];
   try {
     for (const verbDir of fs.readdirSync(path.join(spoolDir, 'in'), { withFileTypes: true })) {
-      if (!verbDir.isDirectory()) continue;
+      // A stray `.gm/` holding a nested exec-spool/ was rendering as a verb
+      // queue on spoint; dot-entries are never verbs.
+      if (!verbDir.isDirectory() || verbDir.name.startsWith('.')) continue;
       const dir = path.join(spoolDir, 'in', verbDir.name);
       let names = [];
       try { names = fs.readdirSync(dir).filter(f => !f.startsWith('.')); } catch (_) { continue; }
+      let verbConsumable = 0;
+      let verbUnconsumable = 0;
       for (const name of names) {
-        if (name.endsWith(SPOOL_CONSUMABLE_EXT)) { consumable++; continue; }
+        if (name.endsWith(SPOOL_CONSUMABLE_EXT)) { consumable++; verbConsumable++; continue; }
         unconsumable++;
+        verbUnconsumable++;
         try {
           const ageMs = Date.now() - fs.statSync(path.join(dir, name)).mtimeMs;
           if (oldestUnconsumableMs === null || ageMs > oldestUnconsumableMs) oldestUnconsumableMs = ageMs;
         } catch (_) {}
       }
+      if (verbConsumable || verbUnconsumable) {
+        byVerb[verbDir.name] = { consumable: verbConsumable, unconsumable: verbUnconsumable };
+        if (!isKnownVerb(verbDir.name)) unknownVerbs.push(verbDir.name);
+      }
     }
   } catch (_) {}
-  return { total: consumable + unconsumable, consumable, unconsumable, oldest_unconsumable_age_ms: oldestUnconsumableMs };
+  return {
+    total: consumable + unconsumable,
+    consumable,
+    unconsumable,
+    oldest_unconsumable_age_ms: oldestUnconsumableMs,
+    byVerb,
+    unknown_verb_dirs: unknownVerbs,
+  };
 }
 
 export function readProjectLiveness(cwd, { now = Date.now() } = {}) {

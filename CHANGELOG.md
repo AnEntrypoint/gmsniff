@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-07-28 — Make the queue route and the CLI answer from one counter
+
+- **Delete the duplicate spool counter**: `/api/spool-queue` walked `in/` itself instead of calling the counter the CLI uses, and the two had drifted — the route reported 35 pending for a tree the CLI reported as 0 pending with 34 unconsumable. Two surfaces disagreeing about one filesystem is worse than either being wrong alone, because the reader cannot tell which to trust. The route now calls `spoolQueueDepth`, so they cannot disagree again; a sweep confirmed these were the only two implementations.
+- **Stop rendering a stray dot-directory as a verb queue**: `spoint`'s `byVerb` listed a `.gm` entry, which on disk is a nested `exec-spool/` accidentally created inside the input tree. The shared counter skipped dot-*files* but not dot-*directories*; it now skips both, and reports `unknown_verb_dirs` against the existing verb allowlist so an unrecognised directory is named rather than silently shown as a queue.
+- **Rank residue below real work**: sorting on `totalPending` tied every project at zero once that field stopped counting unconsumable files, so the comparator now falls back to the residue count.
+
 ## 2026-07-28 — Separate a real spool backlog from residue that can never drain
 
 - **Split the manager view's queued count**: the spool ABI is `in/<verb>/<N>.txt`, so a file with any other extension sits there forever — and every project's entire "queued" figure turned out to be exactly that. Measured live, all agents report **0 pending**: `spoint` 34 unconsumable with the oldest at 54 days, `rs-plugkit` 20, `gm` 19, `gmsniff` 12, `thebird` 2 at 1,126 hours. The column had never once shown a real backlog, and a bare count made dead residue indistinguishable from work waiting to run. It now reports pending and unconsumable separately with the oldest residue's age, so residue reads as residue. `queue_depth` stays numeric because five surfaces consume it as a count; the breakdown rides alongside rather than changing its type underneath them.

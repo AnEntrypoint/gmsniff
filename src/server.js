@@ -12,7 +12,7 @@ import {
   readPrd, readMutables, rewriteRow, atomicWriteFile, discoverProjects, isKnownVerb, isRetiredVerb, isAllowedProjectCwd,
   readWatcherStatus, VERB_ALLOWLIST, readLivePhaseState, resolveInstructionTier, discoverVendoredSettings,
   readProjectLiveness as registryProjectLiveness, readTurnState, readTurnSummary, readProjectMarkers,
-  readDaemonStatus, readInstalledVersions,
+  readDaemonStatus, readInstalledVersions, spoolQueueDepth,
 } from './registry.js';
 
 const MAX_QUERY_LEN = 4096;
@@ -1916,7 +1916,7 @@ const API_ROUTES = [
   { path: '/api/embed-health', method: 'GET', params: ['cwd?'], response: '{cwd, byEvent, query_failures, vector_failures, last_failure_ts, total, recent_returned, recent_truncated, recent, note}. `recent` is the newest-N window and `total` the whole matched count, so the omission is derivable -- matching recallStats/execStats/hookStats/classifierRejects, which all already returned a total. Raw failure counts, no verdict: when both counts are non-zero `note` names the causal chain (embed_query_failed cascading into rssearch_vector_hits_failed, so codesearch returns success while answering from bm25 only and silently missing semantic results).' },
   { path: '/api/fsm-graph', method: 'GET', params: ['cwd'], response: '{cwd, present, source, phases, states, edges: [{from, to, gates}], gatesByEdge}. The project\'s own .gm/instructions/fsm/graph.json where one exists (real override live on this machine); present:false means the default six-phase walk applies.' },
   { path: '/api/projects/live-state', method: 'GET', params: ['full=1 (opt into full instruction bodies)', 'limit (recent_events cap)'], response: '{projects: [...], mode: "list"|"full", instruction_body_count, instruction_bodies (full mode only: {hash: body} deduped), recent_limit, correlation, source, daemon}. Per project: {cwd, alive, activity: "dispatching"|"idle"|"abandoned"|"unknown", liveness, is_live_agent, phase, phase_authoritative (turn-state.json, AUTHORITATIVE), phase_served (next-step.md), phase_divergence, skill, in_phase_ms, last_event_ms, instruction_served_ms, instruction_key, instruction_heading, instruction_preview, instruction_truncated, instruction_length, instruction_hash, instruction_excerpt (FULL MODE ONLY), instruction_tier, instruction_source_file, instruction_source_repo, instruction_auto_provisioned, updated_ts, stale, present, unparseable, turn_state, turn_summary, last_prompt, last_dispatch_ts, last_instruction_ts, served_version, codeinsight_digest, gates, prd_pending, prd_total, mut_unknown, mut_total, recent_sess, recent_correlation_kind, recent_run, recent_events, recent_total, recent_limit, recent_truncated, recent_more_above}. DEFAULT IS THE LIGHT LIST PAYLOAD -- the full form is measured at 1.4MB/174 projects, so the multi-KB instruction body is served only via ?full=1 or /api/projects/instruction. `alive`/`activity` are PER-PROJECT (watcher.log mtime / turn-summary / turn-state / last-dispatch age), never the machine-wide shared daemon pid. recent_events node kinds: instruction {phase, prd_pending_count, mutables_pending_count} | transition {phase, from, replan} | dispatch {verb, ms} | prd-add {id, rescoped} | prd-resolve {id} | mutable-add {id} | mutable-resolve {id} | memorize {key} | deviation {deviation, detail, source, sub}; every node also carries {ts, cwd, run}. instruction_tier is one of "vendored" (a real per-project override -- content diverges from what ensureInstructionsBundle last auto-provisioned, or the file is fsm-vendor-sourced with no auto-sync ambiguity at all), "source-synced", or "default". instruction_auto_provisioned is true only when tier="default" but a file is nonetheless present on disk, byte-identical to gm-plugkit\'s own last-known-shipped hash for it (materialized by the bootstrap sync, not baked into the wasm guest, and NOT a real customization -- distinguish this from a genuine "no file at all" default when displaying).' },
-  { path: '/api/spool-queue', method: 'GET', params: [], response: '{queues: [{cwd, name, totalPending, byVerb}], schemaVersion}' },
+  { path: '/api/spool-queue', method: 'GET', params: [], response: '{queues: [{cwd, name, totalPending, unconsumable, oldest_unconsumable_age_ms, byVerb: {<verb>: {consumable, unconsumable}}, unknown_verb_dirs}], schemaVersion}. `totalPending` counts only ABI-consumable in/<verb>/<N>.txt files; anything else is residue no watcher will take, counted separately with its oldest age. Shares registry.js spoolQueueDepth with the CLI so the two surfaces cannot disagree about the same directories, which they previously did (35 vs 0 for one tree).' },
   { path: '/api/watcher-versions', method: 'GET', params: [], response: '{projects: [{cwd, name, alive, pid, runtime, shared, version}], schemaVersion}' },
   { path: '/api/instruction-tiers', method: 'GET', params: [], response: '{byTier: {vendored, source-synced, default, auto_provisioned}, details: [{cwd, name, tier, source_file, source_repo, auto_provisioned?}], schemaVersion}. auto_provisioned is a sub-count of default (real defaults materialized to disk by the bootstrap sync, not a fourth tier) -- byTier.default already includes every auto-provisioned project.' },
   { path: '/api/vendored-settings', method: 'GET', params: ['cwd?'], response: 'without cwd: {projects: [{cwd, name, vendored, has_custom_graph, file_count, entries}], schemaVersion} -- every project that has run the fsm-vendor verb at least once. with cwd: {cwd, vendored, has_custom_graph, file_count, entries: [{label, path, present, size, mtime_ts}], schemaVersion} for that one project. Covers the fsm-vendor verb\'s own real customization surface (phase-prose .md files, fsm/graph.json, fsm/predicates.md, hooks/*.js, browser-config.json, daemon-project-config.json) -- a WIDER, separately-tracked set from the gates/residual auto-sync instruction-tiers endpoint above, with no false-positive risk since every entry here is a real file whose presence always means a deliberate local customization surface exists (fsm-vendor is absence-gated, one-shot, never auto-overwritten).' },
@@ -2431,24 +2431,29 @@ export function createServer({ logDir, port = 0, host = '127.0.0.1' } = {}) {
         return;
       }
       if (p === '/api/spool-queue') {
+        // Reads registry.js's spoolQueueDepth rather than walking in/ again: the
+        // duplicate walk here skipped neither dot-directories nor dot-files and
+        // called every file pending, so this route reported 35 for a tree the
+        // CLI reported as 0 pending / 34 unconsumable. One counter, one answer.
         const projects = discoverProjectsCached(store.events);
         const queues = [];
         for (const proj of projects) {
-          const inDir = path.join(proj.cwd, '.gm', 'exec-spool', 'in');
-          const byVerb = {};
-          try {
-            for (const verbDir of fs.readdirSync(inDir, { withFileTypes: true })) {
-              if (!verbDir.isDirectory()) continue;
-              try {
-                const files = fs.readdirSync(path.join(inDir, verbDir.name));
-                if (files.length) byVerb[verbDir.name] = files.length;
-              } catch (_) {}
-            }
-          } catch (_) {}
-          const totalPending = Object.values(byVerb).reduce((s, c) => s + c, 0);
-          if (totalPending > 0) queues.push({ cwd: proj.cwd, name: path.basename(proj.cwd), totalPending, byVerb });
+          const q = spoolQueueDepth(path.join(proj.cwd, '.gm', 'exec-spool'));
+          if (q.total === 0) continue;
+          queues.push({
+            cwd: proj.cwd,
+            name: path.basename(proj.cwd),
+            totalPending: q.consumable,
+            unconsumable: q.unconsumable,
+            oldest_unconsumable_age_ms: q.oldest_unconsumable_age_ms,
+            byVerb: q.byVerb,
+            unknown_verb_dirs: q.unknown_verb_dirs,
+          });
         }
-        queues.sort((a, b) => b.totalPending - a.totalPending);
+        // Genuinely-pending work outranks residue, but residue still sorts among
+        // itself -- ranking on totalPending alone tied every project at 0 once
+        // that field stopped counting unconsumable files.
+        queues.sort((a, b) => (b.totalPending - a.totalPending) || (b.unconsumable - a.unconsumable));
         return send(res, 200, { queues, schemaVersion: EVENT_SCHEMA_VERSION }, 'application/json', p);
       }
 
