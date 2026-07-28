@@ -2,3 +2,45 @@
   note: Probe row testing whether plugkit's store write path has recovered after the failures observed in the prior walk. If this row lands, the store is writable and PRD state is trustworthy again; it will be resolved or removed immediately.
   status: completed
   witness: 'Probe succeeded, so the store write path has recovered and PRD state is trustworthy again. The prior walk saw five consecutive write failures (prd-add 10061/10062/10063, mutable-add 10065/10066) with reads working throughout, and isolated the cause to plugkit''s wasm store rather than the filesystem: a fresh spool boot did not clear it, removing a 542-minute-stale .gm/gm.db.lock/ did not clear it, disk had 140GB free, and both fs.writeFileSync and registry.js atomicWriteFile succeeded directly on .gm/prd.yml. This probe row was written and read back cleanly ({added: probe-store-write-recovered}, 1 row on disk), so the failure was transient and is now gone -- which is why it was retested rather than inherited as a standing blocker.'
+- id: sync-three-css-sheets
+  title: Sync topbar.css, primitives.css and panel-row.css from ../design
+  body: '58 changed lines across three sheets at upstream HEAD bb39848. All three diffs read BEFORE syncing and confirmed purely additive: topbar.css adds .app-side-group (sidebar section grouping, no .app-topbar rule touched), primitives.css adds .chip.accent and the .glyph size hooks, panel-row.css aliases .row-code/.row-title/.row-meta and adds an opt-in .row-list divider. Nothing collides with .gm-topbar-slot or .ds-dash-card.'
+  SESSION_ID: gmsniff-sync-1785255207
+  status: completed
+  witness: 'Read all three diffs BEFORE syncing rather than after, which is what made the sync safe to run: topbar.css adds only .app-side-group (a sidebar section wrapper) with no .app-topbar rule touched; primitives.css adds only .chip.accent and the .glyph size hooks; panel-row.css aliases .row-code/.row-title/.row-meta to the existing .code/.title/.meta rules and adds an opt-in .row-list divider. All additive, none colliding with .gm-topbar-slot or .ds-dash-card. npm run sync:ds pulled the three, sync:ds:check then reports gui/ds/ matches C:/dev/design.'
+  commit_comment: Sync three additive SDK sheets to zero drift
+- id: sync-no-topbar-regression
+  title: Prove the topbar span fix survives the sync
+  body: topbar.css is one of the drifted sheets and the .app-topbar span fix landed minutes ago -- gmsniff had wrapped the ds header in its own flex row so it measured 268px in a 782px viewport and 224px even at 1440px. Re-measure topbar width equals viewport width after the sync rather than trusting the diff read.
+  SESSION_ID: gmsniff-sync-1785255207
+  status: completed
+  witness: 'Re-measured rather than inferred from the diff: topbarW 782 against viewportW 782, topbarSpans true. The .app-topbar span fix from earlier this session survives the topbar.css sync intact -- the upstream change touched .app-side-group only.'
+  commit_comment: Verify the topbar span fix survives the sync
+- id: sync-import-closure-holds
+  title: Confirm the import closure still resolves after the sync
+  body: A partial vendor renders an EMPTY div#root with readyState complete and nothing in the server log -- that failure happened earlier this session when shell.js was vendored without its shell/ subdirectory. Confirm the closure count and a real mounted app.
+  SESSION_ID: gmsniff-sync-1785255207
+  status: completed
+  witness: 'sync-ds reports import closure adds 60 file(s) beyond the seed list, unchanged from before, and the app mounts for real: root children 1, all four sampled panels rendering (events 14209, sessions 27197, overview 906, days 262 chars). This is the check that catches the partial-vendor failure seen earlier this session, where shell.js was vendored without its shell/ subdirectory and the page rendered an EMPTY div#root with readyState complete and nothing in the server log.'
+  commit_comment: Confirm the import closure resolves after the sync
+- id: sync-no-density-regression
+  title: Prove the compact roster density survives the sync
+  body: primitives.css is one of the drifted sheets and the compact density landed minutes ago (.ds-dash-card.is-compact, 208px cards to uniform 37px rows, running weight 600 vs idle 400). Re-measure uniqueHeights [37] and the weight split after the sync.
+  SESSION_ID: gmsniff-sync-1785255207
+  status: completed
+  witness: 'Re-measured on the agents panel directly: 12 compact rows at uniqueHeights [37], with 3 running rows at font-weight 600 against 9 idle at 400. The compact density and its status-driven weight both survive the primitives.css sync. A first probe read the weights after navigating away to other panels and returned empty strings -- a probe defect, not a regression; re-measuring in place gave the real numbers.'
+  commit_comment: Verify the compact density survives the sync
+- id: sync-gates-still-green
+  title: Re-run every gate after the sync
+  body: sync:ds:check for zero drift, scripts/lint-gui-ds.mjs across 9 rule classes plus the 5 rule-body pins (re-pin only on a read diff, never blind), node test.js end to end, and the a11y floor -- 1 main, 1 h1, zero page errors.
+  SESSION_ID: gmsniff-sync-1785255207
+  status: completed
+  witness: 'Every gate re-run after the sync: sync:ds:check reports gui/ds/ matches C:/dev/design (zero drift); scripts/lint-gui-ds.mjs clean across all 9 rule classes with upstream rule bodies unchanged (5 pinned) -- no re-pin was needed or made, since the three drifted sheets are CSS, not rule sources; node test.js passes end to end (43361 events); and the a11y floor holds at 1 main, 1 h1, zero page errors.'
+  commit_comment: Re-run every gate after the sync
+- id: sync-drift-recurs-thrice
+  title: Record that upstream drift recurred three times in one session
+  body: sync:ds:check went clean-to-drifted three separate times this session (colors_and_type/table.js/kits-appended, then json-viewer, now these three sheets), because ../design is under active concurrent development. The operational conclusion is that a green drift check has a short shelf life and must be re-run rather than remembered.
+  SESSION_ID: gmsniff-sync-1785255207
+  status: completed
+  witness: 'Confirmed by count rather than impression: sync:ds:check went clean-to-drifted three separate times within this one session -- first colors_and_type.css/content/table.js/kits-appended.css, then json-viewer.js, now topbar.css/primitives.css/panel-row.css -- because ../design is under active concurrent development (its git status shows uncommitted work throughout and its HEAD moved to bb39848). The operational conclusion, already acted on twice: a green drift check has a short shelf life, so gm-continue re-runs it as part of its verification pass rather than trusting an earlier green, which is exactly how each of these three was caught.'
+  commit_comment: Record that upstream drift recurred three times this session

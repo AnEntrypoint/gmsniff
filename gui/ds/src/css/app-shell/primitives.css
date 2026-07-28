@@ -165,6 +165,15 @@
 .chip.tone-wip, .chip.tone-neutral {
   background: var(--bg-3); color: var(--fg-2);
 }
+/* `.chip.accent` is the bare-adjective spelling of tone-accent (ui_kits/blog
+   uses it for a "draft" chip). It had no rule anywhere, so an accented chip
+   rendered byte-identical to a plain one. Folded into the alias grouping rather
+   than given its own block, so the two spellings cannot drift apart. --accent
+   is the FILL and --accent-ink the readable text tone (AGENTS.md) — the bare
+   lead is ~1.07:1 on paper and unreadable as text. */
+.chip.accent, .chip.tone-accent {
+  background: var(--accent-tint); color: var(--accent-ink);
+}
 /* tone-dim was applied by five kits (aicat, project_page, signin, system_primer,
    terminal) with no rule anywhere, so a "dim" chip rendered byte-identical to a
    plain one — measured at rgb(234,230,218) on rgb(31,31,38), same opacity. It is
@@ -222,4 +231,17 @@
   font-family: var(--ff-mono); font-size: var(--fs-tiny);
   opacity: 0.8;
 }
+/* Glyph() (src/components/shell/atoms.js) emits `glyph glyph-{size}` and an
+   inline `font-size: var(--glyph-size-{size}, <literal>)`. The custom property
+   is the documented theming hook — it is what lets a theme retune glyph scale
+   without touching the component — but nothing declared it, so every glyph fell
+   through to the hard-coded inline literal and the hook was inert. Declaring
+   the three rungs on the scale makes the hook real; the sm/lg classes also give
+   the box a matching footprint instead of the one-size 18px square. */
+/* Values mirror Glyph()'s own inline fallbacks exactly (11 / 13 / 16px), so
+   declaring the hook changes nothing visually — it only makes the property
+   themeable, which is what it always claimed to be. */
+.glyph { --glyph-size-sm: var(--fs-nano); --glyph-size-base: var(--fs-tiny); --glyph-size-lg: var(--fs-body); }
+.glyph-sm { width: 14px; height: 14px; }
+.glyph-lg { width: 22px; height: 22px; }
 

@@ -164,6 +164,14 @@ body.canvas-host { background: transparent !important; }
   padding: var(--space-5) var(--space-3);
   font-size: var(--fs-sm);
 }
+/* Sidebar section wrapper emitted by Side() (src/components/shell/app-shell.js).
+   It is the `role="group"` that owns the heading + its links, so it must be the
+   thing that groups them visually too: without a rule it was a bare block, and
+   the only separation between sections came from .app-side's own flex gap —
+   which meant the heading floated equidistant between the group it labels and
+   the one above it. Stacking the group's own children tightly re-attaches the
+   heading to its links. */
+.app-side-group { display: flex; flex-direction: column; gap: var(--space-hair); }
 .app-side .group {
   font-size: var(--fs-xs); font-weight: 600;
   color: var(--fg-3); padding: 0 var(--space-3);

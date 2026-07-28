@@ -155,10 +155,19 @@ a.row:hover .meta, .row[role="button"]:hover .meta { color: var(--accent-ink); t
    takes the full width instead of wrapping in the narrow code gutter. */
 .row.row-nocode { grid-template-columns: minmax(0, 1fr) auto; }
 
-.row .code  { font-family: var(--ff-mono); font-size: var(--fs-xs); color: var(--fg-3); font-variant-numeric: tabular-nums; letter-spacing: 0.01em; }
+/* `.row-code` / `.row-title` / `.row-meta` are the BEM-ish spelling of the same
+   three cells as `.code` / `.title` / `.meta`. Both spellings are live in the
+   wild (preview/index-row.html uses the hyphenated one), and a cell that
+   matches no rule falls back to browser defaults — 16px body text in all three
+   tracks, which is precisely the undifferentiated render the specimen page was
+   shipping. Aliased rather than renamed so neither spelling can silently go
+   unstyled again. */
+.row .code,
+.row .row-code  { font-family: var(--ff-mono); font-size: var(--fs-xs); color: var(--fg-3); font-variant-numeric: tabular-nums; letter-spacing: 0.01em; }
 /* Title defaults to the quiet app voice (fs-sm/500) — the 18px/600 marketing
    voice is now opt-in via .row--lede. */
-.row .title { font-family: var(--ff-body); font-weight: 500; font-size: var(--fs-sm); line-height: var(--lh-snug); display: flex; align-items: baseline; gap: var(--space-2-5); flex-wrap: wrap; min-width: 0; }
+.row .title,
+.row .row-title { font-family: var(--ff-body); font-weight: 500; font-size: var(--fs-sm); line-height: var(--lh-snug); display: flex; align-items: baseline; gap: var(--space-2-5); flex-wrap: wrap; min-width: 0; }
 .row .title .sub { font-family: var(--ff-body); font-weight: 400; font-size: var(--fs-sm); color: var(--fg-3); }
 /* Marketing/editorial index row — restores the roomier padding + larger title
    the default carried before app-scale became the base. */
@@ -174,7 +183,20 @@ a.row:hover .meta, .row[role="button"]:hover .meta { color: var(--accent-ink); t
 /* Context-pane cwd fact reads as a path (like .ds-dash-cwd/.ds-session-agent/
    .ds-dash-model) -- scoped to that one row so no other Row .sub is affected. */
 .ds-context-cwd-row .row .sub { font-family: var(--ff-mono); }
-.row .meta  { font-family: var(--ff-mono); font-size: var(--fs-xs); color: var(--fg-3); text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; align-self: center; }
+.row .meta,
+.row .row-meta  { font-family: var(--ff-mono); font-size: var(--fs-xs); color: var(--fg-3); text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; align-self: center; }
+/* `.row-meta` carries free prose ("state machine · 3k · shipping"), unlike
+   `.meta`'s short tabular counts — so it wraps instead of forcing the row's
+   third track wide enough to overflow a phone viewport. */
+.row .row-meta { white-space: normal; }
+/* Hairline-divided index list. `.row` is deliberately hairline-FREE (the rail
+   is the affordance), but an editorial index reads as a printed table of
+   contents: the divider IS the structure, which is what
+   preview/index-row.html's caption claims. Opt-in on the container so no
+   existing rail-based list changes. */
+.row-list > .row + .row { margin-top: 0; border-top: 1px solid var(--rule); border-radius: 0; }
+.row-list > .row:first-child { border-radius: var(--r-1) var(--r-1) 0 0; }
+.row-list > .row:last-child { border-radius: 0 0 var(--r-1) var(--r-1); }
 /* WorksList meta pairs a label with a disclosure chevron, inline-aligned. */
 .ds-works-meta { display: inline-flex; align-items: center; gap: .4em; }
 
