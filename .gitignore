@@ -11,6 +11,7 @@ node_modules/
 .gm/bootstrap-status.json
 .gm/bootstrap-error.json
 .gm/rslearn-counter.json
+.gm/.embed-generation
 .gm/trajectory-drafts/
 .gm/ingest-drafts/
 .gm/prd-state.json
