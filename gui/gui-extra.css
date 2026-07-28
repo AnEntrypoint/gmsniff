@@ -28,7 +28,7 @@
    fallback to a single stacked column, where two panes would be too cramped to
    read and the drag handle has no room to be useful. */
 .gm-split-pane { height:62vh; }
-.gm-split-pane .ds-ep-split { gap:16px; }
+.gm-split-pane .ds-ep-split { gap: 16px; }
 .gm-split-col { min-width:0; display:flex; flex-direction:column; }
 @media (max-width: 900px) {
   .gm-split-pane { height:auto; }
@@ -37,38 +37,38 @@
   .gm-split-pane .ds-ep-resize { display:none; }
 }
 
-.gm-toolbar { display:flex; gap:8px; margin-bottom:10px; align-items:center; flex-wrap:wrap; }
+.gm-toolbar { display:flex; gap: var(--space-2); margin-bottom: var(--space-2-5); align-items:center; flex-wrap:wrap; }
 .gm-toolbar input, .gm-toolbar select, .gm-toolbar textarea {
-  background: var(--surface-2); border:1px solid var(--panel-3);
-  color: var(--panel-text); padding:5px 10px; border-radius:4px; font-size:12px; font-family:inherit;
+  background: var(--surface-2); border: var(--bw-hair) solid var(--panel-3);
+  color: var(--panel-text); padding: var(--space-1-5) var(--space-2-5); border-radius: var(--r-0); font-size: var(--fs-micro); font-family:inherit;
 }
 .gm-toolbar input { flex:1; min-width:140px; }
 .gm-toolbar input:focus, .gm-toolbar select:focus, .gm-toolbar textarea:focus { outline:none; border-color: var(--accent); }
 
-.gm-table { width:100%; border-collapse:collapse; font-size:12px; }
-.gm-table th { text-align:start; padding:6px 10px; border-bottom:1px solid var(--panel-3); color: var(--panel-text-3); font-weight:500; position:sticky; top:0; background: var(--panel-bg); }
-.gm-table td { padding:5px 10px; border-bottom:1px solid var(--panel-3); vertical-align:top; word-break:break-all; max-width:320px; }
+.gm-table { width:100%; border-collapse:collapse; font-size: var(--fs-micro); }
+.gm-table th { text-align:start; padding: var(--space-1-75) var(--space-2-5); border-bottom: var(--bw-hair) solid var(--panel-3); color: var(--panel-text-3); font-weight:500; position:sticky; top:0; background: var(--panel-bg); }
+.gm-table td { padding: var(--space-1-5) var(--space-2-5); border-bottom: var(--bw-hair) solid var(--panel-3); vertical-align:top; word-break:break-all; max-width:320px; }
 .gm-table tr:hover td { background: var(--surface-2); }
 .gm-table th.gm-th-sortable { cursor:pointer; user-select:none; white-space:nowrap; }
 .gm-table th.gm-th-sortable:hover { color: var(--panel-text); }
-.gm-table th.gm-th-sortable:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }
+.gm-table th.gm-th-sortable:focus-visible { outline: var(--bw-rule) solid var(--accent); outline-offset:-2px; }
 .gm-table th.gm-th-sorted { color: var(--accent); }
 
-.gm-json { font-size:10px; font-family: ui-monospace, Consolas, monospace; white-space:pre-wrap; word-break:break-all; background: var(--surface-2); padding:8px; border-radius:3px; max-height:300px; overflow-y:auto; }
-.gm-empty { color: var(--panel-text-3); padding:16px; text-align:center; }
-.gm-pill { display:inline-block; padding:1px 7px; border-radius:10px; font-size:11px; background: var(--surface-2); margin:1px; }
-.gm-flex-row { display:flex; gap:12px; align-items:flex-start; flex-wrap:wrap; }
+.gm-json { font-size: var(--fs-pico); font-family: ui-monospace, Consolas, monospace; white-space:pre-wrap; word-break:break-all; background: var(--surface-2); padding: var(--space-2); border-radius: 3px; max-height:300px; overflow-y:auto; }
+.gm-empty { color: var(--panel-text-3); padding: 16px; text-align:center; }
+.gm-pill { display:inline-block; padding: 1px 7px; border-radius: var(--r-1); font-size: var(--fs-nano); background: var(--surface-2); margin: 1px; }
+.gm-flex-row { display:flex; gap: 12px; align-items:flex-start; flex-wrap:wrap; }
 .gm-flex-row > .ds-panel, .gm-flex-row > div { flex:1; min-width:260px; }
-.gm-textarea { width:100%; height:160px; font-family: ui-monospace, Consolas, monospace; font-size:11px; }
+.gm-textarea { width:100%; height:160px; font-family: ui-monospace, Consolas, monospace; font-size: var(--fs-nano); }
 /* gm-toast/.err retired: toast() in data.js now delegates to the design SDK's
    ds/components/editor-primitives.js toast(), which owns its own .ds-ep-toast /
    .ds-ep-toast-host styling (editor-primitives.css) -- stacking host, kind-based
    tone classes, leave transition. See toast-stacking-and-lifecycle-audit PRD row. */
-.gm-inline-input { background:transparent; border:1px solid transparent; color:inherit; font:inherit; width:100%; }
+.gm-inline-input { background:transparent; border: var(--bw-hair) solid transparent; color:inherit; font:inherit; width:100%; }
 .gm-inline-input:focus { outline:none; border-color: var(--accent); background: var(--surface-2); }
 .gm-inline-input.gm-field-error, select.gm-field-error { border-color: var(--danger); }
 
-.gm-propgrid-row { border-bottom:1px solid var(--panel-3); padding:8px 0; }
+.gm-propgrid-row { border-bottom: var(--bw-hair) solid var(--panel-3); padding: var(--space-2) 0; }
 .gm-propgrid-row:last-child { border-bottom:none; }
 
 /* Cross-project measurement strip for the working agents, above the panel router.
@@ -76,18 +76,18 @@
    reports each agent's watcher state, silence and deviation rate as numbers for
    the reader to judge. Renders null only when live-state reports no working
    agent at all. */
-.gm-health-banner { display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:8px 14px; margin-bottom:10px; border-radius:6px; font-size:12px; border:1px solid var(--panel-3); }
+.gm-health-banner { display:flex; align-items:center; gap: var(--space-2-5); flex-wrap:wrap; padding: var(--space-2) 14px; margin-bottom: var(--space-2-5); border-radius: 6px; font-size: var(--fs-micro); border: var(--bw-hair) solid var(--panel-3); }
 .gm-health-label { font-weight:600; }
-.gm-health-list { display:flex; gap:2px; flex-wrap:wrap; }
+.gm-health-list { display:flex; gap: var(--space-hair); flex-wrap:wrap; }
 /* Link-styled but a real button, so it needs a real hit area: measured at
    19px tall in a live browser, under the 24px minimum pointer target. The
    height comes from padding rather than a fixed size so the label still
    wraps at narrow widths. */
-.gm-health-item { background:none; border:none; padding:3px 8px 3px 0; margin:0; font:inherit; color:inherit; cursor:pointer; text-decoration:underline; text-align:start; min-height:24px; }
+.gm-health-item { background:none; border:none; padding: var(--space-half) var(--space-2) var(--space-half) 0; margin:0; font:inherit; color:inherit; cursor:pointer; text-decoration:underline; text-align:start; min-height:24px; }
 .gm-health-item:hover { opacity:.8; }
 .gm-health-omitted { color: var(--panel-text-3); }
 
-.gm-force-svg { width:100%; height:520px; display:block; background: var(--surface-2); border:1px solid var(--panel-3); border-radius:6px; touch-action:none; }
+.gm-force-svg { width:100%; height:520px; display:block; background: var(--surface-2); border: var(--bw-hair) solid var(--panel-3); border-radius: 6px; touch-action:none; }
 .gm-force-edge { stroke: var(--panel-3); stroke-width:1; opacity:.6; }
 .gm-force-edge.dim { opacity:.08; }
 .gm-force-edge.hi { stroke: var(--accent); opacity:1; stroke-width:1.6; }
@@ -108,29 +108,29 @@
    irreducibly per-instance data, not layout) consumed by a static class.
    --------------------------------------------------------------------------- */
 .gm-text-danger { color: var(--flame); }
-.gm-hint-text { color: var(--panel-text-3); font-size:11px; margin-bottom:8px; }
-.gm-mt-8 { margin-top:8px; }
-.gm-mt-10 { margin-top:10px; }
-.gm-mt-12 { margin-top:12px; }
-.gm-mb-12 { margin-bottom:12px; }
+.gm-hint-text { color: var(--panel-text-3); font-size: var(--fs-nano); margin-bottom: var(--space-2); }
+.gm-mt-8 { margin-top: var(--space-2); }
+.gm-mt-10 { margin-top: var(--space-2-5); }
+.gm-mt-12 { margin-top: 12px; }
+.gm-mb-12 { margin-bottom: 12px; }
 .gm-m-0 { margin:0; }
-.gm-my-4 { margin:4px 0; }
+.gm-my-4 { margin: var(--space-1) 0; }
 .gm-cursor-pointer { cursor:pointer; }
 .gm-h-80 { height:80px; }
 .gm-opacity-70 { opacity:.7; }
-.gm-p-8 { padding:8px; }
-.gm-row-end { display:flex; justify-content:flex-end; margin-bottom:8px; }
-.gm-row-between { display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; }
-.gm-row-gap-8 { display:flex; align-items:center; gap:8px; }
+.gm-p-8 { padding: var(--space-2); }
+.gm-row-end { display:flex; justify-content:flex-end; margin-bottom: var(--space-2); }
+.gm-row-between { display:flex; justify-content:space-between; align-items:center; margin-bottom: var(--space-1-75); }
+.gm-row-gap-8 { display:flex; align-items:center; gap: var(--space-2); }
 /* Wraps unconditionally rather than only under a breakpoint: the row packs
    three independent clusters (brand+leaf, project select, connection chip +
    theme toggle) and was measured overflowing its container at 782px wide
    (839 > 782) -- well above the 480px phone breakpoint that was the only thing
    allowing it to wrap. A width-triggered rule has to guess where the content
    runs out of room; letting it wrap whenever it must is the measurement. */
-.gm-row-full { display:flex; align-items:center; width:100%; flex-wrap:wrap; row-gap:8px; min-width:0; }
+.gm-row-full { display:flex; align-items:center; width:100%; flex-wrap:wrap; row-gap: var(--space-2); min-width:0; }
 .gm-row-full > * { min-width:0; }
-.gm-row-auto-gap-10 { margin-inline-start:auto; display:flex; align-items:center; gap:10px; }
+.gm-row-auto-gap-10 { margin-inline-start:auto; display:flex; align-items:center; gap: var(--space-2-5); }
 
 /* At phone width the wrapping above is not enough on its own: the project
    select still shrinks to a ~44px sliver rather than a usable tap target, so
@@ -140,10 +140,10 @@
   .gm-row-full > select.gm-ml-10 { margin-inline-start: 0; flex: 1 1 100%; order: 3; }
   .gm-row-full > .gm-row-auto-gap-10 { margin-inline-start: auto; order: 2; }
 }
-.gm-ml-6 { margin-inline-start:6px; }
-.gm-ml-10 { margin-inline-start:10px; }
-.gm-mr-8 { margin-inline-end:8px; }
-.gm-list-row { padding:6px 0; border-bottom:1px solid var(--panel-3); }
+.gm-ml-6 { margin-inline-start: var(--space-1-75); }
+.gm-ml-10 { margin-inline-start: var(--space-2-5); }
+.gm-mr-8 { margin-inline-end: var(--space-2); }
+.gm-list-row { padding: var(--space-1-75) 0; border-bottom: var(--bw-hair) solid var(--panel-3); }
 .gm-panel-danger { border-color: var(--flame); }
 .gm-row-danger-tint { background: color-mix(in oklab, var(--flame) 12%, transparent); }
 
@@ -154,8 +154,8 @@
    than the shell's display-sized h1 -- the CONTENT stays the largest thing on
    screen, same reasoning as .gm-pane-head h2 below. */
 .gm-panel-heading {
-  font-size:13px; font-weight:600; letter-spacing:0; text-transform:none;
-  margin:0 0 10px; color: var(--panel-text-3);
+  font-size: var(--fs-tiny); font-weight:600; letter-spacing:0; text-transform:none;
+  margin: 0 0 var(--space-2-5); color: var(--panel-text-3);
 }
 .gm-panel-body:focus { outline:none; }
 
@@ -168,7 +168,7 @@
 /* colorFor(sub) is per-subsystem data (a hash-derived hsl or a named palette
    entry), not a fixed layout value -- kept as a custom property so the class
    stays static while the color remains dynamic. */
-.gm-muted-11 { color: var(--panel-text-3); font-size:11px; }
+.gm-muted-11 { color: var(--panel-text-3); font-size: var(--fs-nano); }
 .gm-sub-color { color: var(--sub-color); }
 
 /* CodeInsight treemap: outer container size and every rect's position/size/
@@ -176,41 +176,41 @@
    plus per-item x/y/w/h/complexity) -- irreducibly dynamic, expressed as
    custom properties consumed by these two static classes. */
 .gm-treemap-container {
-  position:relative; width:100%; overflow:hidden; border:1px solid var(--panel-3);
+  position:relative; width:100%; overflow:hidden; border: var(--bw-hair) solid var(--panel-3);
   max-width: var(--tm-w); height: var(--tm-h);
 }
 .gm-treemap-rect {
   position:absolute; box-sizing:border-box; cursor:pointer; overflow:hidden;
-  font-size:10px; color: var(--ink); padding:2px;
+  font-size: var(--fs-pico); color: var(--ink); padding: var(--space-hair);
   inset-inline-start: var(--rx); top: var(--ry); width: var(--rw); height: var(--rh);
-  background: var(--rect-bg); border: 1px solid var(--rect-border);
+  background: var(--rect-bg); border: var(--bw-hair) solid var(--rect-border);
 }
 
 /* ---------------------------------------------------------------------------
    LIVE AGENTS -- the manager surface (gui/live-agents.js). Every colour rides a
    colors_and_type.css token; nothing here is a raw hex.
    --------------------------------------------------------------------------- */
-.gm-agent-head { display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-bottom:8px; }
-.gm-agent-controls { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px; }
+.gm-agent-head { display:flex; align-items:center; gap: var(--space-1-75); flex-wrap:wrap; margin-bottom: var(--space-2); }
+.gm-agent-controls { display:flex; gap: var(--space-1-75); flex-wrap:wrap; margin-bottom: var(--space-2-5); }
 
 /* Attention strip: the "where do I look first" answer, above the roster. */
-.gm-attention { display:flex; align-items:center; gap:8px; flex-wrap:wrap; padding:8px 12px; margin-bottom:10px;
-  border:1px solid var(--panel-3); border-inline-start:3px solid var(--warn); border-radius:4px; font-size:12px; }
+.gm-attention { display:flex; align-items:center; gap: var(--space-2); flex-wrap:wrap; padding: var(--space-2) 12px; margin-bottom: var(--space-2-5);
+  border: var(--bw-hair) solid var(--panel-3); border-inline-start:3px solid var(--warn); border-radius: var(--r-0); font-size: var(--fs-micro); }
 /* Same 24px pointer-target floor as .gm-health-item -- measured 19px live. */
-.gm-attention-item { background:none; border:none; padding:3px 6px 3px 0; margin:0; font:inherit; color:inherit;
+.gm-attention-item { background:none; border:none; padding: var(--space-half) var(--space-1-75) var(--space-half) 0; margin:0; font:inherit; color:inherit;
   cursor:pointer; text-decoration:underline; text-align:start; min-height:24px; }
 .gm-attention-item:hover { opacity:.8; }
 
 /* One-click reveal of the folded idle/finished majority. */
 /* 24px pointer-target floor, same as .gm-health-item/.gm-attention-item --
    measured 23px live, one pixel under. */
-.gm-reveal { background:none; border:1px dashed var(--panel-3); border-radius:4px; color:var(--panel-text-3);
-  font:inherit; font-size:11px; padding:2px 8px; cursor:pointer; min-height:24px; }
+.gm-reveal { background:none; border: var(--bw-hair) dashed var(--panel-3); border-radius: var(--r-0); color:var(--panel-text-3);
+  font:inherit; font-size: var(--fs-nano); padding: var(--space-hair) var(--space-2); cursor:pointer; min-height:24px; }
 .gm-reveal:hover { color:var(--panel-text); border-color:var(--accent); }
 
 /* Phase strip that renders a revisit as a revisit (visited SET, not index math). */
-.gm-phase-strip { display:flex; gap:3px; flex-wrap:wrap; margin:6px 0; }
-.gm-phase-step { font-size:10px; padding:1px 7px; border-radius:9px; border:1px solid var(--panel-3);
+.gm-phase-strip { display:flex; gap: var(--space-half); flex-wrap:wrap; margin: var(--space-1-75) 0; }
+.gm-phase-step { font-size: var(--fs-pico); padding: 1px 7px; border-radius: 9px; border: var(--bw-hair) solid var(--panel-3);
   color:var(--panel-text-3); background:transparent; }
 .gm-phase-step.is-reached { color:var(--panel-text); border-color:var(--accent); }
 .gm-phase-step.is-current { background:var(--accent); color:var(--panel-bg); font-weight:600; }
@@ -219,77 +219,77 @@
 /* The pane headings inherit the shell's h2 scale, which is display-sized for a
    page title and dwarfs the instruction it labels inside a dialog. Pin them to
    the dialog's own text scale so the CONTENT is the largest thing on screen. */
-.gm-pane-head { display:flex; align-items:baseline; justify-content:space-between; gap:8px; margin-bottom:6px;
-  border-bottom:1px solid var(--panel-3); padding-bottom:4px; }
-.gm-pane-head h2 { font-size:14px; font-weight:600; letter-spacing:0; text-transform:none; }
-.gm-feed-scroll { max-height:58vh; overflow-y:auto; border:1px solid var(--panel-3); border-radius:4px; }
-.gm-feed-row { padding:3px 8px; border-bottom:1px solid var(--panel-3); cursor:pointer; font-size:11px; }
+.gm-pane-head { display:flex; align-items:baseline; justify-content:space-between; gap: var(--space-2); margin-bottom: var(--space-1-75);
+  border-bottom: var(--bw-hair) solid var(--panel-3); padding-bottom: var(--space-1); }
+.gm-pane-head h2 { font-size: var(--fs-xs); font-weight:600; letter-spacing:0; text-transform:none; }
+.gm-feed-scroll { max-height:58vh; overflow-y:auto; border: var(--bw-hair) solid var(--panel-3); border-radius: var(--r-0); }
+.gm-feed-row { padding: var(--space-half) var(--space-2); border-bottom: var(--bw-hair) solid var(--panel-3); cursor:pointer; font-size: var(--fs-nano); }
 .gm-feed-row:last-child { border-bottom:none; }
 .gm-feed-row:hover { background: var(--surface-2); }
-.gm-feed-row:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }
+.gm-feed-row:focus-visible { outline: var(--bw-rule) solid var(--accent); outline-offset:-2px; }
 .gm-feed-row.is-open { background: var(--surface-2); }
-.gm-feed-head { display:flex; align-items:center; flex-wrap:wrap; gap:2px; }
+.gm-feed-head { display:flex; align-items:center; flex-wrap:wrap; gap: var(--space-hair); }
 .gm-feed-kind { color: var(--kind-tone, var(--panel-text)); }
 .gm-feed-dur { color: var(--panel-text-3); font-family: ui-monospace, Consolas, monospace; }
 .gm-feed-inflight { color: var(--warn); font-weight:600; }
 .gm-feed-muted { color: var(--panel-text-3); }
-.gm-feed-payload { font-size:10px; font-family: ui-monospace, Consolas, monospace; white-space:pre-wrap;
-  word-break:break-all; background: var(--panel-bg); padding:6px; margin:4px 0 0; border-radius:3px;
+.gm-feed-payload { font-size: var(--fs-pico); font-family: ui-monospace, Consolas, monospace; white-space:pre-wrap;
+  word-break:break-all; background: var(--panel-bg); padding: var(--space-1-75); margin: var(--space-1) 0 0; border-radius: 3px;
   max-height:240px; overflow:auto; }
-.gm-feed-more { font-size:10px; color: var(--panel-text-3); padding:2px 0 4px; }
+.gm-feed-more { font-size: var(--fs-pico); color: var(--panel-text-3); padding: var(--space-hair) 0 var(--space-1); }
 
 /* Gate blockers: which gate denied, and how often it repeated. */
-.gm-gates { border:1px solid var(--panel-3); border-inline-start:3px solid var(--danger);
-  border-radius:4px; padding:6px 10px; margin:8px 0; font-size:11px; }
-.gm-gates-head { display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-bottom:4px; }
-.gm-gate-row { padding:2px 0; }
+.gm-gates { border: var(--bw-hair) solid var(--panel-3); border-inline-start:3px solid var(--danger);
+  border-radius: var(--r-0); padding: var(--space-1-75) var(--space-2-5); margin: var(--space-2) 0; font-size: var(--fs-nano); }
+.gm-gates-head { display:flex; align-items:center; gap: var(--space-1-75); flex-wrap:wrap; margin-bottom: var(--space-1); }
+.gm-gate-row { padding: var(--space-hair) 0; }
 
 /* Driving prompt + rendered instruction. */
-.gm-prompt { margin:8px 0; font-size:11px; }
+.gm-prompt { margin: var(--space-2) 0; font-size: var(--fs-nano); }
 .gm-prompt > summary { cursor:pointer; color: var(--panel-text-3); }
 .gm-prompt-body { white-space:pre-wrap; word-break:break-word; background: var(--surface-2);
-  padding:8px; border-radius:3px; max-height:200px; overflow:auto; font-size:11px; margin:4px 0 0; }
-.gm-instruction-body { max-height:52vh; overflow-y:auto; border:1px solid var(--panel-3); border-radius:4px; padding:10px; }
-.gm-provenance, .gm-metrics { margin-top:10px; font-size:11px; }
+  padding: var(--space-2); border-radius: 3px; max-height:200px; overflow:auto; font-size: var(--fs-nano); margin: var(--space-1) 0 0; }
+.gm-instruction-body { max-height:52vh; overflow-y:auto; border: var(--bw-hair) solid var(--panel-3); border-radius: var(--r-0); padding: var(--space-2-5); }
+.gm-provenance, .gm-metrics { margin-top: var(--space-2-5); font-size: var(--fs-nano); }
 .gm-provenance > summary, .gm-metrics > summary { cursor:pointer; color: var(--panel-text-3); }
-.gm-vendored-list { max-height:160px; overflow:auto; margin-top:4px; }
-.gm-metric-line { padding:2px 0; }
-.gm-mono-sm { font-family: ui-monospace, Consolas, monospace; font-size:11px; opacity:.8; word-break:break-all; }
+.gm-vendored-list { max-height:160px; overflow:auto; margin-top: var(--space-1); }
+.gm-metric-line { padding: var(--space-hair) 0; }
+.gm-mono-sm { font-family: ui-monospace, Consolas, monospace; font-size: var(--fs-nano); opacity:.8; word-break:break-all; }
 .gm-tone-warn { color: var(--warn); }
 
 /* Zero-dependency markdown output (gui/markdown.js). */
-.gm-md { font-size:12px; line-height:1.5; }
-.gm-md .gm-md-h { margin:10px 0 4px; font-size:13px; }
-.gm-md .gm-md-p { margin:6px 0; }
-.gm-md .gm-md-list { margin:6px 0; padding-inline-start:20px; }
-.gm-md .gm-md-quote { margin:6px 0; padding-inline-start:10px; border-inline-start:2px solid var(--panel-3); color: var(--panel-text-3); }
-.gm-md .gm-md-hr { border:none; border-top:1px solid var(--panel-3); margin:10px 0; }
-.gm-md .gm-md-code { background: var(--surface-2); padding:8px; border-radius:3px;
-  overflow-x:auto; font-size:11px; margin:6px 0; }
-.gm-md code { background: var(--surface-2); padding:1px 4px; border-radius:3px;
-  font-family: ui-monospace, Consolas, monospace; font-size:11px; }
+.gm-md { font-size: var(--fs-micro); line-height:1.5; }
+.gm-md .gm-md-h { margin: var(--space-2-5) 0 var(--space-1); font-size: var(--fs-tiny); }
+.gm-md .gm-md-p { margin: var(--space-1-75) 0; }
+.gm-md .gm-md-list { margin: var(--space-1-75) 0; padding-inline-start: var(--space-3-5); }
+.gm-md .gm-md-quote { margin: var(--space-1-75) 0; padding-inline-start: var(--space-2-5); border-inline-start:2px solid var(--panel-3); color: var(--panel-text-3); }
+.gm-md .gm-md-hr { border:none; border-top: var(--bw-hair) solid var(--panel-3); margin: var(--space-2-5) 0; }
+.gm-md .gm-md-code { background: var(--surface-2); padding: var(--space-2); border-radius: 3px;
+  overflow-x:auto; font-size: var(--fs-nano); margin: var(--space-1-75) 0; }
+.gm-md code { background: var(--surface-2); padding: 1px var(--space-1); border-radius: 3px;
+  font-family: ui-monospace, Consolas, monospace; font-size: var(--fs-nano); }
 
 /* Honest empty/degraded states (gui/honest-state.js): every zero says which
    zero it is, so "nothing happened" can never look like "nothing loaded". */
-.gm-state { padding:8px 0; }
-.gm-state-hint { color: var(--panel-text-3); font-size:11px; text-align:center; margin:4px 0 0; }
+.gm-state { padding: var(--space-2) 0; }
+.gm-state-hint { color: var(--panel-text-3); font-size: var(--fs-nano); text-align:center; margin: var(--space-1) 0 0; }
 .gm-state.is-error .ds-file-empty-text { color: var(--danger); }
 .gm-state.is-stale .ds-file-empty-text, .gm-state.is-unscoped .ds-file-empty-text { color: var(--warn); }
-.gm-state-loading { display:flex; flex-direction:column; align-items:center; gap:6px; padding:24px 0; }
-.gm-skeleton-list { display:flex; flex-direction:column; gap:10px; padding:8px 0; }
-.gm-skeleton-row { display:flex; flex-direction:column; gap:5px; }
+.gm-state-loading { display:flex; flex-direction:column; align-items:center; gap: var(--space-1-75); padding: var(--space-4) 0; }
+.gm-skeleton-list { display:flex; flex-direction:column; gap: var(--space-2-5); padding: var(--space-2) 0; }
+.gm-skeleton-row { display:flex; flex-direction:column; gap: var(--space-1-5); }
 
 /* Stream condition banner: a dropped or resumed stream is stated, never silent. */
-.gm-stream-note { display:flex; align-items:center; gap:10px; padding:6px 14px; margin-bottom:10px;
-  border:1px solid var(--warn); border-radius:6px; font-size:12px;
+.gm-stream-note { display:flex; align-items:center; gap: var(--space-2-5); padding: var(--space-1-75) 14px; margin-bottom: var(--space-2-5);
+  border: var(--bw-hair) solid var(--warn); border-radius: 6px; font-size: var(--fs-micro);
   background: color-mix(in srgb, var(--warn) 12%, var(--panel-bg)); }
 .gm-stream-note-x { margin-inline-start:auto; background:none; border:none; color:inherit; cursor:pointer; font:inherit; }
 
 /* Opt-in state-change signal. The pulse is a brief border/background lift on an
    already-present strip rather than a new element appearing, so an arriving
    frame never reflows the panel under a reader's cursor. */
-.gm-notify { display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:6px 14px; margin-bottom:10px;
-  border:1px solid var(--panel-3); border-radius:6px; font-size:12px;
+.gm-notify { display:flex; align-items:center; gap: var(--space-2-5); flex-wrap:wrap; padding: var(--space-1-75) 14px; margin-bottom: var(--space-2-5);
+  border: var(--bw-hair) solid var(--panel-3); border-radius: 6px; font-size: var(--fs-micro);
   transition: border-color .25s ease, background-color .25s ease; }
 .gm-notify-scope { color: var(--panel-text-3); }
 .gm-notify-count { margin-inline-start:auto; font-variant-numeric: tabular-nums; }
