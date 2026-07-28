@@ -419,8 +419,14 @@
     font: var(--fs-tiny, 12px)/1 var(--ff-mono, monospace);
     color: var(--panel-text-3, var(--fg-3));
 }
+/* 24px pointer-target floor on both pager controls. Measured live on a real
+   paged table: the prev/next buttons rendered 36x21 and the numbered ones
+   23x21 -- under the minimum target size in height for both, and in BOTH axes
+   for the numbered case. Padding alone cannot guarantee the floor because
+   font-size varies per consumer, so it is stated explicitly. */
 .ds-ep-pager-btn {
     appearance: none; cursor: pointer;
+    min-height: 24px;
     background: var(--panel-2, var(--bg-2));
     border: 1px solid var(--rule);
     color: var(--panel-text, var(--fg));
@@ -435,10 +441,13 @@
 .ds-ep-pager-numbered { flex-wrap: wrap; }
 .ds-ep-pager-num {
     appearance: none; cursor: pointer;
+    min-height: 24px;
     background: var(--panel-2, var(--bg-2));
     border: 1px solid var(--rule);
     color: var(--panel-text, var(--fg));
-    min-width: 1.75em;
+    /* max() rather than a bare 1.75em: at the small font a pager uses, 1.75em
+       computed to 23px -- just under the target floor. */
+    min-width: max(24px, 1.75em);
     padding: var(--space-half, 3px) var(--space-1, 4px);
     border-radius: var(--r-1, 4px);
     font: inherit;
