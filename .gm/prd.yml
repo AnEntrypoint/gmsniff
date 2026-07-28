@@ -2,32 +2,11 @@
   note: Probe row testing whether plugkit's store write path has recovered after the failures observed in the prior walk. If this row lands, the store is writable and PRD state is trustworthy again; it will be resolved or removed immediately.
   status: completed
   witness: 'Probe succeeded, so the store write path has recovered and PRD state is trustworthy again. The prior walk saw five consecutive write failures (prd-add 10061/10062/10063, mutable-add 10065/10066) with reads working throughout, and isolated the cause to plugkit''s wasm store rather than the filesystem: a fresh spool boot did not clear it, removing a 542-minute-stale .gm/gm.db.lock/ did not clear it, disk had 140GB free, and both fs.writeFileSync and registry.js atomicWriteFile succeeded directly on .gm/prd.yml. This probe row was written and read back cleanly ({added: probe-store-write-recovered}, 1 row on disk), so the failure was transient and is now gone -- which is why it was retested rather than inherited as a standing blocker.'
-- id: gui-run-sdk-linters
-  title: Run the design SDK linters against gui/ and fix every reported violation
-  body: ../design/scripts carries 14 linters (lint-tokens, lint-classes, lint-css, lint-glyphs, lint-inline-styles, lint-null-children, lint-spacing, lint-duplicate-selectors, lint-rtl-physical-properties, lint-swallow-comments, lint-fontsize, lint-important). gmsniff runs none of them against gui/. Establish the measurement first, then fix.
-  SESSION_ID: gmsniff-gui-impeccable-1785231986
-  status: completed
-  witness: 'Established the measurement and fixed everything it reported. scripts/lint-gui-ds.mjs re-derives the consumer-applicable rules from ../design/scripts (which hardcode their own repo root and sheet list, so none can be pointed at gui/) and runs 9 rule classes over the tree. First run: 17 rtl_physical, 16 raw_color_literals, 3 undeclared_vars, 2 important, plus 3 false button_no_name. Now zero across all nine, asserted per-rule in test.js and negative-tested by injecting a defect of each class.'
-  commit_comment: Run the SDK lint rules against gui/ and fix every finding
-- id: gui-hardcoded-px-to-tokens
-  title: Replace 194 hardcoded px literals in gui-extra.css with SDK spacing/size tokens
-  body: 'Measured gui-extra.css: 194 px literals vs 76 var() uses, against 191 SDK tokens available. The SDK ships scripts/lint-spacing.baseline.json and lint-tokens.mjs enforcing exactly this.'
-  SESSION_ID: gmsniff-gui-impeccable-1785231986
-  status: completed
-  witness: '201 px literals reduced to 48, converting only where the vendored layer declares an EXACT equivalent and only within the property family the token was designed for (a font-size token must never become a padding): --bw-hair/--bw-rule for border and outline widths, --fs-pico..--fs-body for font-size, --space-hair..--space-4 for padding/margin/gap shorthands, --r-hair..--r-3 for radii. The 48 remaining are values with no exact token (1px/7px/9px/12px/16px paddings and radii, where converting would change rendering) and component dimensions with no scale token (max-width, min-width, height, max-height, media-query widths). Witnessed behaviour-preserving in the live browser: table padding still computes 6px 10px, font-size 13px, border 1px; heading 13px/10px; reveal min-height 24px -- identical to before the conversion.'
-  commit_comment: Convert px literals to SDK tokens where an exact one exists
 - id: gui-loading-skeleton-vs-refresh
   title: Distinguish cold-load skeleton from refresh dimming
   body: 'SDK FileGrid precedent: skeleton ONLY on cold load; flashing a populated grid to shimmer on every mutation reads as data loss. gmsniff GUI polls live data (app.js setTimeout=5) - a full re-skeleton on each poll would read identically.'
   SESSION_ID: gmsniff-gui-impeccable-1785231986
   status: pending
-- id: gui-null-nullable-sort
-  title: Audit GUI comparators over nullable measurements
-  body: AGENTS.md records the health banner sorting staleSeconds==null as zero-seconds-silent, sorting the most suspicious project last. Enumerate every sort/min/max/average in gui/ over a field that can be null and make the absent-value decision explicit.
-  SESSION_ID: gmsniff-gui-impeccable-1785231986
-  status: completed
-  witness: 'Audited all 34 sort/min/max/reduce sites in gui/. Every comparator over a nullable field makes the absent-value decision explicit: longestSilentFirst maps staleSeconds==null to Infinity (the exact defect AGENTS.md records, already fixed) then tie-breaks on (deviationRate||0); attentionScore returns a real number on every path -- early SCORE_NOT_A_GM_AGENT return for projects with no gm state, additive conditions otherwise -- with a reasons array, so it ranks a complete list rather than omitting anything. The other 23 flagged sites are Math.min/Math.max over integers (page counts, reconnect backoff, treemap geometry) where null cannot arise.'
-  commit_comment: Audit nullable comparators across gui/
 - id: gui-keyboard-nav-roving
   title: Give GUI lists roving-focus keyboard navigation
   body: 'SDK FileGrid implements ArrowDown/ArrowUp/Home/End/Backspace/Ctrl+A roving focus over a grid. Measured gmsniff: onkeydown=2 in panels.js, 1 in live-agents.js, 0 in app.js - the live-agents list has no keyboard traversal.'
