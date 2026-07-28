@@ -55,7 +55,8 @@ export function SessionDashboard({ sessions = [], onStop, onOpen, onView, onStop
                                    sort, filter, errorsOnly = false, onErrorsOnly,
                                    selectable = false, selected, onToggleSelect, onSelectAll, onClearSelection,
                                    activeSid, streamState,
-                                   emptyText = 'No live sessions', emptyAction, offline = false } = {}) {
+                                   emptyText = 'No live sessions', emptyAction, offline = false,
+                                   density = 'comfortable' } = {}) {
   if (offline) {
     return h('div', { class: 'ds-dash-state ds-dash-state-error', role: 'status' }, 'Backend offline — live sessions unavailable');
   }
@@ -171,7 +172,7 @@ export function SessionDashboard({ sessions = [], onStop, onOpen, onView, onStop
   const grouped = !sort || !sort.value || sort.value === 'status';
   const cardOf = (s) => h('div', { key: s.sid, role: 'listitem' },
     SessionCard({ session: s, onStop, onOpen, onView, active: s.sid === activeSid,
-                  selectable, selected: selSet.has(s.sid), onToggleSelect }));
+                  selectable, selected: selSet.has(s.sid), onToggleSelect, density }));
   // ONE stable body wrapper across every state (empty / grouped / flat), with
   // KEYED children - the ConversationList stable-keyed-body rule. Diffing
   // happens on the children, never by swapping the container's shape.
@@ -193,9 +194,9 @@ export function SessionDashboard({ sessions = [], onStop, onOpen, onView, onStop
     ].filter((b) => b.rows.length);
     bodyKids = buckets.map((b) => h('div', { key: 'grp' + b.key, class: 'ds-dash-group', role: 'group', 'aria-label': b.label + ' sessions' },
       h('div', { key: 'gl', class: 'ds-dash-group-label' }, b.label + ' · ' + b.rows.length),
-      h('div', { key: 'gg', class: 'ds-dash-grid', role: 'list', 'aria-label': b.label + ' sessions' }, ...b.rows.map(cardOf))));
+      h('div', { key: 'gg', class: 'ds-dash-grid' + (density === 'compact' ? ' is-compact' : ''), role: 'list', 'aria-label': b.label + ' sessions' }, ...b.rows.map(cardOf))));
   } else {
-    bodyKids = [h('div', { key: 'flat', class: 'ds-dash-grid', role: 'list', 'aria-label': 'live sessions' }, ...sessions.map(cardOf))];
+    bodyKids = [h('div', { key: 'flat', class: 'ds-dash-grid' + (density === 'compact' ? ' is-compact' : ''), role: 'list', 'aria-label': 'live sessions' }, ...sessions.map(cardOf))];
   }
   const body = h('div', { key: 'body', class: 'ds-dash-groups' }, ...bodyKids);
   return h('div', { class: 'ds-dash' }, header, body);

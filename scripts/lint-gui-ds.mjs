@@ -35,12 +35,21 @@ const DS = path.join(GUI, 'ds');
 // A mismatch is NOT automatically a bug -- it means: read the upstream diff and
 // decide whether the rule change applies to a consumer of the design system.
 // Re-pin the hash in the same commit that carries that decision.
+// `rule` is the hash that GATES (asserted in test.js); `file` is reported only.
+// Two upstream commits on 2026-07-28 moved every `file` hash while leaving the
+// rule bodies identical -- lint-inline-styles widened SCAN_DIRS to
+// preview/slides/src and added a ratchet baseline; lint-tokens added four
+// shipped sheets to COMPONENT_SHEETS. Both are decisions about which of THEIR
+// trees to scan; this copy already scans all of gui/ at a hard zero, so neither
+// reaches a consumer. `rule: null` means the file exposes none of the extracted
+// signature patterns (duplicate-selectors and glyphs carry their logic inline),
+// so those are watched by file hash alone and judged by hand when they move.
 export const SDK_RULE_SOURCES = {
-  'scripts/lint-tokens.mjs': 'e592fe6c2957f781',
-  'scripts/lint-rtl-physical-properties.mjs': '33d650e25ec9d5a1',
-  'scripts/lint-inline-styles.mjs': '9f5f7a7c91c1db96',
-  'scripts/lint-duplicate-selectors.mjs': 'a2c781dc24e09692',
-  'scripts/lint-glyphs.mjs': '4f934a0200d73bee',
+  'scripts/lint-tokens.mjs': { file: '9d41f149eb79d132', rule: '89374da6420c1872' },
+  'scripts/lint-rtl-physical-properties.mjs': { file: '33d650e25ec9d5a1', rule: 'bc206063bc3539d6' },
+  'scripts/lint-inline-styles.mjs': { file: '24182309acc00914', rule: 'cbb933aaf269883b' },
+  'scripts/lint-duplicate-selectors.mjs': { file: 'a2c781dc24e09692', rule: null },
+  'scripts/lint-glyphs.mjs': { file: '4f934a0200d73bee', rule: null },
 };
 
 // Returns {checked, drifted:[{file, expected, actual}], missing:[file]}.
@@ -48,17 +57,58 @@ export const SDK_RULE_SOURCES = {
 // when that checkout is absent (an installed copy of gmsniff, an air-gapped
 // machine) there is nothing to compare against and `checked` is 0 -- an absent
 // source is not drift.
+// A pinned hash compares a rule's WHOLE FILE, so it fires on any edit --
+// including ones that cannot affect a consumer. Measured on 2026-07-28: two
+// upstream commits changed only which of their OWN trees to scan
+// (lint-inline-styles widened SCAN_DIRS to preview/slides/src and added a
+// ratchet baseline; lint-tokens added four shipped sheets to COMPONENT_SHEETS)
+// while the rule bodies stayed byte-identical, and the files kept re-hashing
+// across consecutive reads because that repo was under active development.
+// Pinning against a moving file is a race the guard always loses.
+//
+// So the pin is on the RULE, not the file: the significant regexes and literal
+// sets this copy re-derives are extracted and hashed on their own. A rule
+// genuinely changing still fires; a scan-set or comment edit upstream no longer
+// does. `filePins` stays reported (not asserted) so a whole-file change is
+// still visible without failing a consumer it cannot reach.
+const RULE_SIGNATURE_PATTERNS = [
+  /const\s+LAYOUT_RE\s*=\s*\/[^\n]*/,
+  /const\s+WHITELIST_RE\s*=\s*\[[\s\S]*?\]/,
+  /const\s+STYLE_ATTR_RE\s*=\s*\/[^\n]*/,
+  /const\s+PHYSICAL_RE\s*=\s*\/[^\n]*/,
+  /const\s+TEXT_ALIGN_RE\s*=\s*\/[^\n]*/,
+  /const\s+LOGICAL_MAP\s*=\s*\{[\s\S]*?\}/,
+  /const\s+COLOR_(?:RE|LITERAL_RE)\s*=\s*\/[^\n]*/,
+];
+
+// The rule-body fingerprint for each upstream file: the concatenation of every
+// signature pattern that matches, hashed. Empty when a file exposes none of
+// them (then only the file pin is reported).
+export function ruleSignature(src) {
+  const parts = [];
+  for (const re of RULE_SIGNATURE_PATTERNS) {
+    const m = src.match(re);
+    if (m) parts.push(m[0].replace(/\s+/g, ' ').trim());
+  }
+  if (!parts.length) return null;
+  return createHash('sha256').update(parts.join('\n')).digest('hex').slice(0, 16);
+}
+
 export function checkSdkRuleDrift(sourceRoot = path.resolve(REPO, '..', 'design')) {
-  const drifted = [], missing = [];
+  const drifted = [], missing = [], filePins = [];
   let checked = 0;
-  for (const [rel, pinned] of Object.entries(SDK_RULE_SOURCES)) {
+  for (const [rel, pin] of Object.entries(SDK_RULE_SOURCES)) {
     const abs = path.join(sourceRoot, rel);
     if (!fs.existsSync(abs)) { missing.push(rel); continue; }
     checked++;
-    const actual = createHash('sha256').update(fs.readFileSync(abs)).digest('hex').slice(0, 16);
-    if (actual !== pinned) drifted.push({ file: rel, expected: pinned, actual });
+    const src = fs.readFileSync(abs, 'utf8');
+    const fileHash = createHash('sha256').update(src).digest('hex').slice(0, 16);
+    const sig = ruleSignature(src);
+    if (fileHash !== pin.file) filePins.push({ file: rel, expected: pin.file, actual: fileHash });
+    // Only a changed RULE BODY is drift a consumer must act on.
+    if (pin.rule && sig && sig !== pin.rule) drifted.push({ file: rel, expected: pin.rule, actual: sig });
   }
-  return { checked, drifted, missing, sourceRoot };
+  return { checked, drifted, missing, filePins, sourceRoot };
 }
 
 // gui/ds is vendored from ../design and must never be hand-edited, so it is
@@ -204,11 +254,14 @@ if (process.argv[1] && process.argv[1].endsWith('lint-gui-ds.mjs')) {
   if (drift.checked === 0) {
     console.log(`(no design-system checkout at ${drift.sourceRoot} -- upstream rule drift not checked)`);
   } else if (drift.drifted.length) {
-    console.log(`\n${drift.drifted.length} upstream rule(s) changed since these copies were pinned:`);
+    console.log(`\n${drift.drifted.length} upstream RULE BODY(s) changed since these copies were pinned:`);
     for (const d of drift.drifted) console.log(`  ${d.file}: pinned ${d.expected}, now ${d.actual}`);
     console.log('Read the upstream diff, decide whether it applies here, then re-pin in the same commit.');
   } else {
-    console.log(`upstream rules unchanged (${drift.checked} pinned)`);
+    const note = drift.filePins.length
+      ? ` (${drift.filePins.length} file(s) edited upstream without a rule-body change: ${drift.filePins.map((f) => f.file.replace('scripts/', '')).join(', ')})`
+      : '';
+    console.log(`upstream rule bodies unchanged (${drift.checked} pinned)${note}`);
   }
   process.exit(total || drift.drifted.length ? 1 : 0);
 }

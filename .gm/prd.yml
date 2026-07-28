@@ -2,3 +2,109 @@
   note: Probe row testing whether plugkit's store write path has recovered after the failures observed in the prior walk. If this row lands, the store is writable and PRD state is trustworthy again; it will be resolved or removed immediately.
   status: completed
   witness: 'Probe succeeded, so the store write path has recovered and PRD state is trustworthy again. The prior walk saw five consecutive write failures (prd-add 10061/10062/10063, mutable-add 10065/10066) with reads working throughout, and isolated the cause to plugkit''s wasm store rather than the filesystem: a fresh spool boot did not clear it, removing a 542-minute-stale .gm/gm.db.lock/ did not clear it, disk had 140GB free, and both fs.writeFileSync and registry.js atomicWriteFile succeeded directly on .gm/prd.yml. This probe row was written and read back cleanly ({added: probe-store-write-recovered}, 1 row on disk), so the failure was transient and is now gone -- which is why it was retested rather than inherited as a standing blocker.'
+- id: design-shell-height-overflow
+  title: Fix the sidebar overflowing the shell (side h=530 in a 439px viewport)
+  body: 'CORRECTED after a deeper read: the earlier main-308-vs-panelBody-1837 reading was NOT a defect -- #app-main computes overflow:auto and #panel-body overflow:visible, so that is a correctly-scrolling container, and documentElement.scrollHeight equals the 439px viewport exactly, meaning the shell does contain itself. The real overflow is .app-side at h=530 inside a 439px viewport, so the sidebar runs past the shell bottom and its lower nav entries fall outside the frame.'
+  SESSION_ID: gmsniff-gui-redesign-1785248666
+  status: pending
+- id: design-scan-affordance
+  title: Make the roster scannable by the thing a manager actually scans for
+  body: The manager view answer is who needs attention and why. That is currently prose inside a card. It should be the strongest visual element in the row.
+  SESSION_ID: gmsniff-gui-redesign-1785248666
+  status: pending
+- id: design-witness-before-after
+  title: Witness every design change with a real before/after measurement
+  body: A design claim without a measurement is an opinion. Every row here closes on a live-DOM number (density, contrast, size ramp, element count) or a screenshot pair, never on prose.
+  SESSION_ID: gmsniff-gui-redesign-1785248666
+  status: pending
+- id: design-type-scale-collapse
+  title: Replace the 6-size flat type ramp with a real hierarchy
+  body: 'Measured live text sizes: 16px x112, 15px x58, 13px x60, 14px x16, 12px x15, 11px x1. Two adjacent sizes (15/16) carry 170 of 262 text elements and differ by one pixel, which reads as noise rather than hierarchy. The SDK ships a full --fs-* scale (pico 10 / nano 11 / micro 12 / tiny 13 / xs 14 / sm 15 / body 16 / lg 18 / xl 21 plus clamp-based display sizes) -- pick deliberate steps from it per role.'
+  SESSION_ID: gmsniff-gui-redesign-1785248666
+  status: pending
+- id: design-row-density-208px
+  title: Cut the 208px agent-card height to a scannable density
+  body: 'Measured live: every agent card renders 208px tall (13 of 14 sampled identical), so a 439px-tall viewport shows roughly two agents at once. gmsniff primary product is the live manager view -- who is running, what phase, what instruction. A card that costs a third of a screen per agent defeats the surface entire purpose. Target a scan-first row that still carries phase, elapsed, PRD/mutable counts and the served instruction excerpt.'
+  SESSION_ID: gmsniff-gui-redesign-1785248666
+  status: completed
+  witness: 'Measured live before: every agent card 208px tall, median 208 across 13 cards, so a 439px viewport showed ~2 agents. Added a density prop to the SDK SessionCard/SessionDashboard (upstream in ../design, then synced -- gui/ds is never hand-edited) with a compact mode that lays head+meta on one row and drops only the per-card action group, plus a .ds-dash-grid.is-compact single-column stack. Measured live after: median card height 37px, compactClass 13/13, grid class ds-dash-grid is-compact -- a 5.6x density gain, ~11 agents per screen instead of 2. Every fact survives the collapse, witnessed in the rendered row text: RUNNING PLAN C:/dev/gmsniff 39m 14s - prd 19/20 - mut 0 last event 10s ago.'
+  commit_comment: 'Add a compact roster density: 208px cards to 37px rows'
+- id: design-accent-underused
+  title: Use the electric lead accent where it carries meaning
+  body: 'Measured live colour census: --accent lime rgb(182,255,27) appears on 9 elements against 340 at body tone and 50 at tier-3. The Acid Editorial north-star is one electric lead against near-black ink; at 9 uses the lead is effectively absent and every surface reads uniformly grey. Decide the small set of things that earn the accent (current phase, running state, primary action) rather than sprinkling it.'
+  SESSION_ID: gmsniff-gui-redesign-1785248666
+  status: pending
+- id: design-information-density-mode
+  title: Offer a density control the way the SDK FileGrid does
+  body: The SDK ships a list/compact/thumb density radiogroup for FileGrid. The agents roster has one fixed presentation. A manager scanning 16 projects and an operator reading one instruction want different densities of the same data.
+  SESSION_ID: gmsniff-gui-redesign-1785248666
+  status: pending
+- id: design-monospace-usage
+  title: Decide deliberately where monospace belongs
+  body: 'Two families render: system-ui and ui-monospace. Monospace should mark machine-truth (paths, ids, durations, payloads) and never body prose; verify each current use earns it.'
+  SESSION_ID: gmsniff-gui-redesign-1785248666
+  status: pending
+- id: design-status-bar-absent
+  title: The status bar renders display:none at zero height
+  body: 'Measured live: .app-status computes display:none, w=0, h=0. The shell passes a Status({left,right}) with the project cwd and a glance summary, and none of it is visible. Either the status bar earns its place and must render, or the information it carries needs another home -- currently the code builds it and the user never sees it.'
+  SESSION_ID: gmsniff-gui-redesign-1785248666
+  status: pending
+- id: design-attention-drives-order-and-weight
+  title: Let the computed attention ranking drive visual weight, not just order
+  body: attentionScore already ranks the roster and attaches a reasons array. Currently that only affects sort order; every row still paints identically. The highest-attention row should be visually heaviest, so the eye lands where the data says to look.
+  SESSION_ID: gmsniff-gui-redesign-1785248666
+  status: pending
+- id: design-card-to-row-architecture
+  title: 'Decide the roster primitive: card grid vs dense table'
+  body: The 208px card is the density problem root cause, and shrinking padding alone will not fix it -- a card carries a fixed chrome cost (border, radius, internal gaps) per agent. The architectural question is whether the roster should be a card grid at all, or a dense table/list with the card reserved for a selected agent detail. Settle this before tuning any spacing, because the answer changes every other density row.
+  SESSION_ID: gmsniff-gui-redesign-1785248666
+  status: completed
+  witness: 'Settled by reading the real render path rather than guessing: the roster uses the SDK SessionDashboard/SessionCard, and the 208px comes from four stacked flex rows (title, head, meta, actions) with gap --space-2 and padding --space-3, the action group being the largest fixed cost at 32px min-height buttons rendered per card whether or not you act on that agent. So the answer is neither a bespoke table nor tuning gmsniff padding -- it is a density mode on the SDK component, mirroring the list/compact/thumb radiogroup FileGrid already ships in the same SDK. Implemented upstream and witnessed at 37px.'
+  commit_comment: 'Settle the roster primitive: SDK density mode, not a bespoke table'
+- id: design-sdk-first-not-bespoke
+  title: Build from SDK components before writing bespoke CSS
+  body: gui-extra.css is gmsniff own 300-line sheet layered on the SDK. Any new visual work should first ask whether the SDK already ships the component (Panel, Row, StatTile, PhaseWalk, BarRow, SessionCard, FileGrid density) rather than growing the bespoke sheet -- and if the SDK lacks it, the fix belongs upstream in ../design, never hand-edited into gui/ds/.
+  SESSION_ID: gmsniff-gui-redesign-1785248666
+  status: pending
+- id: design-screenshot-before-after
+  title: Capture a real before/after screenshot pair for the redesign
+  body: A density or hierarchy claim is best witnessed visually. Capture the current state and the final state through the browser verb screenshot prefix so the change is inspectable, not just numeric.
+  SESSION_ID: gmsniff-gui-redesign-1785248666
+  status: pending
+- id: design-degenerate-zero-agents
+  title: Design the zero-agent and single-agent roster states
+  body: With 0 discovered agents, 1 agent, or all-idle, a grid built for 16 rows reads as broken rather than empty. Each degenerate count needs a deliberate rendering.
+  SESSION_ID: gmsniff-gui-redesign-1785248666
+  status: pending
+- id: design-upstream-vs-local
+  title: Decide per change whether it belongs upstream in ../design or local in gui/
+  body: A change to a shared primitive belongs in ../design and comes back through sync:ds; a change to gmsniff own chrome belongs in gui/. Getting this wrong either forks the SDK silently or leaves other consumers unfixed. Record the reasoning per change.
+  SESSION_ID: gmsniff-gui-redesign-1785248666
+  status: pending
+- id: design-degenerate-long-values
+  title: 'Handle degenerate content: very long cwd paths, long instruction text, huge counts'
+  body: Real data carries deep worktree paths and multi-KB instruction excerpts. Verify each renders without breaking the row, and that truncation names what it cut.
+  SESSION_ID: gmsniff-gui-redesign-1785248666
+  status: pending
+- id: design-theme-parity-light
+  title: Verify every design change in BOTH themes
+  body: --accent-ink resolves to a different tone per theme (#4E4200 light vs the lime on ink). Any new colour decision must be checked in both, since a tone that reads on ink can vanish on paper.
+  SESSION_ID: gmsniff-gui-redesign-1785248666
+  status: pending
+- id: design-many-agents-overflow
+  title: Design the roster at fleet scale
+  body: Live-state reports 16 projects here and the roster caps what it shows. At 50+ discovered projects the layout, the cap notice and the scroll behaviour all need to hold.
+  SESSION_ID: gmsniff-gui-redesign-1785248666
+  status: pending
+- id: design-focus-visible-preserved
+  title: Preserve focus-ring and reduced-motion coverage through the redesign
+  body: A universal :focus-visible rule and 20 reduced-motion blocks currently cover the app. A restyle that replaces components can silently drop both -- re-witness after, do not assume.
+  SESSION_ID: gmsniff-gui-redesign-1785248666
+  status: pending
+- id: design-upstream-concurrently-written
+  title: ../design is under active concurrent development this session
+  body: 'Detected, not assumed: scripts/lint-inline-styles.mjs hashed 9f5f7a7c -> a373394e -> 5e48f1a7 -> d37fca01 -> 24182309 across consecutive reads minutes apart, and git status in ../design shows uncommitted work across the tree. The rule body itself is byte-identical to the pinned copy (same LAYOUT_RE, same five whitelist patterns); upstream commit 0b5b2e0 only widened its own SCAN_DIRS and added a ratchet baseline, neither of which applies to a consumer that already scans all of gui/ at a hard zero. Consequence for this session: every sync:ds pull and every drift re-pin is a snapshot of a moving tree, so a vendored file can go stale again minutes later -- re-check rather than trusting an earlier green, and never re-pin blind to silence the guard.'
+  SESSION_ID: gmsniff-gui-redesign-1785248666
+  status: completed
+  witness: 'Detected by execution and then designed around. scripts/lint-inline-styles.mjs hashed 9f5f7a7c -> a373394e -> 5e48f1a7 -> d37fca01 -> 24182309 across consecutive reads, and lint-tokens.mjs moved twice more while I was re-pinning it; git status in ../design shows uncommitted work throughout. Both upstream diffs were read: each widened only which of ITS OWN trees to scan (SCAN_DIRS to preview/slides/src plus a ratchet baseline; four shipped sheets added to COMPONENT_SHEETS) while the rule bodies stayed byte-identical. Rather than keep losing a hash race, the guard now pins the RULE BODY -- the extracted LAYOUT_RE / WHITELIST_RE / STYLE_ATTR_RE / PHYSICAL_RE / TEXT_ALIGN_RE / LOGICAL_MAP / COLOR_RE signatures -- and merely REPORTS whole-file edits. Negative-tested: injecting NEGTEST into upstream LAYOUT_RE fired the gate (pinned cbb933aa, now 04d6c6c9), restoring cleared it, and the two scan-set edits now report without failing.'
+  commit_comment: Pin the SDK lint RULE BODY, not the whole file

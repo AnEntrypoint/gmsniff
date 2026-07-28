@@ -1122,9 +1122,16 @@ assert(schemaOut.subcommands.every(s => typeof s.tier === 'string'), 'schema sub
   // sources are pinned by hash: a change there fails here by name rather than
   // leaving gui/ quietly passing an outdated rule. An absent sibling checkout
   // (installed copy, air-gapped machine) is not drift and skips the check.
+  // Asserted on the RULE BODY, not the whole file. Measured 2026-07-28: two
+  // upstream commits moved every file hash while leaving the rules identical
+  // (both widened which of THEIR OWN trees to scan), and the files kept
+  // re-hashing between consecutive reads because that repo was under active
+  // development -- a whole-file pin turns every upstream edit into a failure
+  // here, including ones that cannot reach a consumer. filePins stays reported
+  // by the CLI so a whole-file change is still visible.
   const drift = checkSdkRuleDrift();
   assert.deepStrictEqual(drift.drifted, [],
-    `upstream SDK lint rules changed since these copies were pinned: ${drift.drifted.map((d) => `${d.file} (pinned ${d.expected}, now ${d.actual})`).join(', ')}`
+    `upstream SDK lint RULE BODIES changed since these copies were pinned: ${drift.drifted.map((d) => `${d.file} (pinned ${d.expected}, now ${d.actual})`).join(', ')}`
     + ' -- read the upstream diff, decide whether it applies to gui/, then re-pin in the same commit');
 
   // Zero external-origin runtime fetches is a load-bearing property (AGENTS.md):

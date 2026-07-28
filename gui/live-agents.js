@@ -200,10 +200,20 @@ export function phasesSeenFrom(f, row) {
   return seen.size ? [...seen] : null;
 }
 
+// Density persists across reloads because it is an operator preference about
+// how they read the fleet, not per-visit state. Compact is the default: the
+// comfortable card measured 208px tall against a 439px viewport, so the
+// scan-many-agents view showed two agents at a time.
+const DENSITY_STORAGE_KEY = 'gmsniff.agents.density';
+const storedDensity = (() => {
+  try { return localStorage.getItem(DENSITY_STORAGE_KEY); } catch { return null; }
+})();
+
 export const liveState = {
   filter: '',
   errorsOnly: false,
   aliveOnly: true,
+  density: storedDensity === 'comfortable' ? 'comfortable' : 'compact',
   open: null,
   autoscroll: true,
   expanded: new Set(),
@@ -216,6 +226,12 @@ export const liveState = {
   loadError: null,
   loaded: false,
 };
+
+function setDensity(next, setBody) {
+  liveState.density = next;
+  try { localStorage.setItem(DENSITY_STORAGE_KEY, next); } catch { /* private mode: density stays per-session */ }
+  if (setBody) setBody();
+}
 
 // Dispatches against the card's OWN cwd, never the topbar's globally-selected
 // project, so acting on the row in front of you cannot hit a different agent.
@@ -863,8 +879,26 @@ export async function LiveAgents({ connState = 'connecting', onNav } = {}, setBo
             onclick: () => openDrilldown(a.row, setBody),
           }, `${basename(a.row.cwd)} -- ${reason}`)))
       : null,
+    h('div', { key: 'density', class: 'gm-density', role: 'radiogroup', 'aria-label': 'roster density' },
+      ...[['compact', 'compact'], ['comfortable', 'comfortable']].map(([k, label], idx, arr) => h('button', {
+        key: 'd-' + k, type: 'button', role: 'radio',
+        class: 'gm-density-btn' + (liveState.density === k ? ' is-active' : ''),
+        'aria-checked': liveState.density === k ? 'true' : 'false',
+        // Single tab stop: the checked radio is tabbable, the other is roved,
+        // matching the ds FileGrid density control.
+        tabindex: liveState.density === k ? '0' : '-1',
+        onkeydown: (e) => {
+          if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight' && e.key !== 'Home' && e.key !== 'End') return;
+          e.preventDefault();
+          const next = e.key === 'Home' ? 0 : e.key === 'End' ? arr.length - 1
+            : (idx + (e.key === 'ArrowRight' ? 1 : arr.length - 1)) % arr.length;
+          setDensity(arr[next][0], setBody);
+        },
+        onclick: () => { if (liveState.density !== k) setDensity(k, setBody); },
+      }, label))),
     h('div', { key: 'dash' }, SessionDashboard({
       sessions: cards,
+      density: liveState.density,
       streamState: connState === 'live' ? 'connected' : (connState === 'reconnecting' ? 'connecting' : 'offline'),
       filter: {
         value: liveState.filter, placeholder: 'Filter agents by project / phase / skill',

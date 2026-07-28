@@ -610,6 +610,38 @@
 .ds-dash-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: var(--space-2); padding: var(--space-3); }
 @media (min-width: 1500px) { .ds-dash-grid { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); } }
 .ds-dash-card { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-3); background: var(--bg-2); border: var(--bw-hair) solid var(--bg-3); border-radius: var(--r-2); }
+
+/* Compact density — one line per session. The comfortable card stacks title +
+   head + meta + actions as four flex rows and measured 208px tall on a real
+   dashboard, so a 439px viewport showed two sessions at once; a command center
+   whose job is scanning many sessions cannot afford a third of a screen each.
+   Compact keeps every fact and drops only the per-card action row (reachable by
+   opening the session), laying head and meta side by side instead of stacked.
+   The grid also collapses to a single column: a min-240px card grid beside
+   one-line rows would put unrelated sessions shoulder to shoulder and destroy
+   the vertical scan the density exists to create. */
+.ds-dash-grid.is-compact { grid-template-columns: 1fr; gap: 0; padding: var(--space-1) var(--space-2); }
+.ds-dash-card.is-compact {
+  flex-direction: row; align-items: baseline; flex-wrap: wrap;
+  gap: var(--space-2); padding: var(--space-1-75) var(--space-2);
+  background: transparent; border: 0; border-radius: 0;
+  border-bottom: var(--bw-hair) solid var(--bg-3);
+}
+.ds-dash-card.is-compact .ds-dash-card-head { flex: 0 0 auto; }
+/* meta takes the remaining width and stays on one line, so a long cwd elides
+   rather than wrapping the row to two lines and defeating the density. */
+.ds-dash-card.is-compact .ds-dash-meta {
+  flex: 1 1 0; min-width: 0; display: flex; flex-direction: row;
+  align-items: baseline; gap: var(--space-2); overflow: hidden;
+}
+.ds-dash-card.is-compact .ds-dash-cwd {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ds-dash-card.is-compact .ds-dash-activity { flex: 0 0 auto; margin-inline-start: auto; }
+/* The selected/active affordances are inset shadows on the comfortable card;
+   with no border to sit inside, compact carries them as a leading rule. */
+.ds-dash-card.is-compact.is-active { box-shadow: inset 2px 0 0 var(--accent); }
+.ds-dash-card.is-compact:last-child { border-bottom: 0; }
 .ds-dash-card.is-error { border-color: var(--flame); }
 .ds-dash-card-head { display: flex; align-items: center; gap: var(--space-2); }
 .ds-dash-status { font-size: var(--fs-tiny); font-weight: 600; text-transform: uppercase; letter-spacing: var(--tr-caps); }

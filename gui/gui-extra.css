@@ -201,6 +201,16 @@
   cursor:pointer; text-decoration:underline; text-align:start; min-height:24px; }
 .gm-attention-item:hover { opacity:.8; }
 
+/* Roster density control -- a radiogroup, not tabs: it switches presentation of
+   the same rows, not which rows. Mirrors the ds FileGrid density picker. */
+.gm-density { display:flex; gap: var(--space-half); align-items:center; margin-bottom: var(--space-1-75); }
+.gm-density-btn {
+  background:none; border: var(--bw-hair) solid var(--panel-3); border-radius: var(--r-0);
+  color: var(--panel-text-3); font:inherit; font-size: var(--fs-nano);
+  padding: var(--space-half) var(--space-2); min-height:24px; cursor:pointer;
+}
+.gm-density-btn.is-active { color: var(--panel-bg); background: var(--accent); border-color: var(--accent); font-weight:600; }
+
 /* One-click reveal of the folded idle/finished majority. */
 /* 24px pointer-target floor, same as .gm-health-item/.gm-attention-item --
    measured 23px live, one pixel under. */
