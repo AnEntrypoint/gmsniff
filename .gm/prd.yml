@@ -2,13 +2,6 @@
   note: Probe row testing whether plugkit's store write path has recovered after the failures observed in the prior walk. If this row lands, the store is writable and PRD state is trustworthy again; it will be resolved or removed immediately.
   status: completed
   witness: 'Probe succeeded, so the store write path has recovered and PRD state is trustworthy again. The prior walk saw five consecutive write failures (prd-add 10061/10062/10063, mutable-add 10065/10066) with reads working throughout, and isolated the cause to plugkit''s wasm store rather than the filesystem: a fresh spool boot did not clear it, removing a 542-minute-stale .gm/gm.db.lock/ did not clear it, disk had 140GB free, and both fs.writeFileSync and registry.js atomicWriteFile succeeded directly on .gm/prd.yml. This probe row was written and read back cleanly ({added: probe-store-write-recovered}, 1 row on disk), so the failure was transient and is now gone -- which is why it was retested rather than inherited as a standing blocker.'
-- id: design-shell-height-overflow
-  title: Fix the sidebar overflowing the shell (side h=530 in a 439px viewport)
-  body: 'CORRECTED after a deeper read: the earlier main-308-vs-panelBody-1837 reading was NOT a defect -- #app-main computes overflow:auto and #panel-body overflow:visible, so that is a correctly-scrolling container, and documentElement.scrollHeight equals the 439px viewport exactly, meaning the shell does contain itself. The real overflow is .app-side at h=530 inside a 439px viewport, so the sidebar runs past the shell bottom and its lower nav entries fall outside the frame.'
-  SESSION_ID: gmsniff-gui-redesign-1785248666
-  status: completed
-  witness: 'REFUTED by execution: the sidebar h=530 in a 439px viewport is the same short-landscape fold as the status-bar row, and the shell contains itself correctly -- documentElement.scrollHeight equals the 439px viewport exactly, #app-main computes overflow:auto and #panel-body overflow:visible, so the earlier main-308-vs-panelBody-1837 reading was a correctly-scrolling container rather than a broken one. At 1440/1280/1024 the sidebar measures 610px against a taller frame with its own scroll. No fix warranted.'
-  commit_comment: 'Refuted: shell sizing is correct; the reading was a fold artifact'
 - id: design-scan-affordance
   title: Make the roster scannable by the thing a manager actually scans for
   body: The manager view answer is who needs attention and why. That is currently prose inside a card. It should be the strongest visual element in the row.
@@ -39,13 +32,6 @@
   body: 'Two families render: system-ui and ui-monospace. Monospace should mark machine-truth (paths, ids, durations, payloads) and never body prose; verify each current use earns it.'
   SESSION_ID: gmsniff-gui-redesign-1785248666
   status: pending
-- id: design-status-bar-absent
-  title: The status bar renders display:none at zero height
-  body: 'Measured live: .app-status computes display:none, w=0, h=0. The shell passes a Status({left,right}) with the project cwd and a glance summary, and none of it is visible. Either the status bar earns its place and must render, or the information it carries needs another home -- currently the code builds it and the user never sees it.'
-  SESSION_ID: gmsniff-gui-redesign-1785248666
-  status: completed
-  witness: 'REFUTED by execution, not fixed: .app-status computes display:none because sidebar-misc.css hides it under @media (max-height: 500px) and (orientation: landscape), and the measuring window was 782x439 -- a short landscape fold, exactly the case that rule targets, with its own comment naming a 360px-tall fold where 114px of chrome would be a third of the screen. The status bar is correctly suppressed there, not missing. My first reading mistook a deliberate responsive decision for a defect because I measured at one accidental window size.'
-  commit_comment: 'Refuted: status bar is deliberately hidden in a short landscape fold'
 - id: design-attention-drives-order-and-weight
   title: Let the computed attention ranking drive visual weight, not just order
   body: attentionScore already ranks the roster and attaches a reasons array. Currently that only affects sort order; every row still paints identically. The highest-attention row should be visually heaviest, so the eye lands where the data says to look.
@@ -91,10 +77,3 @@
   body: A universal :focus-visible rule and 20 reduced-motion blocks currently cover the app. A restyle that replaces components can silently drop both -- re-witness after, do not assume.
   SESSION_ID: gmsniff-gui-redesign-1785248666
   status: pending
-- id: design-topbar-width-collapse
-  title: The topbar never spans the shell band at any width
-  body: 'Measured: .app-topbar computes 268px inside a 782px viewport, and still only 224px at 1440/1280/1024 -- it never spans at any size. Row was lost from the first prd-add wave while the daemon was dropping dispatches; re-added so the fix carries a real ledger entry.'
-  SESSION_ID: gmsniff-gui-redesign-1785248666
-  status: completed
-  witness: 'Root-caused by walking the live parent chain: gui/app.js wrapped the ds <header class=app-topbar> in its own .gm-row-full flex div beside the project select and connection chip, making the header one flex item among three so it shrank to content width -- 268px against a 782px viewport and still only 224px at 1440/1280/1024, i.e. it never spanned at any size, so not a small-window artifact. Fixed by making the slot the flex container (.gm-topbar-slot) with the header at flex:1 1 auto; min-width:0. Witnessed after: topbarW 782 === viewportW, spans true, all four panels rendering (agents 1739, events 17513, sessions 26812, overview 905), 1 main, 1 h1, zero page errors. The dead .gm-row-full class and its stale comment were removed and its phone-width rules retargeted to the new slot.'
-  commit_comment: Make the topbar span the shell band
