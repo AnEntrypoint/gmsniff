@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-07-28 — Collapse repeated feed lines and correct an inverted comment
+
+- **Fold consecutive identical feed lines into one line with its repeat count**: measured 98 exact consecutive duplicates across 1,900 rendered lines, one second repeating the same `config_resolved` line 19 times — each repeat evicting a different event from a fixed-height feed. The collapse runs *before* the `--output-lines` window, so the window spends its lines on distinct events. No event is lost: 1,875 rendered lines now represent 2,363 occurrences, a single occurrence still renders with no `(x1)` suffix, and identical lines separated by a different line deliberately stay separate because the gap is itself information. The omission notice was corrected in the same change to count events rather than collapsed groups.
+- **Correct a comment that had inverted**: `gui/live-agents.js` claimed live-state returns `recent_events` for "only 1 of 63 projects"; it is now 6 of 6. The guarded backfill is dormant rather than dead — it still covers a project returned with no events — so the comment was fixed and the fallback kept, rather than deleting a working guard on one fleet's measurement.
+
 ## 2026-07-28 — Show a record's explanation instead of its schema version
 
 - **Rank `why` above `version` in the event-detail chain**: `config_resolved` rendered as the bare detail `1` — its schema version — while the actual explanation, "no config found in any tier; using builtin defaults", was discarded. Measured across 43,677 real records, 566 carried a `why` and every one lost it this way. A scan for other keys shadowed by `version` found none, so the set is closed rather than sampled.

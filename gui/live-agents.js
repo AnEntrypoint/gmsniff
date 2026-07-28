@@ -67,11 +67,12 @@ export function seedFeed(row) {
   return f;
 }
 
-// /api/projects/live-state returns recent_events for only 1 of 63 projects, so
-// most feeds seed empty and every card would read "no events observed" even for
-// an agent that dispatched seconds ago. /api/events carries the same real events
-// per cwd. When the live-state route starts populating recent_events this simply
-// finds the feed already seeded and becomes a no-op, no client change needed.
+// A fallback that is now dormant, not dead: /api/projects/live-state populates
+// recent_events for every project it returns (measured 6 of 6), so seedFeed
+// fills the feed first and this returns early on the f.rows.length guard. It
+// still earns its place for a project live-state returns with no events at all,
+// where /api/events carries the same real events per cwd. The comment previously
+// claimed "only 1 of 63 projects" -- true for an earlier fleet, inverted now.
 const backfilledAgentKeys = new Set();
 
 export async function backfillFeed(row, setBody) {

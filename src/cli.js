@@ -1549,6 +1549,21 @@ function writeOmittedRowsNote(omitted, cap, singular, plural) {
   process.stdout.write(color(`  +${omitted} more ${noun} not shown (list caps at ${cap})\n`, 90));
 }
 
+// Keyed on the RENDERED line rather than the event object, so it folds exactly
+// what a reader sees as identical and nothing else. Only CONSECUTIVE runs
+// collapse: two identical lines separated by a different one stay separate,
+// because the gap between them is itself information.
+function collapseConsecutiveIdentical(events) {
+  const groups = [];
+  for (const event of events || []) {
+    const rendered = fmtEventLine(event);
+    const last = groups[groups.length - 1];
+    if (last && last.rendered === rendered) { last.repeats++; continue; }
+    groups.push({ event, rendered, repeats: 1 });
+  }
+  return groups;
+}
+
 function fmtEventLine(e) {
   const ts = typeof e.ts === 'number' ? new Date(e.ts).toISOString().slice(11, 19)
     : (typeof e.ts === 'string' ? e.ts.slice(11, 19) : '--:--:--');
@@ -1623,9 +1638,21 @@ function renderAgents(rows, opts) {
     // The manager view's own feed was the last silent window: it showed
     // --output-lines rows out of a longer history with nothing naming the
     // remainder, so a busy agent and a quiet one looked identical.
-    const feedOmitted = Math.max(0, a.recent.length - outputLines);
-    for (const e of a.recent.slice(-outputLines)) process.stdout.write(`      ${fmtEventLine(e)}\n`);
-    if (feedOmitted > 0) process.stdout.write(`      ${color(`+${feedOmitted} earlier event${feedOmitted === 1 ? '' : 's'} not shown (--output-lines ${outputLines})`, 90)}\n`);
+    // Collapse BEFORE the window, so the slice spends its lines on distinct
+    // events: measured 98 exact consecutive duplicates across 1900 rendered feed
+    // lines, one second repeating the same config_resolved line 19 times, each
+    // repeat evicting a different event from a fixed-height feed.
+    const collapsed = collapseConsecutiveIdentical(a.recent);
+    const feedOmitted = Math.max(0, collapsed.length - outputLines);
+    for (const e of collapsed.slice(-outputLines)) {
+      process.stdout.write(`      ${fmtEventLine(e.event)}${e.repeats > 1 ? color(` (x${e.repeats})`, 90) : ''}\n`);
+    }
+    if (feedOmitted > 0) {
+      // Counts EVENTS, not collapsed groups: reporting groups would under-state
+      // the omission by exactly the repeats it just folded away.
+      const eventsOmitted = collapsed.slice(0, feedOmitted).reduce((n, g) => n + g.repeats, 0);
+      process.stdout.write(`      ${color(`+${eventsOmitted} earlier event${eventsOmitted === 1 ? '' : 's'} not shown (--output-lines ${outputLines})`, 90)}\n`);
+    }
     process.stdout.write('\n');
   }
   if (hidden) process.stdout.write(`${color(`  + ${hidden} idle/abandoned/COMPLETE agent(s) hidden -- pass --idle to show`, 90)}\n`);
