@@ -2,3 +2,59 @@
   note: Probe row testing whether plugkit's store write path has recovered after the failures observed in the prior walk. If this row lands, the store is writable and PRD state is trustworthy again; it will be resolved or removed immediately.
   status: completed
   witness: 'Probe succeeded, so the store write path has recovered and PRD state is trustworthy again. The prior walk saw five consecutive write failures (prd-add 10061/10062/10063, mutable-add 10065/10066) with reads working throughout, and isolated the cause to plugkit''s wasm store rather than the filesystem: a fresh spool boot did not clear it, removing a 542-minute-stale .gm/gm.db.lock/ did not clear it, disk had 140GB free, and both fs.writeFileSync and registry.js atomicWriteFile succeeded directly on .gm/prd.yml. This probe row was written and read back cleanly ({added: probe-store-write-recovered}, 1 row on disk), so the failure was transient and is now gone -- which is why it was retested rather than inherited as a standing blocker.'
+- id: agents-panel-no-subheadings
+  title: The primary panel has no sub-headings (h2=0)
+  body: 'Measured live: #panel=agents renders h2=0 while deviations and overview each carry 3 and sessions/days/live carry 1. The manager view is the primary product surface and the one panel with no internal heading structure, so a screen-reader user cannot navigate within it and a sighted reader gets no sectioning between the attention strip, the controls and the roster.'
+  SESSION_ID: gmsniff-gui-round3-1785256200
+  status: pending
+- id: measure-before-replanning
+  title: Re-measure the current GUI before planning any further design work
+  body: Three prior rounds already fixed density, topbar span, contrast, table headers and the a11y floor. Planning from memory would re-fix solved problems and miss the ones that remain, so every row in this cover comes from a live measurement taken this turn rather than from recall.
+  SESSION_ID: gmsniff-gui-round3-1785256200
+  status: completed
+  witness: Every row in this cover came from a live measurement taken this turn rather than from recall of the three prior rounds. That discipline is what surfaced the undefined bug -- it was invisible to the density, contrast and a11y checks already passing, and would not have been found by re-running remembered fixes. The panel survey (chars/rows/heights/h2/controls across all 8 panels) is what made events 33/104/178 and sessions 27466-chars-zero-rows visible as the remaining work.
+  commit_comment: Re-measure the GUI before planning further design work
+- id: live-stream-empty-state-thin
+  title: The live stream panel renders 82 chars total
+  body: 'Measured live: #panel=live produces 82 characters -- the thinnest surface in the app by an order of magnitude (next thinnest is days at 262). Verify what a reader actually sees when no events are streaming and whether the panel states which zero it is, the same discipline the roster empty states already follow.'
+  SESSION_ID: gmsniff-gui-round3-1785256200
+  status: pending
+- id: panel-chrome-inconsistent
+  title: Panel chrome differs across the eight panels
+  body: 'Measured live: control counts run 0 (days) / 1 (sessions, deviations) / 2 (tree, live) / 5 (overview) / 9 (agents, events), and h2 counts run 0 to 3. A reader moving between panels re-learns the layout each time. Establish which chrome every panel should carry and which is genuinely panel-specific.'
+  SESSION_ID: gmsniff-gui-round3-1785256200
+  status: pending
+- id: events-table-density-mode
+  title: Give the events table the same density control the roster got
+  body: The roster gained a compact/comfortable density this session (208px -> 37px) and the events table has the same problem at larger scale (101 rows, up to 178px each). Decide whether the SDK Table gains a density prop the way SessionCard did, so the fix lands once for every consumer rather than per-panel.
+  SESSION_ID: gmsniff-gui-round3-1785256200
+  status: pending
+- id: events-row-height-nonuniform
+  title: Events table rows measure 33/104/178px -- the same defect fixed in the roster
+  body: 'Measured live: the events panel renders 101 rows at three distinct heights (33, 104, 178px). This is the identical non-uniform-row defect fixed in the agent roster this session (37/55/75/176 -> uniform 37), where a long value wrapped and grew the row. The events table is the largest surface in the app, so the cost is higher here: a reader scanning 101 rows cannot predict where the next one starts.'
+  SESSION_ID: gmsniff-gui-round3-1785256200
+  status: pending
+- id: sessions-panel-no-structure
+  title: Sessions renders 27332 chars with zero row elements and one control
+  body: 'Measured live: the sessions panel is the biggest text surface in the GUI (27332 chars, more than events at 14977) yet reports 0 tr/.ds-dash-card/.gm-list-row elements and a single control. Whatever it renders is unstructured text rather than scannable rows, so none of the density, weight or truncation discipline applied elsewhere reaches it.'
+  SESSION_ID: gmsniff-gui-round3-1785256200
+  status: pending
+- id: sessions-undefined-resid
+  title: Every session row renders the literal string undefinedf/undefineds
+  body: 'Witnessed in the live DOM and confirmed against the route: gui/panels-sessions.js:145 builds resid as `${s.residual_fires}f/${s.residual_skips}s`, but GET /api/sessions returns 21 keys per row (sess, correlation_kind, run, phases_visited, replans, dispatch_ms_total, first_ts, last_ts, events, dispatches, phases_reached, phase_walk, prd_adds, prd_resolves, mutable_adds, mutable_resolves, deviations, last_verbs, cwds, pids) and NEITHER residual_fires nor residual_skips is among them. The template stringifies undefined, so all 197 session rows show undefinedf/undefineds resid to the reader. Either the route must supply the counts or the field must not render -- displaying undefined is never right.'
+  SESSION_ID: gmsniff-gui-round3-1785256200
+  status: completed
+  witness: 'Witnessed in the live DOM and root-caused against the route, not guessed. gui/panels-sessions.js built resid as a template literal over s.residual_fires/s.residual_skips; GET /api/sessions returns 21 fields per row and neither is among them, and nothing under src/ computes them either -- so the literal text undefinedf/undefineds rendered on every session row. Measured before: 198 occurrences of the string undefined in the panel text, 27466 chars. After guarding so the segment renders only when both counts exist: undefinedCount 0, residCount 0, 21662 chars, zero page errors, rows reading cleanly as 878 ev - 121 verb - 20/27 prd - 0/0 mut 4 dev. Guarded rather than deleted so a route that later supplies the counts starts rendering them with no further change; ds SessionRow already omits the segment on null (data-density.js:128).'
+  commit_comment: Stop rendering undefined on every session row
+- id: audit-other-undefined-renders
+  title: Sweep every GUI template for the same undefined-into-the-UI defect
+  body: The resid bug is a template interpolating a field the route never returns. The same shape can hide anywhere a template literal embeds an API field without a guard. Enumerate every ${...} interpolation over API data across the gui panels and check each field actually exists in its route response, rather than fixing only the one instance that happened to be visible.
+  SESSION_ID: gmsniff-gui-round3-1785256200
+  status: completed
+  witness: 'Fixed the search rather than the instance: scripts/lint-undefined-renders.mjs extracts every template-literal interpolation of a short row binder across the gui panels and checks each field against a REAL route response, because the string undefined never appears in source -- only in output -- so grep cannot find this class. The checker itself was wrong first: v1 flagged the guarded fix, which would have failed forever on correct code, so it now recognises a null/undefined/typeof/??/&& guard within 8 lines above the interpolation. Negative-tested three ways: clean on the guarded code, 2 findings when the unguarded template is reintroduced, clean again on restore.'
+  commit_comment: Land a guard-aware undefined-render checker
+- id: sessions-span-soup
+  title: 197 sessions render as 3048 spans with zero row elements
+  body: 'Measured live: the sessions panel emits 3048 SPAN and 397 DIV elements under a single unnamed DIV, with 0 tr/.ds-dash-card/.gm-list-row. That is why no density, weight, truncation or uniform-height discipline reaches this panel -- there are no rows to apply it to. It is the largest text surface in the app (27466 chars) and the least structured.'
+  SESSION_ID: gmsniff-gui-round3-1785256200
+  status: pending

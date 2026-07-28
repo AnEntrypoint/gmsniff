@@ -142,7 +142,17 @@ export async function Sessions(unusedOnOpen, setBody) {
       const gaps = phasesSkippedInReachedOrder(s.phases_reached);
       return SessionRow({
         sessId: s.sess, events: s.events, verbs: s.dispatches, prd: `${s.prd_adds}/${s.prd_resolves}`,
-        muts: `${s.mutable_adds}/${s.mutable_resolves}`, resid: `${s.residual_fires}f/${s.residual_skips}s`,
+        muts: `${s.mutable_adds}/${s.mutable_resolves}`,
+        // Rendered ONLY when the route actually carries the counts. /api/sessions
+        // returns 21 fields per row and neither residual_fires nor residual_skips
+        // is among them (nothing in src/ computes them either), so the template
+        // literal here stringified undefined and every one of 197 session rows
+        // displayed the literal text "undefinedf/undefineds resid" to the reader.
+        // Guarding rather than deleting means a route that later supplies the
+        // counts starts rendering them with no further change.
+        resid: (s.residual_fires != null && s.residual_skips != null)
+          ? `${s.residual_fires}f/${s.residual_skips}s`
+          : null,
         deviations: s.deviations, firstTs: fmtTs(s.first_ts), lastTs: fmtTs(s.last_ts),
         phaseWalkProps: { reached: s.phases_reached, gapKinds: gaps },
         onClick: () => openSessionDetail(s.sess, () => setBody && setBody(true)),
