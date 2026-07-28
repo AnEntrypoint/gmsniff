@@ -93,16 +93,34 @@ export function Side({ sections = [] } = {}) {
         return h('div', { class: 'app-side-group', key: sec.group, role: 'group', 'aria-labelledby': groupId },
             h('h2', { class: 'group', id: groupId }, sec.group),
             ...sec.items.map((item, i) => {
-                const { glyph, label, href = '#', active, count, color, onClick } = item;
+                const { glyph, label, href, active, count, color, onClick } = item;
                 const countLabel = (count != null && count !== 0 && count !== '0') ? ` (${count})` : '';
+                // An item with neither href nor onClick is not a control, and
+                // must not look like one. href used to default to '#', so a
+                // forgotten destination silently produced a pointer-cursor,
+                // tab-stoppable anchor that navigated nowhere — which is why
+                // dead sidebar rows kept reappearing in new kits: the dead
+                // affordance was the DEFAULT. Such an item keeps the <a> (every
+                // .app-side row rule is anchor-scoped, so a different element
+                // would lose the whole grid layout) but drops href entirely: an
+                // anchor with no href is not a link, takes no tab stop, and is
+                // styled inert by .app-side a:not([href]) in topbar.css.
+                // An onClick with no href IS a real control and still gets
+                // href='#' so it stays keyboard-activatable.
+                const isControl = href != null || onClick != null;
+                // href is spread in only when this row is a control. Setting it
+                // to null instead would NOT omit the attribute — webjsx passes a
+                // null straight to updatePropOrAttr, which stringifies it, and
+                // the row renders href="null": still a link, still tab-stopped,
+                // still pointer-cursored. The key has to be absent.
                 return h('a', {
                     key: sec.group + i,
-                    href,
+                    ...(isControl ? { href: href != null ? href : '#' } : {}),
                     class: active ? 'active' : '',
                     'aria-current': active ? 'page' : null,
                     'aria-label': label + countLabel,
                     onclick: onClick,
-                    onkeydown: onSideLinkKeyDown
+                    onkeydown: isControl ? onSideLinkKeyDown : null
                 },
                     glyph != null ? Glyph({ children: glyph, color }) : h('span', { class: 'glyph', 'aria-hidden': 'true' }),
                     h('span', {}, label),

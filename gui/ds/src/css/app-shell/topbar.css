@@ -192,7 +192,12 @@ body.canvas-host { background: transparent !important; }
 @media (pointer: coarse) {
   .app-side a { min-height: 44px; padding: var(--space-2-75) var(--space-3); }
 }
-.app-side a:hover { background: var(--bg-2); color: var(--fg); }
+/* A sidebar row with no href and no handler is a static label, not a control:
+   Side() emits it as an <a> only so it keeps the grid layout above. It must not
+   claim to be pressable — no pointer, no hover highlight. (An anchor without
+   href is already skipped by the tab order and exposed as generic, not link.) */
+.app-side a:not([href]) { cursor: default; }
+.app-side a[href]:hover { background: var(--bg-2); color: var(--fg); }
 .app-side a:focus-visible {
   outline: var(--focus-w) solid var(--focus-color);
   outline-offset: var(--focus-offset);

@@ -109,7 +109,7 @@ export function Select({ label, value = '', options = [], onChange, name, key, p
     // collapsed them into one on the next re-render.
     const bare = label == null && hint == null && size === 'md';
     const select = h('select', {
-        key: 'i', name, class: 'ds-select',
+        key: bare && key != null ? key : 'i', name, class: 'ds-select',
         // Guarantee an accessible name even when rendered without a visible label.
         'aria-label': ariaLabel || (label == null ? (title || placeholder || name) : null),
         title,
