@@ -104,6 +104,8 @@ const RUNTIME_FAILURE_EVENTS = new Set([
 
 // Measured against live watcher.log data. `embed_fail`, the single name the old filter used, has
 // zero live occurrences.
+const EMBED_HEALTH_RECENT_WINDOW = 20;
+
 const EMBED_FAILURE_EVENTS = new Set([
   'embed_init_fail', 'embed_query_failed', 'code_index_slow_file_embed',
   'rssearch_vector_hits_failed', 'rssearch_vectors_write_failed', 'rssearch_vectors_migrate_row_failed',
@@ -126,12 +128,21 @@ function embedDegradation(events, cwd = null) {
   }
   const queryFailures = (byEvent.embed_query_failed || 0) + (byEvent.embed_init_fail || 0);
   const vectorFailures = (byEvent.rssearch_vector_hits_failed || 0) + (byEvent.rssearch_vectors_write_failed || 0);
+  // The only recent-window route that omitted its total: measured 255 matching
+  // events against a 20-row window, so 235 were dropped with nothing to derive
+  // that from. Its four siblings (recallStats, execStats, hookStats,
+  // classifierRejects) all return `total` beside `recent`, and this is the route
+  // whose whole purpose is making silent embedding failure visible.
+  const recentWindow = recent.slice(-EMBED_HEALTH_RECENT_WINDOW).reverse();
   return {
     byEvent,
     query_failures: queryFailures,
     vector_failures: vectorFailures,
     last_failure_ts: newest ? new Date(newest).toISOString() : null,
-    recent: recent.slice(-20).reverse(),
+    total: recent.length,
+    recent_returned: recentWindow.length,
+    recent_truncated: recentWindow.length < recent.length,
+    recent: recentWindow,
     note: queryFailures > 0 && vectorFailures > 0
       ? 'embedding queries are failing AND vector hits are being dropped: codesearch still returns success but is answering from bm25 only, so semantic results are silently missing'
       : null,
@@ -1902,7 +1913,7 @@ const API_ROUTES = [
   { path: '/api/daemon', method: 'GET', params: [], response: '{present, pid, pid_alive, ts, active_projects, age_ms, stale, stale_threshold_ms, alert}. Machine-global shared-daemon heartbeat (~/.agentplug/daemon-status.json).' },
   { path: '/api/parse-health', method: 'GET', params: [], response: '{totals, correlation, dispatch_totals, projects: [{cwd, name, size, truncated, version, epoch, considered, modeled, signal, ignored, modeled_ratio, ignored_ratio, signal_ratio, unmodeled_ratio, other_lines, malformed_json, dispatch}], project_count, source, schemaVersion}. Parse coverage, dispatch pairing and correlation fidelity for EVERY project -- nothing filtered, no ratio compared against a threshold, no field collapsed into a word. ignored_ratio/signal_ratio split modeled_ratio: coverage built entirely from host noise (node deprecation warnings, Bun crash dumps) is a different state from coverage built from gm telemetry, and only that split distinguishes them. dispatch.malformed_verb_starts counts starts excluded from pairing because an upstream filename-split bug made the verb a path fragment -- they can never close, so they are kept apart from orphan_starts (benign in-flight/window-clipping) rather than inflating it. correlation.dominant_kind/dominant_ratio report what the grouping is really worth, since a handful of sess-carrying events makes best_kind "sess" while the rest of the set is run-keyed.' },
   { path: '/api/gates', method: 'GET', params: ['cwd?'], response: 'with cwd: {cwd, gates: [{gate, state: "pass"|"fail"|"unknown", detail, ts}], blockers, phase, fsm_graph, outgoing_edges: [{from, to, gates, blocked, blockers}], blocked, open_edges, blocked_edges, last_gate_fired: {key, ts, age_ms, is_current_block:false}, gate_deviation_repeats, gate_deviation_repeat_count}. Without cwd: {projects: [...]}. All 8 FSM gates; "unknown" is an honest verdict, never collapsed into "fail". last_gate_fired is the last-EVER firing, not a current block — always carries age_ms.' },
-  { path: '/api/embed-health', method: 'GET', params: ['cwd?'], response: '{cwd, byEvent, query_failures, vector_failures, last_failure_ts, recent, note}. Raw failure counts, no verdict: when both counts are non-zero `note` names the causal chain (embed_query_failed cascading into rssearch_vector_hits_failed, so codesearch returns success while answering from bm25 only and silently missing semantic results).' },
+  { path: '/api/embed-health', method: 'GET', params: ['cwd?'], response: '{cwd, byEvent, query_failures, vector_failures, last_failure_ts, total, recent_returned, recent_truncated, recent, note}. `recent` is the newest-N window and `total` the whole matched count, so the omission is derivable -- matching recallStats/execStats/hookStats/classifierRejects, which all already returned a total. Raw failure counts, no verdict: when both counts are non-zero `note` names the causal chain (embed_query_failed cascading into rssearch_vector_hits_failed, so codesearch returns success while answering from bm25 only and silently missing semantic results).' },
   { path: '/api/fsm-graph', method: 'GET', params: ['cwd'], response: '{cwd, present, source, phases, states, edges: [{from, to, gates}], gatesByEdge}. The project\'s own .gm/instructions/fsm/graph.json where one exists (real override live on this machine); present:false means the default six-phase walk applies.' },
   { path: '/api/projects/live-state', method: 'GET', params: ['full=1 (opt into full instruction bodies)', 'limit (recent_events cap)'], response: '{projects: [...], mode: "list"|"full", instruction_body_count, instruction_bodies (full mode only: {hash: body} deduped), recent_limit, correlation, source, daemon}. Per project: {cwd, alive, activity: "dispatching"|"idle"|"abandoned"|"unknown", liveness, is_live_agent, phase, phase_authoritative (turn-state.json, AUTHORITATIVE), phase_served (next-step.md), phase_divergence, skill, in_phase_ms, last_event_ms, instruction_served_ms, instruction_key, instruction_heading, instruction_preview, instruction_truncated, instruction_length, instruction_hash, instruction_excerpt (FULL MODE ONLY), instruction_tier, instruction_source_file, instruction_source_repo, instruction_auto_provisioned, updated_ts, stale, present, unparseable, turn_state, turn_summary, last_prompt, last_dispatch_ts, last_instruction_ts, served_version, codeinsight_digest, gates, prd_pending, prd_total, mut_unknown, mut_total, recent_sess, recent_correlation_kind, recent_run, recent_events, recent_total, recent_limit, recent_truncated, recent_more_above}. DEFAULT IS THE LIGHT LIST PAYLOAD -- the full form is measured at 1.4MB/174 projects, so the multi-KB instruction body is served only via ?full=1 or /api/projects/instruction. `alive`/`activity` are PER-PROJECT (watcher.log mtime / turn-summary / turn-state / last-dispatch age), never the machine-wide shared daemon pid. recent_events node kinds: instruction {phase, prd_pending_count, mutables_pending_count} | transition {phase, from, replan} | dispatch {verb, ms} | prd-add {id, rescoped} | prd-resolve {id} | mutable-add {id} | mutable-resolve {id} | memorize {key} | deviation {deviation, detail, source, sub}; every node also carries {ts, cwd, run}. instruction_tier is one of "vendored" (a real per-project override -- content diverges from what ensureInstructionsBundle last auto-provisioned, or the file is fsm-vendor-sourced with no auto-sync ambiguity at all), "source-synced", or "default". instruction_auto_provisioned is true only when tier="default" but a file is nonetheless present on disk, byte-identical to gm-plugkit\'s own last-known-shipped hash for it (materialized by the bootstrap sync, not baked into the wasm guest, and NOT a real customization -- distinguish this from a genuine "no file at all" default when displaying).' },
   { path: '/api/spool-queue', method: 'GET', params: [], response: '{queues: [{cwd, name, totalPending, byVerb}], schemaVersion}' },

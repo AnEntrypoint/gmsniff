@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-07-28 — Close the truncation class exhaustively instead of one instance per pass
+
+- **Report the total beside `embed-health`'s recent window**: it showed 20 of 257 matched events with no way to derive the other 237, and it was the sole outlier — `recallStats`, `execStats`, `hookStats` and `classifierRejects` all already returned a total. An unreported cap is worst on the route whose entire purpose is making silent embedding failure visible.
+- **Name the events the manager view leaves out**: `--agents` rendered `--output-lines` rows of a much longer feed with nothing naming the remainder, hiding nearly 400 events per agent on the tool's primary view.
+- **Replace the one-instance-per-pass search with an exhaustive sweep**: four consecutive passes each found exactly one more instance of this defect, which meant the search was wrong rather than the work endless. The sweep now enumerates every GET route from the server's own manifest — so a route added later is covered without another discovery pass — and classifies each live response as reporting a signal, provably complete, or silently capping. Forty routes: seventeen signal, twenty-three complete, zero silent caps.
+
 ## 2026-07-28 — Audit every route's real JSON for truncation it never reported
 
 - **Report what `/api/distinct` and `/api/search` leave out**: `distinct` returned a bare `{field, values}` while capping, so a default call showing 50 of 56 distinct event types was indistinguishable from a complete list; it now carries `total`/`returned`/`truncated`. `search` was capped too, measured returning exactly 2,000 results, but its scan stops at the limit rather than counting on — so it reports `truncated`/`scanned_all` instead of a total it cannot compute without a second full pass.

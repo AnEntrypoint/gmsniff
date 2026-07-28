@@ -1602,7 +1602,12 @@ function renderAgents(rows, opts) {
       process.stdout.write(`      ${color('>> RUNNING', 32)} ${color(f.verb || '?', 1)} for ${since}${f.task ? ` task=${f.task}` : ''}\n`);
     }
     if (a.queue_depth) process.stdout.write(`      ${color(`queued: ${a.queue_depth} spool request(s)`, 33)}\n`);
+    // The manager view's own feed was the last silent window: it showed
+    // --output-lines rows out of a longer history with nothing naming the
+    // remainder, so a busy agent and a quiet one looked identical.
+    const feedOmitted = Math.max(0, a.recent.length - outputLines);
     for (const e of a.recent.slice(-outputLines)) process.stdout.write(`      ${fmtEventLine(e)}\n`);
+    if (feedOmitted > 0) process.stdout.write(`      ${color(`+${feedOmitted} earlier event${feedOmitted === 1 ? '' : 's'} not shown (--output-lines ${outputLines})`, 90)}\n`);
     process.stdout.write('\n');
   }
   if (hidden) process.stdout.write(`${color(`  + ${hidden} idle/abandoned/COMPLETE agent(s) hidden -- pass --idle to show`, 90)}\n`);
