@@ -2,3 +2,254 @@
   note: Probe row testing whether plugkit's store write path has recovered after the failures observed in the prior walk. If this row lands, the store is writable and PRD state is trustworthy again; it will be resolved or removed immediately.
   status: completed
   witness: 'Probe succeeded, so the store write path has recovered and PRD state is trustworthy again. The prior walk saw five consecutive write failures (prd-add 10061/10062/10063, mutable-add 10065/10066) with reads working throughout, and isolated the cause to plugkit''s wasm store rather than the filesystem: a fresh spool boot did not clear it, removing a 542-minute-stale .gm/gm.db.lock/ did not clear it, disk had 140GB free, and both fs.writeFileSync and registry.js atomicWriteFile succeeded directly on .gm/prd.yml. This probe row was written and read back cleanly ({added: probe-store-write-recovered}, 1 row on disk), so the failure was transient and is now gone -- which is why it was retested rather than inherited as a standing blocker.'
+- id: gui-hardcoded-hex-to-tokens
+  title: Replace 16 raw color literals in gui-extra.css with SDK tokens
+  body: 'SDK lint-tokens rule run against gui/: 16 raw literals, 14 of them as var() fallbacks (--flame #f85149, --warn #d29922, --danger #c0392b, --accent #58a6ff, --muted #8b949e) plus one bare color:#0a0a0a at gui-extra.css:146. A baked fallback ignores the active theme exactly when the token is missing - the case it claims to cover.'
+  SESSION_ID: gmsniff-gui-impeccable-1785231986
+  status: completed
+  witness: 'SDK lint-tokens rule against gui/: raw_color_literals 16 -> 0. Stale GitHub-dark fallbacks (#f85149/#d29922/#58a6ff/#c0392b/#8b949e) removed in favour of the bare declared tokens, and color:#0a0a0a became var(--ink). Verified by node scripts/lint-gui-ds.mjs exiting 0.'
+  commit_comment: Replace raw color literals with SDK tokens
+- id: gui-inline-style-removal
+  title: Confirm zero inline-style violations under the SDK rule and keep it that way
+  body: 'SDK lint-inline-styles rule run against gui/: 0 violations - my earlier count of 4 was over-reported by a broader regex than the SDK uses (the SDK exempts custom-property writes, var()-driven background/color, and transform). Row stays to wire the check in so it cannot regress.'
+  SESSION_ID: gmsniff-gui-impeccable-1785231986
+  status: completed
+  witness: 'SDK lint-inline-styles rule against gui/: 0 violations, confirmed and now gated. My earlier count of 4 was over-reported by a regex broader than the SDK rule, which exempts custom-property writes, var()-driven background/color and transform.'
+  commit_comment: Confirm zero inline-style violations, now gated
+- id: gui-clickable-div-keyboard
+  title: Make the onclick-bearing div in panels.js keyboard-operable
+  body: 'Measured: panels.js clickable_div=1 (a div carrying onclick with no button semantics). onkeydown=2 across the whole file. A div with onclick is unreachable by keyboard and invisible to AT.'
+  SESSION_ID: gmsniff-gui-impeccable-1785231986
+  status: pending
+- id: gui-focus-visible-coverage
+  title: Give every interactive GUI control a visible focus ring
+  body: 'Measured: focus_visible=2 occurrences total, all in gui-extra.css; 0 in every JS surface. Interactive counts: panels.js onclick=2, live-agents.js onclick=3, app.js onclick=2, plus button_el=4 fleet-wide.'
+  SESSION_ID: gmsniff-gui-impeccable-1785231986
+  status: pending
+- id: gui-reduced-motion-coverage
+  title: Extend prefers-reduced-motion coverage beyond the single existing block
+  body: 'Measured: gui-extra.css prefers_reduced_motion=1 block, media_q=4 total. Any transition/animation outside that one block ignores the user setting.'
+  SESSION_ID: gmsniff-gui-impeccable-1785231986
+  status: pending
+- id: gui-undeclared-css-vars
+  title: Declare or map the 3 genuinely-undeclared, fallback-less CSS vars
+  body: 'SDK-rule measurement (../design lint logic run against gui/): exactly 3 var refs resolve to nothing and carry NO fallback - --border (gui-extra.css:22), --text (:23), --muted (:29). My earlier 13-var estimate was wrong: the other 10 are either declared locally or carry a fallback. These 3 render as invalid/inherited, silently.'
+  SESSION_ID: gmsniff-gui-impeccable-1785231986
+  status: completed
+  witness: 'Live browser getComputedStyle(:root) returned NULL for --border/--text/--muted; replaced with --panel-3/--panel-text/--panel-text-3. Re-witnessed: .gm-panel-heading computes rgb(180,180,188)=--panel-text-3 and .gm-health-banner border computes the --panel-3 oklab color-mix. SDK-rule lint undeclared_vars 3 -> 0.'
+  commit_comment: Map dead CSS vars to real SDK tokens
+- id: gui-panels-aria-floor
+  title: Raise accessibility floor in panels.js (1137 lines, 49 divs, 1 aria, 1 role, 0 sr-only)
+  body: 'Measured panels.js: aria=1, role=1, sr_only=0, focus_visible=0, tabindex=1 across 1137 lines and 49 div elements. Largest GUI surface with the thinnest a11y annotation.'
+  SESSION_ID: gmsniff-gui-impeccable-1785231986
+  status: pending
+- id: gui-live-agents-aria-floor
+  title: Raise accessibility floor in live-agents.js (886 lines, 34 divs, 1 aria, 0 sr-only)
+  body: 'Measured live-agents.js: aria=1, role=2, sr_only=0, aria_live=0, focus_visible=0. This is the primary product surface (live manager view) and it announces nothing to a screen reader.'
+  SESSION_ID: gmsniff-gui-impeccable-1785231986
+  status: pending
+- id: gui-responsive-coverage
+  title: Audit and extend responsive behavior (4 media queries for a 187KB GUI)
+  body: 'Measured: media_q=4 in gui-extra.css, 0 elsewhere; the SDK ships src/css/app-shell/responsive.css and responsive2-workspace.css as the reference. A 3-panel manager view with 4 breakpoints has unverified narrow-viewport behavior.'
+  SESSION_ID: gmsniff-gui-impeccable-1785231986
+  status: pending
+- id: gui-run-sdk-linters
+  title: Run the design SDK linters against gui/ and fix every reported violation
+  body: ../design/scripts carries 14 linters (lint-tokens, lint-classes, lint-css, lint-glyphs, lint-inline-styles, lint-null-children, lint-spacing, lint-duplicate-selectors, lint-rtl-physical-properties, lint-swallow-comments, lint-fontsize, lint-important). gmsniff runs none of them against gui/. Establish the measurement first, then fix.
+  SESSION_ID: gmsniff-gui-impeccable-1785231986
+  status: pending
+- id: gui-important-removal
+  title: Remove the 2 !important on one gui-extra.css line
+  body: 'SDK measurement: both !important are on gui-extra.css:16 - .gm-split-pane .ds-ep-split.horiz > .ds-ep-split-pane { width:auto !important; flex:0 0 auto !important; }. This overrides the vendored SDK split-pane sizing; fix the specificity or the vendored contract, not with an override.'
+  SESSION_ID: gmsniff-gui-impeccable-1785231986
+  status: completed
+  witness: important 2 -> 0. The override existed against .ds-ep-split.horiz > .ds-ep-split-pane:not(.grow) (specificity 0,2,0) while my rule is 0,4,0, so !important was never needed. Verified by scripts/lint-gui-ds.mjs exit 0 and the 900px stacked layout still applying.
+  commit_comment: Remove unnecessary !important
+- id: gui-hardcoded-px-to-tokens
+  title: Replace 194 hardcoded px literals in gui-extra.css with SDK spacing/size tokens
+  body: 'Measured gui-extra.css: 194 px literals vs 76 var() uses, against 191 SDK tokens available. The SDK ships scripts/lint-spacing.baseline.json and lint-tokens.mjs enforcing exactly this.'
+  SESSION_ID: gmsniff-gui-impeccable-1785231986
+  status: pending
+- id: gui-empty-states-audit
+  title: Audit every GUI panel empty state for a dead-panel read
+  body: 'SDK ContextPane precedent: four placeholder rows read as a dead panel, replaced by one honest line. gmsniff has 10 GUI surfaces with panels.js div_el=49 / live-agents.js div_el=34; zero-project, zero-event, and zero-agent states are unwitnessed.'
+  SESSION_ID: gmsniff-gui-impeccable-1785231986
+  status: pending
+- id: gui-loading-skeleton-vs-refresh
+  title: Distinguish cold-load skeleton from refresh dimming
+  body: 'SDK FileGrid precedent: skeleton ONLY on cold load; flashing a populated grid to shimmer on every mutation reads as data loss. gmsniff GUI polls live data (app.js setTimeout=5) - a full re-skeleton on each poll would read identically.'
+  SESSION_ID: gmsniff-gui-impeccable-1785231986
+  status: pending
+- id: gui-null-nullable-sort
+  title: Audit GUI comparators over nullable measurements
+  body: AGENTS.md records the health banner sorting staleSeconds==null as zero-seconds-silent, sorting the most suspicious project last. Enumerate every sort/min/max/average in gui/ over a field that can be null and make the absent-value decision explicit.
+  SESSION_ID: gmsniff-gui-impeccable-1785231986
+  status: pending
+- id: gui-ctrl-k-palette-a11y
+  title: Witness the Ctrl+K command palette against focus-trap and escape semantics
+  body: 'AGENTS.md states demoted panels stay reachable via the Ctrl+K palette and #panel= deep links - so the palette is the sole affordance for tier-2 panels. Its focus trap, escape, aria-modal and result-announcement are unwitnessed.'
+  SESSION_ID: gmsniff-gui-impeccable-1785231986
+  status: pending
+- id: gui-keyboard-nav-roving
+  title: Give GUI lists roving-focus keyboard navigation
+  body: 'SDK FileGrid implements ArrowDown/ArrowUp/Home/End/Backspace/Ctrl+A roving focus over a grid. Measured gmsniff: onkeydown=2 in panels.js, 1 in live-agents.js, 0 in app.js - the live-agents list has no keyboard traversal.'
+  SESSION_ID: gmsniff-gui-impeccable-1785231986
+  status: pending
+- id: gui-theme-toggle-both-themes
+  title: Witness every GUI panel in both light and dark themes
+  body: The SDK ships theme-toggle.js and a dark theme that redefines --accent-ink. gmsniff vendors theme-toggle but no surface has been witnessed in both themes; a raw hex renders identically in both and is invisible as a defect.
+  SESSION_ID: gmsniff-gui-impeccable-1785231986
+  status: pending
+- id: gui-glyph-ban-compliance
+  title: Verify gui/ carries no banned decorative unicode glyphs
+  body: SDK policy bans decorative glyphs (build-guarded by lint-glyphs.mjs); status dots must be .ds-dot CSS circles, never a text glyph. Measured glyphs=0 by my regex across gui/ - re-verify with the SDK linter itself rather than my narrower pattern.
+  SESSION_ID: gmsniff-gui-impeccable-1785231986
+  status: completed
+  witness: 'SDK lint-glyphs rule against gui/ (excluding vendored gui/ds): glyphs 0, with the documented middle-dot and Command-key exemptions. Now gated in test.js so a decorative glyph cannot land silently.'
+  commit_comment: Verified zero banned glyphs, now gated
+- id: gui-ds-sync-drift-check
+  title: Run npm run sync:ds:check and assert zero drift
+  body: AGENTS.md forbids hand-editing gui/ds/ and requires sync:ds then sync:ds:check for zero drift. Establish current drift state before any GUI work touches vendored files.
+  SESSION_ID: gmsniff-gui-impeccable-1785231986
+  status: pending
+- id: gui-sub-list-parity
+  title: Assert SUBSYSTEMS and SUB_LIST stay identical
+  body: 'AGENTS.md: src/index.js SUBSYSTEMS and gui/panels.js SUB_LIST are the same literal duplicated because the browser cannot import the Node module, and the two must stay identical. There is no check enforcing it - add one to test.js.'
+  SESSION_ID: gmsniff-gui-impeccable-1785231986
+  status: completed
+  witness: 'AGENTS.md names src/index.js SUBSYSTEMS and a gui/panels.js SUB_LIST, but no SUB_LIST exists - the real duplicate is SEED_SUBS_UNTIL_CAPABILITIES_LAND in gui/shared.js, and it had ALREADY drifted (4 entries vs 5, missing rs_learn), silently shortening the first paint. Added rs_learn, exported the constant, and asserted set-equality plus /api/capabilities superset in test.js. Negative-tested: reverting the drift fails the suite.'
+  commit_comment: Fix and gate the drifted subsystem seed
+- id: gui-zero-external-fetch-assert
+  title: Assert the served gui/ tree makes zero external-origin runtime fetches
+  body: AGENTS.md names this a load-bearing property (no CDN scripts, no remote fonts, no remote stylesheets). Witness it in-browser by reading the network log on a real page load, not by grep.
+  SESSION_ID: gmsniff-gui-impeccable-1785231986
+  status: pending
+- id: gui-test-js-extension
+  title: Extend root test.js with GUI assertions for every fixed row
+  body: 'AGENTS.md: test.js is the single mock-free integration test; never add a second test file. Each GUI defect fixed here needs its assertion added there so it cannot silently regress.'
+  SESSION_ID: gmsniff-gui-impeccable-1785231986
+  status: pending
+- id: gui-duplicate-selectors
+  title: Check gui-extra.css for duplicate selectors against the SDK stylesheets
+  body: SDK ships scripts/lint-duplicate-selectors.mjs. gui-extra.css is 265 lines layered on top of 3 vendored SDK stylesheets; a duplicated selector silently overrides the design system.
+  SESSION_ID: gmsniff-gui-impeccable-1785231986
+  status: completed
+  witness: 'SDK lint-duplicate-selectors rule against gui/: duplicate_selectors 0. Negative-tested by injecting a second .gm-empty rule, which the harness detected, then restored.'
+  commit_comment: Verified zero duplicate selectors, now gated
+- id: gui-witness-every-edit-browser
+  title: Witness every client-file edit in a real browser with a cache-defeating reload
+  body: AGENTS.md records that a browser witness which merely navigates can re-run stale modules from Chrome memory cache, reporting unchanged for code just edited. Every GUI row in this PRD must be witnessed with a forced reload.
+  SESSION_ID: gmsniff-gui-impeccable-1785231986
+  status: pending
+- id: gui-deep-link-panel-restore
+  title: 'Witness #panel= deep-link restore for every panel id'
+  body: 'AGENTS.md names #panel= deep links as the reachability guarantee for demoted panels. Enumerate every panel id and witness each deep link actually restores that panel.'
+  SESSION_ID: gmsniff-gui-impeccable-1785231986
+  status: pending
+- id: gui-panels-js-size-split
+  title: Split panels.js (1137 lines, 59KB) toward the 200-line vertical-slice rule
+  body: Measured panels.js 1137 lines / 58942 bytes and live-agents.js 886 lines / 43220 bytes against the AGENTS.md 200-line one-responsibility-per-file rule. Both are 4-5x over.
+  SESSION_ID: gmsniff-gui-impeccable-1785231986
+  status: pending
+- id: gui-rtl-physical-properties
+  title: Replace 17 physical L/R CSS properties with logical equivalents
+  body: 'SDK lint-rtl-physical-properties rule run against gui/: 17 findings in gui-extra.css - margin-left x7 (:102,:114,:115,:117,:118,:245,:254), margin-right (:119), border-left x4 (:160,:201,:224), padding-left x2 (:223,:224), left (:147), text-align:left x3 (:29,:62,:162). Each fails to mirror under dir=rtl.'
+  SESSION_ID: gmsniff-gui-impeccable-1785231986
+  status: completed
+  witness: 'SDK lint-rtl-physical-properties rule against gui/: rtl_physical 17 -> 0. margin-left/right, padding-left, border-left and text-align:left converted to inset-inline-start, margin-inline-*, padding-inline-start, border-inline-start and text-align:start.'
+  commit_comment: Convert physical L/R properties to logical
+- id: gui-truncation-notices
+  title: Every capped GUI list must print the omitted count
+  body: AGENTS.md records three lists here truncating silently and the memory-graph panel hiding 732 of 882 nodes behind a heading reading 150 nodes. Enumerate every client-side cap in panels.js/live-agents.js and assert each prints what it left out.
+  SESSION_ID: gmsniff-gui-impeccable-1785231986
+  status: pending
+- id: gui-null-children-lint
+  title: Verify gui/ passes the SDK null-children lint
+  body: SDK ships scripts/lint-null-children.mjs and its ContextPane comments note webjsx breaks on mixed keyed/unkeyed sibling arrays. gmsniff builds children arrays with .filter(Boolean) patterns unverified against that linter.
+  SESSION_ID: gmsniff-gui-impeccable-1785231986
+  status: pending
+- id: gui-color-contrast-measure
+  title: Measure computed contrast ratios for GUI text against both themes
+  body: SDK records --accent at ~1.07:1 on paper (invisible as text) and --accent-ink at 15.88:1 on ink. gmsniff uses 26 raw hex colors bypassing that split. Measure real computed contrast in-browser for both light and dark.
+  SESSION_ID: gmsniff-gui-impeccable-1785231986
+  status: pending
+- id: gui-long-line-readability
+  title: Break the 4 GUI source lines exceeding 250 chars
+  body: 'Measured longest_line: panels.js 292, app.js 272, live-agents.js 254, gui-extra.css 234. AGENTS.md 200-line-vertical-slice discipline implies line-level readability too.'
+  SESSION_ID: gmsniff-gui-impeccable-1785231986
+  status: pending
+- id: gui-node18-floor-in-gui
+  title: Verify gui/ JS holds the node>=18 / browser-baseline floor
+  body: AGENTS.md holds engines node>=18 by source review only, with no runtime in CI. Browser code has its own baseline; enumerate any syntax in gui/ newer than the intended floor.
+  SESSION_ID: gmsniff-gui-impeccable-1785231986
+  status: pending
+- id: gui-var-fallback-policy
+  title: Decide one policy for var() fallbacks across gui-extra.css
+  body: 'Measured: 14 of 16 raw literals exist ONLY as var() fallbacks, and 3 other vars carry no fallback at all - two contradictory conventions in one 265-line sheet. Pick one (token guaranteed present -> no fallback, or fallback -> must itself be a token) and apply it uniformly.'
+  SESSION_ID: gmsniff-gui-impeccable-1785231986
+  status: pending
+- id: gui-danger-token-chain
+  title: Collapse the nested --danger/--flame fallback chains
+  body: 'Measured gui-extra.css:49,:201,:235 use var(--danger, var(--flame, #hex)) - a two-level chain ending in a literal. Resolve which token the SDK actually declares and use it directly.'
+  SESSION_ID: gmsniff-gui-impeccable-1785231986
+  status: pending
+- id: gui-lint-harness-in-repo
+  title: Land the SDK-rule lint harness in gmsniff so these cannot regress
+  body: The SDK linters hardcode their own roots and sheet lists, so they cannot be pointed at gui/ directly; I drove their exported/verbatim rules against gui/ from a scratch harness. Land that as a real repo surface (wired into test.js per the single-test-file rule) so every finding here stays measured.
+  SESSION_ID: gmsniff-gui-impeccable-1785231986
+  status: completed
+  witness: 'Landed as scripts/lint-gui-ds.mjs: 9 SDK-derived rule classes, exports findGuiViolations()/guiViolationCounts(), runs standalone (exit 1 on violation) and is asserted per-rule in test.js. Zero new dependencies, node>=18 only. Negative-tested: 8 injected defects all detected, tree restored byte-identical, real baseline clean.'
+  commit_comment: Land the SDK-rule lint harness in-repo
+- id: gui-button-accessible-name
+  title: Give the 3 unnamed buttons an accessible name
+  body: 'SDK-rule measurement: 3 button elements carry neither aria-label, aria-labelledby, nor title - app.js:283, live-agents.js:844, live-agents.js:857. An icon-only or empty button announces nothing.'
+  SESSION_ID: gmsniff-gui-impeccable-1785231986
+  status: completed
+  witness: 'REFUTED by execution: all 3 flagged buttons carry real accessible names - app.js:283 has text x plus aria-label dismiss, live-agents.js:844 and :857 carry template-literal labels. The static rule scanned only the props object and missed children; fixed in scripts/lint-gui-ds.mjs, which now checks children too and reports 0.'
+  commit_comment: 'Refuted: all 3 buttons carry accessible names'
+- id: gui-sdk-lint-drift
+  title: Guard against drift between the SDK rules and the gmsniff copy of them
+  body: The lint harness re-derives rules the SDK hardcodes (RTL map, layout regex, whitelist). If ../design changes a rule, the gmsniff copy silently keeps the old one - the same duplication-that-must-sync liability AGENTS.md names for SUBSYSTEMS/SUB_LIST. Decide how that stays honest.
+  SESSION_ID: gmsniff-gui-impeccable-1785231986
+  status: pending
+- id: gui-color-mix-fallback
+  title: Verify color-mix() usages degrade correctly
+  body: Measured 3 color-mix() calls (gui-extra.css:122,:244,:256) each mixing a fallback-bearing token. color-mix with an invalid color makes the whole declaration invalid - witness the computed value in-browser for both themes.
+  SESSION_ID: gmsniff-gui-impeccable-1785231986
+  status: pending
+- id: gui-duplicate-main-landmark
+  title: Remove the duplicate <main> landmark
+  body: 'Live-DOM witness (browser verb, http://127.0.0.1:7799/): document.querySelectorAll(main,[role=main]) returns landmarks [header,nav,aside,main,main,footer] - TWO main elements. A document has exactly one main; AT users get an ambiguous primary region.'
+  SESSION_ID: gmsniff-gui-impeccable-1785231986
+  status: completed
+  witness: 'Live-DOM witness: main landmarks went [header,nav,aside,main,main,footer] -> exactly [main#app-main], main_count 1. gui/app.js (2 sites) and gui/panels.js (1 site) now render a labelled <section> inside AppShell own <main> instead of a nested duplicate.'
+  commit_comment: Remove duplicate main landmark
+- id: gui-heading-outline-audit
+  title: Audit the whole heading outline across every panel
+  body: Live-DOM witness found only 3 headings for a 3363-char body across a multi-panel app. Panel titles are not headings, so no AT user can navigate by heading. Enumerate every panel and decide its heading level.
+  SESSION_ID: gmsniff-gui-impeccable-1785231986
+  status: pending
+- id: gui-accent-ink-collapsed
+  title: Investigate --accent and --accent-ink resolving to the same value
+  body: 'Live-DOM witness: --accent and --accent-ink BOTH resolve to #B6FF1B. The SDK doc states the split exists precisely because the lime is ~1.07:1 on paper and invisible as text, with --accent-ink meant to differ. Under data-theme=auto they are identical - verify against both explicit themes and against ../design source.'
+  SESSION_ID: gmsniff-gui-impeccable-1785231986
+  status: pending
+- id: gui-no-h1-heading
+  title: Give the document an h1
+  body: 'Live-DOM witness: heading_count=3, all H2 (Live/Investigate/Advanced - the sidebar tier labels). There is no h1, so the heading outline starts at level 2 and the page has no programmatic title.'
+  SESSION_ID: gmsniff-gui-impeccable-1785231986
+  status: completed
+  witness: 'Live-DOM witness: headings went [H2 Live, H2 Investigate, H2 Advanced] -> plus H1:Live Agents, heading_count 3 -> 4. The panel body is now <section aria-labelledby=panel-body-heading> with an h1 naming the active panel from the existing NAV lookup.'
+  commit_comment: Add document h1 naming the active panel
+- id: gui-undeclared-vars-confirmed-live
+  title: Undeclared vars confirmed inert in the live browser
+  body: 'Live-DOM witness: getComputedStyle(:root) returns null for --border, --text and --muted while --accent(#B6FF1B), --accent-ink, --danger, --flame, --warn and --panel-bg all resolve. This is execution-confirmation of the static SDK-rule finding, not a second row - it raises gui-undeclared-css-vars from static to witnessed.'
+  SESSION_ID: gmsniff-gui-impeccable-1785231986
+  status: pending
+- id: gui-theme-toggle-unnamed
+  title: Name the theme toggle button
+  body: 'Live-DOM witness: focusable_unnamed=[button.ds-toggle] - the only one of 42 focusables with no text, aria-label, aria-labelledby or title. It is the vendored SDK theme-toggle; fix at the ../design source then re-sync, never by hand-editing gui/ds/.'
+  SESSION_ID: gmsniff-gui-impeccable-1785231986
+  status: completed
+  witness: 'REFUTED by execution, not fixed: the live accessibility-name chain (aria-label, aria-labelledby, label[for], wrapping label, text, title) returns unnamed_focusables=[] across all 42 focusables. button.ds-toggle is the SDK Toggle switch, named by its wrapping <label for>. My first probe only checked attributes on the button itself and reported a false positive; the probe was the defect.'
+  commit_comment: 'Refuted: toggle is named by its wrapping label'

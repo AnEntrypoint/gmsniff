@@ -12,8 +12,14 @@ export function basename(cwd) {
 
 // /api/capabilities is authoritative for both lists; these literals exist only
 // so the first paint before that fetch lands is never an empty list.
-const SEED_VERBS_UNTIL_CAPABILITIES_LAND = ['instruction', 'transition', 'residual-scan', 'phase-status'];
-const SEED_SUBS_UNTIL_CAPABILITIES_LAND = ['plugkit', 'hook', 'bootstrap', 'memory'];
+//
+// The subsystem seed must stay a SUBSET of src/index.js's SUBSYSTEMS -- the
+// browser cannot import that Node module, so this is a duplicate that has to be
+// kept honest by assertion rather than by structure (test.js checks it). It had
+// already drifted: SUBSYSTEMS carries rs_learn and this list did not, so the
+// first paint silently omitted a real subsystem until the fetch landed.
+export const SEED_VERBS_UNTIL_CAPABILITIES_LAND = ['instruction', 'transition', 'residual-scan', 'phase-status'];
+export const SEED_SUBS_UNTIL_CAPABILITIES_LAND = ['plugkit', 'hook', 'bootstrap', 'memory', 'rs_learn'];
 
 const caps = { verbs: null, subs: null, loaded: false };
 

@@ -365,7 +365,16 @@ function renderShell() {
 
   const topbar = Topbar({ brand: 'gmsniff', leaf: 'observability', items: [] });
 
-  const bodyContainer = h('main', { id: 'panel-body', class: 'gm-panel-body' }, ui.bodyNode || h('p', { class: 'gm-empty' }, 'Loading...'));
+  // A <section> labelled by the active panel, NOT a second <main>: AppShell
+  // already renders <main id="app-main"> around this slot, and a nested <main>
+  // gives assistive tech two primary regions for one document (witnessed live:
+  // querySelectorAll returned [header,nav,aside,main,main,footer]).
+  const bodyContainer = h('section', {
+    id: 'panel-body', class: 'gm-panel-body',
+    'aria-labelledby': 'panel-body-heading', tabindex: '-1',
+  },
+    h('h1', { id: 'panel-body-heading', class: 'gm-panel-heading' }, NAV[ui.panel] || ui.panel),
+    ui.bodyNode || h('p', { class: 'gm-empty' }, 'Loading...'));
 
   const app = AppShell({
     topbar: h('div', { class: 'gm-row-full' }, topbar, projectSelect,
@@ -398,7 +407,12 @@ function renderShell() {
 function renderPanelOnly() {
   const container = document.getElementById('panel-body');
   if (!container) { renderShell(); return; }
-  webjsx.applyDiff(container, h('main', { id: 'panel-body', class: 'gm-panel-body' }, ui.bodyNode));
+  webjsx.applyDiff(container, h('section', {
+    id: 'panel-body', class: 'gm-panel-body',
+    'aria-labelledby': 'panel-body-heading', tabindex: '-1',
+  },
+    h('h1', { id: 'panel-body-heading', class: 'gm-panel-heading' }, NAV[ui.panel] || ui.panel),
+    ui.bodyNode));
   applyAutoscroll();
 }
 

@@ -608,8 +608,17 @@ export async function ProcessTree(sess, sessList, onSelect, onOpenSession, onRef
   function renderTreePanelInPlace() {
     const container = document.getElementById('panel-body');
     if (!container) return;
+    // Re-diff the panel container in place, preserving the shell-owned heading:
+    // this module has no access to NAV/ui, so it reads the live h1 text rather
+    // than duplicating the label lookup and drifting from it.
+    const headingText = container.querySelector('#panel-body-heading')?.textContent || 'tree';
     import('webjsx').then(webjsx => {
-      webjsx.applyDiff(container, h('main', { id: 'panel-body', class: 'gm-panel-body' }, build()));
+      webjsx.applyDiff(container, h('section', {
+        id: 'panel-body', class: 'gm-panel-body',
+        'aria-labelledby': 'panel-body-heading', tabindex: '-1',
+      },
+        h('h1', { id: 'panel-body-heading', class: 'gm-panel-heading' }, headingText),
+        build()));
     });
   }
   doRerender = renderTreePanelInPlace;

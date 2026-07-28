@@ -1103,4 +1103,46 @@ assert(schemaOut.subcommands.every(s => typeof s.tier === 'string'), 'schema sub
   // gui/shared.js is asserted, because only it is genuinely loadable outside a browser.
 }
 
-console.log(`gmsniff OK — ${snap.total} events across ${days.length} days · live-feedback verified · multi-project fanout verified · formal-spec verified · stuck-state+throughput+memory-health+codeinsight-age verified · total-parser verified · watcher-log-total-parse+source-priority+correlation+project-state verified`);
+// gui/ against the design SDK's own rules. The SDK's fourteen linters each
+// hardcode their own repo root and sheet list, so scripts/lint-gui-ds.mjs
+// re-derives the consumer-applicable rules and runs them here. Asserted as an
+// exact zero per rule, not a threshold: this pass cleared 17 physical left/
+// right properties, 16 raw colour literals, 3 var() refs to tokens declared
+// nowhere, and 2 !important, and a threshold would let any of them back.
+{
+  const { findGuiViolations } = await import('./scripts/lint-gui-ds.mjs');
+  const violations = findGuiViolations();
+  for (const [rule, list] of Object.entries(violations)) {
+    assert.strictEqual(list.length, 0,
+      `gui/ must stay clean under the SDK ${rule} rule, found ${list.length}: ${list.slice(0, 3).join(' | ')}`);
+  }
+
+  // The browser cannot import src/index.js, so gui/shared.js re-declares the
+  // subsystem seed by hand. It had already drifted (SUBSYSTEMS carries rs_learn,
+  // the seed did not), which silently shortened the first paint's list until
+  // /api/capabilities landed. Nothing structural keeps these two in step.
+  const { SUBSYSTEMS } = await import('./src/index.js');
+  const { SEED_SUBS_UNTIL_CAPABILITIES_LAND } = await import('./gui/shared.js');
+  for (const sub of SEED_SUBS_UNTIL_CAPABILITIES_LAND) {
+    assert.ok(SUBSYSTEMS.includes(sub),
+      `gui/shared.js seeds subsystem "${sub}" that src/index.js SUBSYSTEMS does not declare`);
+  }
+  assert.deepStrictEqual([...SEED_SUBS_UNTIL_CAPABILITIES_LAND].sort(), [...SUBSYSTEMS].sort(),
+    'the gui subsystem seed and src/index.js SUBSYSTEMS must name the same set');
+
+  // /api/capabilities is what the seed defers to, so it must be a superset of
+  // it. The shared `get()` helper's server is already closed by this point, so
+  // this needs its own short-lived one.
+  const capsSrv = await createServer({ logDir, port: 0 });
+  try {
+    const caps = await (await fetch(capsSrv.url + '/api/capabilities')).json();
+    for (const sub of SEED_SUBS_UNTIL_CAPABILITIES_LAND) {
+      assert.ok(caps.subsystems.includes(sub),
+        `/api/capabilities omits seeded subsystem "${sub}", so the first paint would list a subsystem the route denies`);
+    }
+  } finally {
+    await capsSrv.close();
+  }
+}
+
+console.log(`gmsniff OK — ${snap.total} events across ${days.length} days · live-feedback verified · multi-project fanout verified · formal-spec verified · stuck-state+throughput+memory-health+codeinsight-age verified · total-parser verified · watcher-log-total-parse+source-priority+correlation+project-state verified · gui-sdk-lint+subsystem-seed-parity verified`);

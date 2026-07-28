@@ -1,5 +1,18 @@
 /* gmsniff-specific chrome not covered by anentrypoint-design's shared CSS.
-   Theme-aware: every color rides colors_and_type.css tokens, no raw hex. */
+
+   Colour tokens are the ones colors_and_type.css actually declares, verified by
+   reading getComputedStyle(:root) in a live browser: --border, --text and
+   --muted resolve to NOTHING (they were never declared anywhere in the SDK or
+   here) and are replaced by --panel-3, --panel-text and --panel-text-3. The
+   raw-hex fallbacks that used to sit inside var(--warn, #d29922)-style calls
+   were stale GitHub-dark values contradicting the SDK's real palette
+   (--warn is #FF5A52, --flame #FF5A1F, --accent #B6FF1B), so a fallback would
+   have painted the wrong colour in exactly the case it claimed to cover.
+
+   Left/right properties are logical (inset-inline-start, margin-inline-*,
+   border-inline-*, text-align:start) so the sheet mirrors under [dir="rtl"];
+   the SDK's scripts/lint-rtl-physical-properties.mjs enforces the same rule on
+   its own sheets. */
 
 /* Agent drilldown: served instruction beside its output feed, laid out by the ds
    SplitPanel (drag- and keyboard-resizable, ds-ep-split* rules in
@@ -13,29 +26,29 @@
 @media (max-width: 900px) {
   .gm-split-pane { height:auto; }
   .gm-split-pane .ds-ep-split.horiz { flex-direction:column; }
-  .gm-split-pane .ds-ep-split.horiz > .ds-ep-split-pane { width:auto !important; flex:0 0 auto !important; }
+  .gm-split-pane .ds-ep-split.horiz > .ds-ep-split-pane { width:auto; flex:0 0 auto; }
   .gm-split-pane .ds-ep-resize { display:none; }
 }
 
 .gm-toolbar { display:flex; gap:8px; margin-bottom:10px; align-items:center; flex-wrap:wrap; }
 .gm-toolbar input, .gm-toolbar select, .gm-toolbar textarea {
-  background: var(--surface-2, var(--panel-bg)); border:1px solid var(--border);
-  color: var(--text); padding:5px 10px; border-radius:4px; font-size:12px; font-family:inherit;
+  background: var(--surface-2, var(--panel-bg)); border:1px solid var(--panel-3);
+  color: var(--panel-text); padding:5px 10px; border-radius:4px; font-size:12px; font-family:inherit;
 }
 .gm-toolbar input { flex:1; min-width:140px; }
 .gm-toolbar input:focus, .gm-toolbar select:focus, .gm-toolbar textarea:focus { outline:none; border-color: var(--accent, var(--panel-accent)); }
 
 .gm-table { width:100%; border-collapse:collapse; font-size:12px; }
-.gm-table th { text-align:left; padding:6px 10px; border-bottom:1px solid var(--border); color: var(--muted); font-weight:500; position:sticky; top:0; background: var(--panel-bg); }
-.gm-table td { padding:5px 10px; border-bottom:1px solid var(--border); vertical-align:top; word-break:break-all; max-width:320px; }
+.gm-table th { text-align:start; padding:6px 10px; border-bottom:1px solid var(--panel-3); color: var(--panel-text-3); font-weight:500; position:sticky; top:0; background: var(--panel-bg); }
+.gm-table td { padding:5px 10px; border-bottom:1px solid var(--panel-3); vertical-align:top; word-break:break-all; max-width:320px; }
 .gm-table tr:hover td { background: var(--surface-2, var(--panel-bg)); }
 .gm-table th.gm-th-sortable { cursor:pointer; user-select:none; white-space:nowrap; }
-.gm-table th.gm-th-sortable:hover { color: var(--text); }
+.gm-table th.gm-th-sortable:hover { color: var(--panel-text); }
 .gm-table th.gm-th-sortable:focus-visible { outline:2px solid var(--accent, var(--panel-accent)); outline-offset:-2px; }
 .gm-table th.gm-th-sorted { color: var(--accent, var(--panel-accent)); }
 
 .gm-json { font-size:10px; font-family: ui-monospace, Consolas, monospace; white-space:pre-wrap; word-break:break-all; background: var(--surface-2, var(--panel-bg)); padding:8px; border-radius:3px; max-height:300px; overflow-y:auto; }
-.gm-empty { color: var(--muted); padding:16px; text-align:center; }
+.gm-empty { color: var(--panel-text-3); padding:16px; text-align:center; }
 .gm-pill { display:inline-block; padding:1px 7px; border-radius:10px; font-size:11px; background: var(--surface-2, var(--panel-bg)); margin:1px; }
 .gm-flex-row { display:flex; gap:12px; align-items:flex-start; flex-wrap:wrap; }
 .gm-flex-row > .ds-panel, .gm-flex-row > div { flex:1; min-width:260px; }
@@ -46,9 +59,9 @@
    tone classes, leave transition. See toast-stacking-and-lifecycle-audit PRD row. */
 .gm-inline-input { background:transparent; border:1px solid transparent; color:inherit; font:inherit; width:100%; }
 .gm-inline-input:focus { outline:none; border-color: var(--accent, var(--panel-accent)); background: var(--surface-2, var(--panel-bg)); }
-.gm-inline-input.gm-field-error, select.gm-field-error { border-color: var(--danger, var(--flame, #c0392b)); }
+.gm-inline-input.gm-field-error, select.gm-field-error { border-color: var(--danger); }
 
-.gm-propgrid-row { border-bottom:1px solid var(--border); padding:8px 0; }
+.gm-propgrid-row { border-bottom:1px solid var(--panel-3); padding:8px 0; }
 .gm-propgrid-row:last-child { border-bottom:none; }
 
 /* Cross-project measurement strip for the working agents, above the panel router.
@@ -56,22 +69,22 @@
    reports each agent's watcher state, silence and deviation rate as numbers for
    the reader to judge. Renders null only when live-state reports no working
    agent at all. */
-.gm-health-banner { display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:8px 14px; margin-bottom:10px; border-radius:6px; font-size:12px; border:1px solid var(--border); }
+.gm-health-banner { display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:8px 14px; margin-bottom:10px; border-radius:6px; font-size:12px; border:1px solid var(--panel-3); }
 .gm-health-label { font-weight:600; }
 .gm-health-list { display:flex; gap:2px; flex-wrap:wrap; }
-.gm-health-item { background:none; border:none; padding:0 8px 0 0; margin:0; font:inherit; color:inherit; cursor:pointer; text-decoration:underline; text-align:left; }
+.gm-health-item { background:none; border:none; padding:0 8px 0 0; margin:0; font:inherit; color:inherit; cursor:pointer; text-decoration:underline; text-align:start; }
 .gm-health-item:hover { opacity:.8; }
-.gm-health-omitted { color: var(--muted); }
+.gm-health-omitted { color: var(--panel-text-3); }
 
-.gm-force-svg { width:100%; height:520px; display:block; background: var(--surface-2, var(--panel-bg)); border:1px solid var(--border); border-radius:6px; touch-action:none; }
-.gm-force-edge { stroke: var(--border); stroke-width:1; opacity:.6; }
+.gm-force-svg { width:100%; height:520px; display:block; background: var(--surface-2, var(--panel-bg)); border:1px solid var(--panel-3); border-radius:6px; touch-action:none; }
+.gm-force-edge { stroke: var(--panel-3); stroke-width:1; opacity:.6; }
 .gm-force-edge.dim { opacity:.08; }
 .gm-force-edge.hi { stroke: var(--accent, var(--panel-accent)); opacity:1; stroke-width:1.6; }
-.gm-force-node circle { stroke: var(--border); stroke-width:1.5; cursor:grab; }
+.gm-force-node circle { stroke: var(--panel-3); stroke-width:1.5; cursor:grab; }
 .gm-force-node.dim circle { opacity:.15; }
 .gm-force-node.hi circle { stroke: var(--accent, var(--panel-accent)); stroke-width:2.5; }
 .gm-force-node.dragging circle { cursor:grabbing; }
-.gm-force-node text { fill: var(--text); font-size:9px; pointer-events:none; user-select:none; }
+.gm-force-node text { fill: var(--panel-text); font-size:9px; pointer-events:none; user-select:none; }
 .gm-force-node.dim text { opacity:.15; }
 
 /* ---------------------------------------------------------------------------
@@ -83,8 +96,8 @@
    custom properties set via style (the one inline-style use that is
    irreducibly per-instance data, not layout) consumed by a static class.
    --------------------------------------------------------------------------- */
-.gm-text-danger { color: var(--flame, #f85149); }
-.gm-hint-text { color: var(--muted); font-size:11px; margin-bottom:8px; }
+.gm-text-danger { color: var(--flame); }
+.gm-hint-text { color: var(--panel-text-3); font-size:11px; margin-bottom:8px; }
 .gm-mt-8 { margin-top:8px; }
 .gm-mt-10 { margin-top:10px; }
 .gm-mt-12 { margin-top:12px; }
@@ -99,7 +112,7 @@
 .gm-row-between { display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; }
 .gm-row-gap-8 { display:flex; align-items:center; gap:8px; }
 .gm-row-full { display:flex; align-items:center; width:100%; }
-.gm-row-auto-gap-10 { margin-left:auto; display:flex; align-items:center; gap:10px; }
+.gm-row-auto-gap-10 { margin-inline-start:auto; display:flex; align-items:center; gap:10px; }
 
 /* Mobile: the topbar row packs three independent clusters (brand+leaf,
    project select, connection chip+theme toggle) into one non-wrapping flex
@@ -111,15 +124,27 @@
    target rather than a 44px sliver. */
 @media (max-width: 480px) {
   .gm-row-full { flex-wrap: wrap; row-gap: 8px; }
-  .gm-row-full > select.gm-ml-10 { margin-left: 0; flex: 1 1 100%; order: 3; }
-  .gm-row-full > .gm-row-auto-gap-10 { margin-left: auto; order: 2; }
+  .gm-row-full > select.gm-ml-10 { margin-inline-start: 0; flex: 1 1 100%; order: 3; }
+  .gm-row-full > .gm-row-auto-gap-10 { margin-inline-start: auto; order: 2; }
 }
-.gm-ml-6 { margin-left:6px; }
-.gm-ml-10 { margin-left:10px; }
-.gm-mr-8 { margin-right:8px; }
-.gm-list-row { padding:6px 0; border-bottom:1px solid var(--border); }
-.gm-panel-danger { border-color: var(--flame, #f85149); }
-.gm-row-danger-tint { background: color-mix(in oklab, var(--flame, #f85149) 12%, transparent); }
+.gm-ml-6 { margin-inline-start:6px; }
+.gm-ml-10 { margin-inline-start:10px; }
+.gm-mr-8 { margin-inline-end:8px; }
+.gm-list-row { padding:6px 0; border-bottom:1px solid var(--panel-3); }
+.gm-panel-danger { border-color: var(--flame); }
+.gm-row-danger-tint { background: color-mix(in oklab, var(--flame) 12%, transparent); }
+
+/* The panel body is a labelled <section>, not a second <main> (AppShell already
+   owns <main id="app-main">). Its h1 is the document's only top-level heading
+   and names the active panel, so the heading outline starts at level 1 instead
+   of at the sidebar's h2 tier labels. Pinned to the panel text scale rather
+   than the shell's display-sized h1 -- the CONTENT stays the largest thing on
+   screen, same reasoning as .gm-pane-head h2 below. */
+.gm-panel-heading {
+  font-size:13px; font-weight:600; letter-spacing:0; text-transform:none;
+  margin:0 0 10px; color: var(--panel-text-3);
+}
+.gm-panel-body:focus { outline:none; }
 
 /* panel-loading-states: shown by renderBody() in the window between a
    panel switch (force=true) and computeBody()'s data arriving -- replaces
@@ -130,7 +155,7 @@
 /* colorFor(sub) is per-subsystem data (a hash-derived hsl or a named palette
    entry), not a fixed layout value -- kept as a custom property so the class
    stays static while the color remains dynamic. */
-.gm-muted-11 { color: var(--muted); font-size:11px; }
+.gm-muted-11 { color: var(--panel-text-3); font-size:11px; }
 .gm-sub-color { color: var(--sub-color); }
 
 /* CodeInsight treemap: outer container size and every rect's position/size/
@@ -138,13 +163,13 @@
    plus per-item x/y/w/h/complexity) -- irreducibly dynamic, expressed as
    custom properties consumed by these two static classes. */
 .gm-treemap-container {
-  position:relative; width:100%; overflow:hidden; border:1px solid var(--border);
+  position:relative; width:100%; overflow:hidden; border:1px solid var(--panel-3);
   max-width: var(--tm-w); height: var(--tm-h);
 }
 .gm-treemap-rect {
   position:absolute; box-sizing:border-box; cursor:pointer; overflow:hidden;
-  font-size:10px; color:#0a0a0a; padding:2px;
-  left: var(--rx); top: var(--ry); width: var(--rw); height: var(--rh);
+  font-size:10px; color: var(--ink); padding:2px;
+  inset-inline-start: var(--rx); top: var(--ry); width: var(--rw); height: var(--rh);
   background: var(--rect-bg); border: 1px solid var(--rect-border);
 }
 
@@ -157,21 +182,21 @@
 
 /* Attention strip: the "where do I look first" answer, above the roster. */
 .gm-attention { display:flex; align-items:center; gap:8px; flex-wrap:wrap; padding:8px 12px; margin-bottom:10px;
-  border:1px solid var(--border); border-left:3px solid var(--warn, #d29922); border-radius:4px; font-size:12px; }
+  border:1px solid var(--panel-3); border-inline-start:3px solid var(--warn); border-radius:4px; font-size:12px; }
 .gm-attention-item { background:none; border:none; padding:0 6px 0 0; margin:0; font:inherit; color:inherit;
-  cursor:pointer; text-decoration:underline; text-align:left; }
+  cursor:pointer; text-decoration:underline; text-align:start; }
 .gm-attention-item:hover { opacity:.8; }
 
 /* One-click reveal of the folded idle/finished majority. */
-.gm-reveal { background:none; border:1px dashed var(--border); border-radius:4px; color:var(--muted);
+.gm-reveal { background:none; border:1px dashed var(--panel-3); border-radius:4px; color:var(--panel-text-3);
   font:inherit; font-size:11px; padding:2px 8px; cursor:pointer; }
-.gm-reveal:hover { color:var(--text); border-color:var(--accent, var(--panel-accent)); }
+.gm-reveal:hover { color:var(--panel-text); border-color:var(--accent, var(--panel-accent)); }
 
 /* Phase strip that renders a revisit as a revisit (visited SET, not index math). */
 .gm-phase-strip { display:flex; gap:3px; flex-wrap:wrap; margin:6px 0; }
-.gm-phase-step { font-size:10px; padding:1px 7px; border-radius:9px; border:1px solid var(--border);
-  color:var(--muted); background:transparent; }
-.gm-phase-step.is-reached { color:var(--text); border-color:var(--accent, var(--panel-accent)); }
+.gm-phase-step { font-size:10px; padding:1px 7px; border-radius:9px; border:1px solid var(--panel-3);
+  color:var(--panel-text-3); background:transparent; }
+.gm-phase-step.is-reached { color:var(--panel-text); border-color:var(--accent, var(--panel-accent)); }
 .gm-phase-step.is-current { background:var(--accent, var(--panel-accent)); color:var(--panel-bg); font-weight:600; }
 
 /* Output feed: newest last, terminal-like, expand-to-payload. */
@@ -179,50 +204,50 @@
    page title and dwarfs the instruction it labels inside a dialog. Pin them to
    the dialog's own text scale so the CONTENT is the largest thing on screen. */
 .gm-pane-head { display:flex; align-items:baseline; justify-content:space-between; gap:8px; margin-bottom:6px;
-  border-bottom:1px solid var(--border); padding-bottom:4px; }
+  border-bottom:1px solid var(--panel-3); padding-bottom:4px; }
 .gm-pane-head h2 { font-size:14px; font-weight:600; letter-spacing:0; text-transform:none; }
-.gm-feed-scroll { max-height:58vh; overflow-y:auto; border:1px solid var(--border); border-radius:4px; }
-.gm-feed-row { padding:3px 8px; border-bottom:1px solid var(--border); cursor:pointer; font-size:11px; }
+.gm-feed-scroll { max-height:58vh; overflow-y:auto; border:1px solid var(--panel-3); border-radius:4px; }
+.gm-feed-row { padding:3px 8px; border-bottom:1px solid var(--panel-3); cursor:pointer; font-size:11px; }
 .gm-feed-row:last-child { border-bottom:none; }
 .gm-feed-row:hover { background: var(--surface-2, var(--panel-bg)); }
 .gm-feed-row:focus-visible { outline:2px solid var(--accent, var(--panel-accent)); outline-offset:-2px; }
 .gm-feed-row.is-open { background: var(--surface-2, var(--panel-bg)); }
 .gm-feed-head { display:flex; align-items:center; flex-wrap:wrap; gap:2px; }
-.gm-feed-kind { color: var(--kind-tone, var(--text)); }
-.gm-feed-dur { color: var(--muted); font-family: ui-monospace, Consolas, monospace; }
-.gm-feed-inflight { color: var(--warn, #d29922); font-weight:600; }
-.gm-feed-muted { color: var(--muted); }
+.gm-feed-kind { color: var(--kind-tone, var(--panel-text)); }
+.gm-feed-dur { color: var(--panel-text-3); font-family: ui-monospace, Consolas, monospace; }
+.gm-feed-inflight { color: var(--warn); font-weight:600; }
+.gm-feed-muted { color: var(--panel-text-3); }
 .gm-feed-payload { font-size:10px; font-family: ui-monospace, Consolas, monospace; white-space:pre-wrap;
   word-break:break-all; background: var(--panel-bg); padding:6px; margin:4px 0 0; border-radius:3px;
   max-height:240px; overflow:auto; }
-.gm-feed-more { font-size:10px; color: var(--muted); padding:2px 0 4px; }
+.gm-feed-more { font-size:10px; color: var(--panel-text-3); padding:2px 0 4px; }
 
 /* Gate blockers: which gate denied, and how often it repeated. */
-.gm-gates { border:1px solid var(--border); border-left:3px solid var(--danger, var(--flame, #f85149));
+.gm-gates { border:1px solid var(--panel-3); border-inline-start:3px solid var(--danger);
   border-radius:4px; padding:6px 10px; margin:8px 0; font-size:11px; }
 .gm-gates-head { display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-bottom:4px; }
 .gm-gate-row { padding:2px 0; }
 
 /* Driving prompt + rendered instruction. */
 .gm-prompt { margin:8px 0; font-size:11px; }
-.gm-prompt > summary { cursor:pointer; color: var(--muted); }
+.gm-prompt > summary { cursor:pointer; color: var(--panel-text-3); }
 .gm-prompt-body { white-space:pre-wrap; word-break:break-word; background: var(--surface-2, var(--panel-bg));
   padding:8px; border-radius:3px; max-height:200px; overflow:auto; font-size:11px; margin:4px 0 0; }
-.gm-instruction-body { max-height:52vh; overflow-y:auto; border:1px solid var(--border); border-radius:4px; padding:10px; }
+.gm-instruction-body { max-height:52vh; overflow-y:auto; border:1px solid var(--panel-3); border-radius:4px; padding:10px; }
 .gm-provenance, .gm-metrics { margin-top:10px; font-size:11px; }
-.gm-provenance > summary, .gm-metrics > summary { cursor:pointer; color: var(--muted); }
+.gm-provenance > summary, .gm-metrics > summary { cursor:pointer; color: var(--panel-text-3); }
 .gm-vendored-list { max-height:160px; overflow:auto; margin-top:4px; }
 .gm-metric-line { padding:2px 0; }
 .gm-mono-sm { font-family: ui-monospace, Consolas, monospace; font-size:11px; opacity:.8; word-break:break-all; }
-.gm-tone-warn { color: var(--warn, #d29922); }
+.gm-tone-warn { color: var(--warn); }
 
 /* Zero-dependency markdown output (gui/markdown.js). */
 .gm-md { font-size:12px; line-height:1.5; }
 .gm-md .gm-md-h { margin:10px 0 4px; font-size:13px; }
 .gm-md .gm-md-p { margin:6px 0; }
-.gm-md .gm-md-list { margin:6px 0; padding-left:20px; }
-.gm-md .gm-md-quote { margin:6px 0; padding-left:10px; border-left:2px solid var(--border); color: var(--muted); }
-.gm-md .gm-md-hr { border:none; border-top:1px solid var(--border); margin:10px 0; }
+.gm-md .gm-md-list { margin:6px 0; padding-inline-start:20px; }
+.gm-md .gm-md-quote { margin:6px 0; padding-inline-start:10px; border-inline-start:2px solid var(--panel-3); color: var(--panel-text-3); }
+.gm-md .gm-md-hr { border:none; border-top:1px solid var(--panel-3); margin:10px 0; }
 .gm-md .gm-md-code { background: var(--surface-2, var(--panel-bg)); padding:8px; border-radius:3px;
   overflow-x:auto; font-size:11px; margin:6px 0; }
 .gm-md code { background: var(--surface-2, var(--panel-bg)); padding:1px 4px; border-radius:3px;
@@ -231,29 +256,29 @@
 /* Honest empty/degraded states (gui/honest-state.js): every zero says which
    zero it is, so "nothing happened" can never look like "nothing loaded". */
 .gm-state { padding:8px 0; }
-.gm-state-hint { color: var(--muted); font-size:11px; text-align:center; margin:4px 0 0; }
-.gm-state.is-error .ds-file-empty-text { color: var(--danger, var(--flame, #f85149)); }
-.gm-state.is-stale .ds-file-empty-text, .gm-state.is-unscoped .ds-file-empty-text { color: var(--warn, #d29922); }
+.gm-state-hint { color: var(--panel-text-3); font-size:11px; text-align:center; margin:4px 0 0; }
+.gm-state.is-error .ds-file-empty-text { color: var(--danger); }
+.gm-state.is-stale .ds-file-empty-text, .gm-state.is-unscoped .ds-file-empty-text { color: var(--warn); }
 .gm-state-loading { display:flex; flex-direction:column; align-items:center; gap:6px; padding:24px 0; }
 .gm-skeleton-list { display:flex; flex-direction:column; gap:10px; padding:8px 0; }
 .gm-skeleton-row { display:flex; flex-direction:column; gap:5px; }
 
 /* Stream condition banner: a dropped or resumed stream is stated, never silent. */
 .gm-stream-note { display:flex; align-items:center; gap:10px; padding:6px 14px; margin-bottom:10px;
-  border:1px solid var(--warn, #d29922); border-radius:6px; font-size:12px;
-  background: color-mix(in srgb, var(--warn, #d29922) 12%, var(--panel-bg)); }
-.gm-stream-note-x { margin-left:auto; background:none; border:none; color:inherit; cursor:pointer; font:inherit; }
+  border:1px solid var(--warn); border-radius:6px; font-size:12px;
+  background: color-mix(in srgb, var(--warn) 12%, var(--panel-bg)); }
+.gm-stream-note-x { margin-inline-start:auto; background:none; border:none; color:inherit; cursor:pointer; font:inherit; }
 
 /* Opt-in state-change signal. The pulse is a brief border/background lift on an
    already-present strip rather than a new element appearing, so an arriving
    frame never reflows the panel under a reader's cursor. */
 .gm-notify { display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:6px 14px; margin-bottom:10px;
-  border:1px solid var(--border); border-radius:6px; font-size:12px;
+  border:1px solid var(--panel-3); border-radius:6px; font-size:12px;
   transition: border-color .25s ease, background-color .25s ease; }
-.gm-notify-scope { color: var(--muted, #8b949e); }
-.gm-notify-count { margin-left:auto; font-variant-numeric: tabular-nums; }
-.gm-notify.is-pulsing { border-color: var(--accent, #58a6ff);
-  background: color-mix(in srgb, var(--accent, #58a6ff) 14%, var(--panel-bg)); }
+.gm-notify-scope { color: var(--panel-text-3); }
+.gm-notify-count { margin-inline-start:auto; font-variant-numeric: tabular-nums; }
+.gm-notify.is-pulsing { border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, var(--panel-bg)); }
 
 @media (prefers-reduced-motion: reduce) {
   .gm-notify { transition: none; }
