@@ -57,6 +57,18 @@ So: report the measurement **and how old it is**, for **every** project, and let
 
 **A paged route cannot be counted client-side.** `/api/prd` and `/api/mutables` return at most `YAML_ROWS_LIMIT` rows alongside a true `total` and a `truncated` flag. Counting `r.rows` therefore reports a number silently capped at the page size: `LifecycleControl` displayed "0 PRD pending" for a project with 314 pending, because its 250-row page happened to contain none. Count from `total`, from a whole-file count another route already computes, or server-side — never from the rows a paged route handed you. And when a list caps what it displays, print the omitted count; three lists here truncated silently.
 
+**A field rendered under the wrong noun is a false claim, not a cosmetic slip.** The health banner fed `watcherAlive` — which is `readProjectLiveness().active`, "is this project working" — into the words "watcher not running", so every idle project asserted a dead daemon while one shared `agentplug-runner` served all of them, and the cards below said RUNNING for the same project in the same paint. The route already carried `daemonPidAlive` for the real question. When two components render the same underlying fact, derive it once and let both read it; a contradiction visible in a single DOM read means two independent derivations, and correcting only the wording leaves the second one free to drift again.
+
+**A display fallback chain is a measurement, not a guess.** The event feed picked its detail with `e.detail || e.reason || e.verb || …`, a chain assembled from memory that omitted `error` entirely — so `embed_init_fail` printed its name and nothing else while its full explanation sat in that field. Measured across 32,919 real records, **50.3% of lines rendered blank**. Enumerate the keys that actually occur before writing the chain, and re-measure against the *rendered output*: an `evt:`-only scan reported the synthesized text-line events (`retention.swept`, `plugkit.version`, `lock.stale-takeover`) as covered while they rendered bare, because those come from `src/watcher-log.js`, not from JSON. Blank lines in real output: 129 of 384 → 6.
+
+**Prefer making a line informative over suppressing it.** `dispatch.end` looked like noise crowding the feed, but 100% of records carry `ms` (median 560ms, max 5.7 minutes measured) — the single most actionable number for a stuck agent, discarded at render time. The fix was to show the duration, not to rank the line down. Suppression in an observability tool costs reachability; enrichment costs nothing.
+
+**A bound above the data it bounds is not a bound.** `limit=-5` reached `slice()` and took from the *end* of the array, returning the entire 10,026-row store as 3.5 MB — the largest response the server could be made to produce, from one malformed query. Clamp in the query parser so every route inherits it, and check the ceiling against the real store size: a first `REQUEST_LIMIT_MAX` of 10,000 sat above the store and still permitted a near-complete dump.
+
+**Ship what the panel reads, keep the rest reachable, and name the omission.** `/api/projects` sent a 23-field `liveness` sub-object worth 110 KB of its 163 KB that no GUI surface read; `/api/health-summary` sent 173 rows of which 159 had never been observed. Both now have an opt-out the client uses, with the *full* form still the default so no caller silently loses a field, and the filtered form reporting `total`/`returned`/`omitted_never_observed`. Measured: 166 KB → 55 KB and 38 KB → 2.8 KB.
+
+**One extractor per fact, or the surfaces drift apart.** `src/cli.js` carried its own copy of the `next-step.md` heading scan, so fixing the ORCHESTRATOR defect in `src/registry.js` corrected the GUI while the CLI kept printing the constant. gm concatenates a fixed ORCHESTRATOR preamble ahead of the phase section, so the **first** `#` heading is identical on every project — take the last *top-level* one (`^#[ \t]+`, since `^#\s*` also matches `##` and yields the equally-constant "DISPATCH").
+
 ## Liveness has three distinct meanings
 
 Keep them separate; substituting one for another is the recurring bug.
@@ -103,7 +115,7 @@ The floor is currently held by source review, not by execution — there is no N
 
 ## Testing
 
-No test framework, no `test/` directory. `test.js` at repo root is the single, mock-free, real-services integration test (`node test.js`) — it spins up a real temp log dir, a real `GmLogWatcher`/`MultiProjectWatcher`, writes real jsonl lines, and asserts against real SSE/replay output. Extend this file for new coverage; never add a second test file or a testing library.
+`test.js` at repo root is the single, mock-free, real-services integration test (`node test.js`). **Extend that one file; never add a second test file, a `test/` directory, or a testing library.** (What it spins up and asserts against — recall `gmsniff test.js harness`.)
 
 ## gui/ds vendoring
 
@@ -111,7 +123,7 @@ Never hand-edit a file under `gui/ds/` — fix it in `../anentrypoint-design`, t
 
 ## Packaging
 
-`files` is `["src/", "gui/"]`, so anything added under either tree ships automatically — but a *partial vendor* is caught by the closure rule above, never by packaging. Verify with a real `npm pack --dry-run`; the tarball is all an installed user has.
+A *partial vendor* is caught by the closure rule above, never by packaging. Verify with `npm pack --dry-run`. (`files` globs, what ships automatically — recall `gui/ds vendoring`.)
 
 ## Information tiering (deliberate)
 
