@@ -640,7 +640,7 @@ function listSessions(all, opts = {}) {
   for (const s of rows) {
     const walk = PHASES.map(p => s.phases.has(p) ? color('#', 32) : color('.', 90)).join('');
     const dev = s.deviations ? color(String(s.deviations).padStart(3), 31) : '   ';
-    const sessShort = s.sess.slice(0, 24).padEnd(24);
+    const sessShort = truncateSessionKeyKeepingItsDistinguishingTail(s.sess).padEnd(SESSION_KEY_COLUMN_WIDTH);
     const cwdsArr = [...s.cwds];
     const proj = cwdsArr.map(c => path.basename(c)).join(',').slice(0, 18).padEnd(18);
     let watcher = '             ';
@@ -783,12 +783,16 @@ function stats(rows) {
   }
   const dump = (label, m, top = 15) => {
     process.stdout.write(`\n# ${label}\n`);
-    [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, top).forEach(([k, v]) => process.stdout.write(`  ${String(v).padStart(7)}  ${k}\n`));
+    const ranked = [...m.entries()].sort((a, b) => b[1] - a[1]);
+    ranked.slice(0, top).forEach(([k, v]) => process.stdout.write(`  ${String(v).padStart(7)}  ${k}\n`));
+    writeOmittedRowsNote(ranked.length - Math.min(top, ranked.length), top, 'group', 'groups');
   };
   process.stdout.write(`# total: ${rows.length}\n`);
   dump('by sub', bySub);
   dump('by event', byEv, 20);
-  dump('by sess (top 15)', bySess);
+  // The label said "top 15" while the cap was a parameter, so a changed cap
+  // would have left the heading asserting a number the code no longer used.
+  dump('by sess', bySess);
   dump('by day', byDay);
 }
 
@@ -1036,9 +1040,11 @@ function efficiency(all, sess) {
   process.stdout.write(`completed:         ${completeAt || color('no', 31)}\n`);
   process.stdout.write(`disp/trans ratio:  ${transitions ? (dispatches / transitions).toFixed(1) : 'n/a'}\n`);
   process.stdout.write('\n# verbs by frequency:\n');
-  for (const [v, n] of [...verbs.entries()].sort((a, b) => b[1] - a[1]).slice(0, 15)) {
+  const rankedVerbs = [...verbs.entries()].sort((a, b) => b[1] - a[1]);
+  for (const [v, n] of rankedVerbs.slice(0, VERBS_BY_FREQUENCY_SHOWN)) {
     process.stdout.write(`  ${String(n).padStart(4)}  ${v}\n`);
   }
+  writeOmittedRowsNote(rankedVerbs.length - Math.min(VERBS_BY_FREQUENCY_SHOWN, rankedVerbs.length), VERBS_BY_FREQUENCY_SHOWN, 'verb', 'verbs');
 }
 
 function readDaemonRegistry() {
@@ -1136,7 +1142,12 @@ function embedFailures(all, opts) {
       byProj.set(proj, (byProj.get(proj) || 0) + 1);
     }
     process.stdout.write(`# embed failures: ${evs.length} (structured events)\n`);
-    const dump = (label, m) => { process.stdout.write(`\n# ${label}\n`); [...m.entries()].sort((a,b)=>b[1]-a[1]).slice(0,20).forEach(([k,v]) => process.stdout.write(`  ${String(v).padStart(6)}  ${k}\n`)); };
+    const dump = (label, m) => {
+      process.stdout.write(`\n# ${label}\n`);
+      const ranked = [...m.entries()].sort((a, b) => b[1] - a[1]);
+      ranked.slice(0, EMBED_FAILURE_ROWS_SHOWN).forEach(([k, v]) => process.stdout.write(`  ${String(v).padStart(6)}  ${k}\n`));
+      writeOmittedRowsNote(ranked.length - Math.min(EMBED_FAILURE_ROWS_SHOWN, ranked.length), EMBED_FAILURE_ROWS_SHOWN, 'row', 'rows');
+    };
     dump('by step', byStep); dump('by day', byDay); dump('by project', byProj);
     return;
   }
@@ -1171,9 +1182,11 @@ function recallMisses(all, opts) {
   const top = opts.top || 20;
   process.stdout.write(`# recall misses: ${evs.length} events - ${byQuery.size} distinct queries\n`);
   process.stdout.write(`COUNT   LAST                 QUERY\n`);
-  for (const s of [...byQuery.values()].sort((a,b)=>b.count-a.count).slice(0, top)) {
+  const rankedQueries = [...byQuery.values()].sort((a, b) => b.count - a.count);
+  for (const s of rankedQueries.slice(0, top)) {
     process.stdout.write(`${String(s.count).padStart(5)}   ${(s.last_ts||'').slice(0,19).padEnd(19)}  ${s.query}\n`);
   }
+  writeOmittedRowsNote(rankedQueries.length - Math.min(top, rankedQueries.length), top, 'query', 'queries');
 }
 
 function recallScores(all, opts) {
@@ -1211,9 +1224,11 @@ function classifierRejects(all, opts) {
   const top = opts.top || 20;
   process.stdout.write(`# memorize rejects: ${evs.length}\n`);
   process.stdout.write(`\n# by reason\n`);
-  for (const [k, v] of [...byReason.entries()].sort((a,b)=>b[1]-a[1]).slice(0, top)) {
+  const rankedReasons = [...byReason.entries()].sort((a, b) => b[1] - a[1]);
+  for (const [k, v] of rankedReasons.slice(0, top)) {
     process.stdout.write(`  ${String(v).padStart(6)}  ${k}\n`);
   }
+  writeOmittedRowsNote(rankedReasons.length - Math.min(top, rankedReasons.length), top, 'reason', 'reasons');
   process.stdout.write(`\n# recent 10\n`);
   for (const e of evs.slice(-10).reverse()) {
     const tp = e.text_prefix || e.text || '';
@@ -1494,6 +1509,35 @@ function eventDetailText(e) {
     if (e[k] !== undefined && e[k] !== null && e[k] !== '') pairs.push(`${k}=${e[k]}`);
   }
   return pairs.join(' ');
+}
+
+const VERBS_BY_FREQUENCY_SHOWN = 15;
+const EMBED_FAILURE_ROWS_SHOWN = 20;
+const SESSION_KEY_COLUMN_WIDTH = 24;
+
+// A cwd#run key is distinguished by its TRAILING timestamp, so cutting the tail
+// collapsed different runs into one displayed string: measured 1047 of 1054 keys
+// truncated at the column width and 1054 rows rendering as 99 distinct values,
+// with "c:/dev/rs-plugkit#2026-0" alone standing for 144 separate sessions. That
+// value is also what --tree takes as input, so it could not identify the session
+// it named. The cwd is already in the adjacent project column; the tail is not.
+function truncateSessionKeyKeepingItsDistinguishingTail(sess) {
+  const key = String(sess);
+  if (key.length <= SESSION_KEY_COLUMN_WIDTH) return key;
+  return ELLIPSIS_PREFIX + key.slice(key.length - (SESSION_KEY_COLUMN_WIDTH - ELLIPSIS_PREFIX.length));
+}
+const ELLIPSIS_PREFIX = '...';
+
+// A ranked list that stops at N and says nothing reads as complete: --stats
+// printed 4 "by sub" rows against 231696 events with no hint more existed, and
+// the verb list capped at 15 while spoint exercises 20 distinct verbs. Prints
+// the cap actually applied, and nothing at all when the list fits, so an
+// exactly-at-the-boundary list never renders a bare "+0 more".
+// The plural is passed rather than derived: appending "s" rendered "querys".
+function writeOmittedRowsNote(omitted, cap, singular, plural) {
+  if (omitted <= 0) return;
+  const noun = omitted === 1 ? singular : plural;
+  process.stdout.write(color(`  +${omitted} more ${noun} not shown (list caps at ${cap})\n`, 90));
 }
 
 function fmtEventLine(e) {

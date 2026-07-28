@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-07-28 — Stop the CLI lists from truncating in silence, and make session keys identify their session
+
+- **Report what every ranked CLI list left out**: `--stats` printed four "by sub" rows against 231,715 events with nothing saying more existed, and the same silence covered the verb-frequency list, the embed-failure dumps, and both `--top`-driven surfaces. One shared helper now names the cap actually applied — "+71 more groups not shown (list caps at 20)" — and prints nothing when the list fits, so a list exactly at its cap never renders a bare "+0 more".
+- **Keep the part of a session key that distinguishes it**: the key was cut to 24 characters from the left, but a `cwd#run` key is distinguished by its trailing timestamp, so 1,054 rows collapsed into 99 distinct displayed values with one string standing for 144 separate sessions. That value is also what `--tree` takes as input, so it could not identify the session it named. Truncating from the left instead restores 1,052 distinct keys; the cwd was already in the adjacent column.
+
 ## 2026-07-28 — Stop the remaining lists from truncating in silence
 
 - **Page the memory graph at the route and say what it left out**: the panel sliced to 150 nodes and had no way to report the omission, because the response carried no count to report it with — `/api/memory-graph` for `C:/dev/gm` returns 882 nodes, so 732 vanished and a truncated graph read exactly like a small one. The route now reports `total`/`returned`/`truncated` (the shape `/api/prd` already uses) plus `edges_total`/`edges_returned`, since edges are filtered to node pairs both present in the page; the heading states "N of TOTAL" and prints the omitted count. The defect was invisible when tested here: gmsniff has 63 memory files against gm's 889.
