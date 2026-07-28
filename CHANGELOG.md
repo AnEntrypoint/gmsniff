@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-07-28 — Separate a real spool backlog from residue that can never drain
+
+- **Split the manager view's queued count**: the spool ABI is `in/<verb>/<N>.txt`, so a file with any other extension sits there forever — and every project's entire "queued" figure turned out to be exactly that. Measured live, all agents report **0 pending**: `spoint` 34 unconsumable with the oldest at 54 days, `rs-plugkit` 20, `gm` 19, `gmsniff` 12, `thebird` 2 at 1,126 hours. The column had never once shown a real backlog, and a bare count made dead residue indistinguishable from work waiting to run. It now reports pending and unconsumable separately with the oldest residue's age, so residue reads as residue. `queue_depth` stays numeric because five surfaces consume it as a count; the breakdown rides alongside rather than changing its type underneath them.
+
 ## 2026-07-28 — Close the truncation class exhaustively instead of one instance per pass
 
 - **Report the total beside `embed-health`'s recent window**: it showed 20 of 257 matched events with no way to derive the other 237, and it was the sole outlier — `recallStats`, `execStats`, `hookStats` and `classifierRejects` all already returned a total. An unreported cap is worst on the route whose entire purpose is making silent embedding failure visible.

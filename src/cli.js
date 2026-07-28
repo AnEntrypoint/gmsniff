@@ -1431,6 +1431,9 @@ function readAgentState(cwd) {
     recent,
     in_flight: inFlight,
     queue_depth: liveness.queue_depth,
+    queue_consumable: liveness.queue_consumable,
+    queue_unconsumable: liveness.queue_unconsumable,
+    queue_oldest_unconsumable_age_ms: liveness.queue_oldest_unconsumable_age_ms,
     daemon_alive: liveness.daemon_alive,
     alive: liveness.active,
     pid: status ? status.pid : null,
@@ -1601,7 +1604,16 @@ function renderAgents(rows, opts) {
       const since = f.ts ? fmtAge(Date.now() - Date.parse(f.ts)) : '?';
       process.stdout.write(`      ${color('>> RUNNING', 32)} ${color(f.verb || '?', 1)} for ${since}${f.task ? ` task=${f.task}` : ''}\n`);
     }
-    if (a.queue_depth) process.stdout.write(`      ${color(`queued: ${a.queue_depth} spool request(s)`, 33)}\n`);
+    if (a.queue_depth) {
+      // A bare count made gm's 19-file queue -- every one of them unconsumable
+      // .md residue -- read identically to spoint's 33 genuinely-pending
+      // dispatches. The age says plainly that residue is residue.
+      const dead = a.queue_unconsumable || 0;
+      const residue = dead
+        ? `, ${dead} unconsumable (not .txt${a.queue_oldest_unconsumable_age_ms != null ? `, oldest ${fmtAge(a.queue_oldest_unconsumable_age_ms)}` : ''})`
+        : '';
+      process.stdout.write(`      ${color(`queued: ${a.queue_consumable ?? a.queue_depth} pending${residue}`, 33)}\n`);
+    }
     // The manager view's own feed was the last silent window: it showed
     // --output-lines rows out of a longer history with nothing naming the
     // remainder, so a busy agent and a quiet one looked identical.

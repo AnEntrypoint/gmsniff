@@ -261,15 +261,35 @@ export function readInstalledVersions() {
 // projects idle for weeks. It answers "is the daemon up", never "is this project active".
 export const PROJECT_ACTIVE_MS = parseInt(process.env.GM_PROJECT_ACTIVE_MS, 10) || 5 * 60 * 1000;
 
+// The spool ABI is in/<verb>/<N>.txt, so a file with any other extension sits
+// there forever -- no watcher consumes it and the count can never reach zero.
+// Measured across six live projects: gm queued 19 of which 19 were unconsumable
+// .md (its entire displayed backlog was residue), gmsniff 12 of 12 five days
+// stale, aloop 3 of 3, casey 2 of 2, while spoint had 33 queued with only 2 dead
+// -- so a single number made a real backlog indistinguishable from dead residue.
+const SPOOL_CONSUMABLE_EXT = '.txt';
+
 function spoolQueueDepth(spoolDir) {
-  let pending = 0;
+  let consumable = 0;
+  let unconsumable = 0;
+  let oldestUnconsumableMs = null;
   try {
     for (const verbDir of fs.readdirSync(path.join(spoolDir, 'in'), { withFileTypes: true })) {
       if (!verbDir.isDirectory()) continue;
-      try { pending += fs.readdirSync(path.join(spoolDir, 'in', verbDir.name)).filter(f => !f.startsWith('.')).length; } catch (_) {}
+      const dir = path.join(spoolDir, 'in', verbDir.name);
+      let names = [];
+      try { names = fs.readdirSync(dir).filter(f => !f.startsWith('.')); } catch (_) { continue; }
+      for (const name of names) {
+        if (name.endsWith(SPOOL_CONSUMABLE_EXT)) { consumable++; continue; }
+        unconsumable++;
+        try {
+          const ageMs = Date.now() - fs.statSync(path.join(dir, name)).mtimeMs;
+          if (oldestUnconsumableMs === null || ageMs > oldestUnconsumableMs) oldestUnconsumableMs = ageMs;
+        } catch (_) {}
+      }
     }
   } catch (_) {}
-  return pending;
+  return { total: consumable + unconsumable, consumable, unconsumable, oldest_unconsumable_age_ms: oldestUnconsumableMs };
 }
 
 export function readProjectLiveness(cwd, { now = Date.now() } = {}) {
@@ -296,7 +316,10 @@ export function readProjectLiveness(cwd, { now = Date.now() } = {}) {
 
   const last_activity_age_ms = agesOfSignalsThisProjectsOwnWorkWrites.length
     ? Math.min(...agesOfSignalsThisProjectsOwnWorkWrites) : null;
-  const queue_depth = spoolQueueDepth(spoolDir);
+  const spoolQueue = spoolQueueDepth(spoolDir);
+  // Kept numeric because five surfaces already read it as a count; the split
+  // rides alongside rather than changing the type under them.
+  const queue_depth = spoolQueue.total;
   const daemon = readDaemonStatus();
   const daemonState = daemonAliveFor(status, daemon, { now });
 
@@ -309,6 +332,9 @@ export function readProjectLiveness(cwd, { now = Date.now() } = {}) {
     summary_age_ms,
     turn_age_ms,
     queue_depth,
+    queue_consumable: spoolQueue.consumable,
+    queue_unconsumable: spoolQueue.unconsumable,
+    queue_oldest_unconsumable_age_ms: spoolQueue.oldest_unconsumable_age_ms,
     ...daemonState,
     shared_process: !!(status && status.shared_process),
   };
