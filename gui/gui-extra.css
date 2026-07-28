@@ -122,14 +122,7 @@
 .gm-row-end { display:flex; justify-content:flex-end; margin-bottom: var(--space-2); }
 .gm-row-between { display:flex; justify-content:space-between; align-items:center; margin-bottom: var(--space-1-75); }
 .gm-row-gap-8 { display:flex; align-items:center; gap: var(--space-2); }
-/* Wraps unconditionally rather than only under a breakpoint: the row packs
-   three independent clusters (brand+leaf, project select, connection chip +
-   theme toggle) and was measured overflowing its container at 782px wide
-   (839 > 782) -- well above the 480px phone breakpoint that was the only thing
-   allowing it to wrap. A width-triggered rule has to guess where the content
-   runs out of room; letting it wrap whenever it must is the measurement. */
-.gm-row-full { display:flex; align-items:center; width:100%; flex-wrap:wrap; row-gap: var(--space-2); min-width:0; }
-.gm-row-full > * { min-width:0; }
+/* The trailing cluster in the topbar slot: pushed right by the auto margin. */
 .gm-row-auto-gap-10 { margin-inline-start:auto; display:flex; align-items:center; gap: var(--space-2-5); }
 
 /* At phone width the wrapping above is not enough on its own: the project
@@ -137,8 +130,8 @@
    it takes a full row of its own and orders last. Mirrors
    anentrypoint-design's .app-topbar mobile pattern (app-shell.css ~1030-1054). */
 @media (max-width: 480px) {
-  .gm-row-full > select.gm-ml-10 { margin-inline-start: 0; flex: 1 1 100%; order: 3; }
-  .gm-row-full > .gm-row-auto-gap-10 { margin-inline-start: auto; order: 2; }
+    .gm-topbar-slot > select.gm-ml-10 { margin-inline-start: 0; flex: 1 1 100%; order: 3; }
+    .gm-topbar-slot > .gm-row-auto-gap-10 { margin-inline-start: auto; order: 2; }
 }
 .gm-ml-6 { margin-inline-start: var(--space-1-75); }
 .gm-ml-10 { margin-inline-start: var(--space-2-5); }
@@ -200,6 +193,17 @@
 .gm-attention-item { background:none; border:none; padding: var(--space-half) var(--space-1-75) var(--space-half) 0; margin:0; font:inherit; color:inherit;
   cursor:pointer; text-decoration:underline; text-align:start; min-height:24px; }
 .gm-attention-item:hover { opacity:.8; }
+
+/* The AppShell topbar slot. gmsniff puts three clusters in this band (the ds
+   Topbar with brand+leaf, the project select, and the connection chip + theme
+   toggle), and the ds <header class="app-topbar"> must SPAN the band rather
+   than shrink to its own content: measured wrapped-in-a-flex-row it computed
+   268px inside a 782px viewport and still only 224px at 1440px, so the header
+   background and sticky band never reached the full width at any size.
+   `min-width:0` on the header lets the brand ellipsize instead of forcing the
+   row wider than its container. */
+.gm-topbar-slot { display:flex; align-items:center; width:100%; flex-wrap:wrap; row-gap: var(--space-2); }
+.gm-topbar-slot > .app-topbar { flex:1 1 auto; min-width:0; }
 
 /* Roster density control -- a radiogroup, not tabs: it switches presentation of
    the same rows, not which rows. Mirrors the ds FileGrid density picker. */

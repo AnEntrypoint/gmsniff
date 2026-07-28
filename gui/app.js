@@ -383,8 +383,14 @@ function renderShell() {
     h('h1', { id: 'panel-body-heading', class: 'gm-panel-heading' }, NAV[ui.panel] || ui.panel),
     ui.bodyNode || h('p', { class: 'gm-empty' }, 'Loading...'));
 
+  // The controls ride INSIDE the topbar header, not in a wrapper div around it.
+  // Wrapping made <header class="app-topbar"> one flex item among three, so it
+  // shrank to its content width -- measured 268px against a 782px viewport, and
+  // still only 224px at 1440px, i.e. the header never spanned at any size. The
+  // header is already `display:flex` and full-width on its own; appending to it
+  // keeps that and lets the trailing cluster push right.
   const app = AppShell({
-    topbar: h('div', { class: 'gm-row-full' }, topbar, projectSelect,
+    topbar: h('div', { class: 'gm-topbar-slot' }, topbar, projectSelect,
       h('span', { class: 'gm-row-auto-gap-10' },
         Chip({ tone: ui.connState === 'live' ? 'positive' : (ui.connState === 'reconnecting' ? 'warn' : 'neutral'), children: ui.connState }),
         ThemeToggle({ compact: true }))),
