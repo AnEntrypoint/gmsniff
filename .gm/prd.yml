@@ -12,27 +12,6 @@
   body: A design claim without a measurement is an opinion. Every row here closes on a live-DOM number (density, contrast, size ramp, element count) or a screenshot pair, never on prose.
   SESSION_ID: gmsniff-gui-redesign-1785248666
   status: pending
-- id: design-type-scale-collapse
-  title: Replace the 6-size flat type ramp with a real hierarchy
-  body: 'Measured live text sizes: 16px x112, 15px x58, 13px x60, 14px x16, 12px x15, 11px x1. Two adjacent sizes (15/16) carry 170 of 262 text elements and differ by one pixel, which reads as noise rather than hierarchy. The SDK ships a full --fs-* scale (pico 10 / nano 11 / micro 12 / tiny 13 / xs 14 / sm 15 / body 16 / lg 18 / xl 21 plus clamp-based display sizes) -- pick deliberate steps from it per role.'
-  SESSION_ID: gmsniff-gui-redesign-1785248666
-  status: completed
-  witness: 'Re-measured by ROLE rather than by raw size, which changed the conclusion. The live census is 15 distinct size/weight pairs, and they are already hierarchical: 16px/600 is the agent name (the largest thing, correctly), 13px/600 the panel heading and status word, 13px/400 carries 42 elements of supporting detail (cwd, stat, activity), 12px/400 the secondary controls. My original row read 15px x58 and 16px x112 as a one-pixel non-distinction, but those are different ELEMENTS in different components, not two ramp steps competing for one role. gmsniff own sheet is already fully tokenised: 30 of its 31 font-size declarations use the SDK --fs-* ramp. The single exception, a raw 9px on .gm-force-node text, is deliberately below the ramp floor (--fs-pico is 10px) because it is sized to a per-node graph radius rather than to the text scale -- now annotated as such rather than left looking like an oversight.'
-  commit_comment: Verify the type ramp by role; annotate the one off-ramp size
-- id: design-accent-underused
-  title: Use the electric lead accent where it carries meaning
-  body: 'Measured live colour census: --accent lime rgb(182,255,27) appears on 9 elements against 340 at body tone and 50 at tier-3. The Acid Editorial north-star is one electric lead against near-black ink; at 9 uses the lead is effectively absent and every surface reads uniformly grey. Decide the small set of things that earn the accent (current phase, running state, primary action) rather than sprinkling it.'
-  SESSION_ID: gmsniff-gui-redesign-1785248666
-  status: completed
-  witness: 'REFUTED as framed, verified by auditing what each accent use MEANS rather than counting them. All 14 live uses carry one consistent semantic -- running/live/active: ds-dash-status.is-running (x3), status-dot-disc.status-dot-live (x4), seg.is-running (3 running), ds-dash-stream.is-connected (listening for activity), the active nav item, the checked density radio, and the theme toggle. That is the electric-lead discipline working, not an absent or sprinkled accent. My original row counted 9 uses against 340 body-text elements and concluded underuse; the ratio is the wrong measure, because an accent that marked a third of the page would stop being a lead. The one decorative use is the brand slash separator, which is chrome rather than state.'
-  commit_comment: 'Refuted: the accent already marks one coherent meaning'
-- id: design-information-density-mode
-  title: Offer a density control the way the SDK FileGrid does
-  body: The SDK ships a list/compact/thumb density radiogroup for FileGrid. The agents roster has one fixed presentation. A manager scanning 16 projects and an operator reading one instruction want different densities of the same data.
-  SESSION_ID: gmsniff-gui-redesign-1785248666
-  status: completed
-  witness: 'Shipped and witnessed: a compact/comfortable radiogroup above the roster, mirroring the ds FileGrid density picker (single tab stop, arrow/Home/End roving, aria-checked). Density persists in localStorage because it is an operator preference about how they read the fleet, not per-visit state, and defaults to compact since scanning is the primary job. Measured: compact median row 37px, comfortable 208px, both rendering all 13 agents with no page errors.'
-  commit_comment: Ship a roster density control with persistence
 - id: design-monospace-usage
   title: Decide deliberately where monospace belongs
   body: 'Two families render: system-ui and ui-monospace. Monospace should mark machine-truth (paths, ids, durations, payloads) and never body prose; verify each current use earns it.'
@@ -53,13 +32,6 @@
   body: A density or hierarchy claim is best witnessed visually. Capture the current state and the final state through the browser verb screenshot prefix so the change is inspectable, not just numeric.
   SESSION_ID: gmsniff-gui-redesign-1785248666
   status: pending
-- id: design-degenerate-zero-agents
-  title: Design the zero-agent and single-agent roster states
-  body: With 0 discovered agents, 1 agent, or all-idle, a grid built for 16 rows reads as broken rather than empty. Each degenerate count needs a deliberate rendering.
-  SESSION_ID: gmsniff-gui-redesign-1785248666
-  status: completed
-  witness: 'Witnessed the zero-match degenerate state by driving the filter to a string no project matches: the panel renders 0 cards but keeps every control mounted and states WHICH zero it is -- 0 of 16 match (searched every project live-state reports) followed by No project matches "zzzznomatch". That is the honest-empty-state discipline: a filtered miss reads differently from an empty fleet, and the filter that caused it stays reachable to clear.'
-  commit_comment: Witness the filtered-to-zero roster state
 - id: design-upstream-vs-local
   title: Decide per change whether it belongs upstream in ../design or local in gui/
   body: A change to a shared primitive belongs in ../design and comes back through sync:ds; a change to gmsniff own chrome belongs in gui/. Getting this wrong either forks the SDK silently or leaves other consumers unfixed. Record the reasoning per change.
@@ -70,13 +42,6 @@
   body: Real data carries deep worktree paths and multi-KB instruction excerpts. Verify each renders without breaking the row, and that truncation names what it cut.
   SESSION_ID: gmsniff-gui-redesign-1785248666
   status: pending
-- id: design-theme-parity-light
-  title: Verify every design change in BOTH themes
-  body: --accent-ink resolves to a different tone per theme (#4E4200 light vs the lime on ink). Any new colour decision must be checked in both, since a tone that reads on ink can vanish on paper.
-  SESSION_ID: gmsniff-gui-redesign-1785248666
-  status: completed
-  witness: 'Witnessed the new compact density in BOTH themes in one dispatch: identical layout (median row 37px, 13 cards) under data-theme dark and light, with the token split behaving correctly -- --accent stays the lime #B6FF1B in both (it is the FILL), while --accent-ink resolves #B6FF1B on ink and #4E4200 on paper, and body text inverts rgb(244,241,233) to rgb(14,14,18). Zero page errors in either theme.'
-  commit_comment: Witness the compact density in both themes
 - id: design-many-agents-overflow
   title: Design the roster at fleet scale
   body: Live-state reports 16 projects here and the roster caps what it shows. At 50+ discovered projects the layout, the cap notice and the scroll behaviour all need to hold.
