@@ -2,13 +2,6 @@
   note: Probe row testing whether plugkit's store write path has recovered after the failures observed in the prior walk. If this row lands, the store is writable and PRD state is trustworthy again; it will be resolved or removed immediately.
   status: completed
   witness: 'Probe succeeded, so the store write path has recovered and PRD state is trustworthy again. The prior walk saw five consecutive write failures (prd-add 10061/10062/10063, mutable-add 10065/10066) with reads working throughout, and isolated the cause to plugkit''s wasm store rather than the filesystem: a fresh spool boot did not clear it, removing a 542-minute-stale .gm/gm.db.lock/ did not clear it, disk had 140GB free, and both fs.writeFileSync and registry.js atomicWriteFile succeeded directly on .gm/prd.yml. This probe row was written and read back cleanly ({added: probe-store-write-recovered}, 1 row on disk), so the failure was transient and is now gone -- which is why it was retested rather than inherited as a standing blocker.'
-- id: gui-responsive-coverage
-  title: Audit and extend responsive behavior (4 media queries for a 187KB GUI)
-  body: 'Measured: media_q=4 in gui-extra.css, 0 elsewhere; the SDK ships src/css/app-shell/responsive.css and responsive2-workspace.css as the reference. A 3-panel manager view with 4 breakpoints has unverified narrow-viewport behavior.'
-  SESSION_ID: gmsniff-gui-impeccable-1785231986
-  status: completed
-  witness: 'Found and fixed a real overflow: .gm-row-full (the topbar packing brand+leaf, project select, and connection chip + theme toggle) measured 839 wide inside a 782 container, with five descendants overflowing alongside it. Its wrap rule only fired at max-width:480px, so everything between 480 and 900 squeezed past its box while an ancestor clipped it, hiding the symptom. Now it wraps unconditionally with min-width:0 on the row and its children. Re-measured by constraining the shell root at 1280/1024/900/782/640/480/360: zero overflowing elements at every width, was six at 782. The earlier count of 4 media queries was wrong -- it read gui-extra.css alone; the served tree declares 15 breakpoints.'
-  commit_comment: Fix topbar overflow between 480 and 900px
 - id: gui-run-sdk-linters
   title: Run the design SDK linters against gui/ and fix every reported violation
   body: ../design/scripts carries 14 linters (lint-tokens, lint-classes, lint-css, lint-glyphs, lint-inline-styles, lint-null-children, lint-spacing, lint-duplicate-selectors, lint-rtl-physical-properties, lint-swallow-comments, lint-fontsize, lint-important). gmsniff runs none of them against gui/. Establish the measurement first, then fix.
@@ -64,13 +57,6 @@
   body: The lint harness re-derives rules the SDK hardcodes (RTL map, layout regex, whitelist). If ../design changes a rule, the gmsniff copy silently keeps the old one - the same duplication-that-must-sync liability AGENTS.md names for SUBSYSTEMS/SUB_LIST. Decide how that stays honest.
   SESSION_ID: gmsniff-gui-impeccable-1785231986
   status: pending
-- id: gui-heading-outline-audit
-  title: Audit the whole heading outline across every panel
-  body: Live-DOM witness found only 3 headings for a 3363-char body across a multi-panel app. Panel titles are not headings, so no AT user can navigate by heading. Enumerate every panel and decide its heading level.
-  SESSION_ID: gmsniff-gui-impeccable-1785231986
-  status: completed
-  witness: 'Walked the heading outline of all 8 panels in the live DOM. Every panel opens with the single document h1 naming the active panel, and sub-sections nest as h2 beneath it (deviations: By Deviation Kind / By Session / Recent Deviations; overview: Fleet totals / Subsystems / Top Events; days, live, sessions each one h2). No skipped level and no second h1. Also verified zero positive tabindex values across 21 tabbables, so DOM order is tab order.'
-  commit_comment: Verify the heading outline across every panel
 - id: gui-accent-ink-collapsed
   title: Investigate --accent and --accent-ink resolving to the same value
   body: 'Live-DOM witness: --accent and --accent-ink BOTH resolve to #B6FF1B. The SDK doc states the split exists precisely because the lime is ~1.07:1 on paper and invisible as text, with --accent-ink meant to differ. Under data-theme=auto they are identical - verify against both explicit themes and against ../design source.'
