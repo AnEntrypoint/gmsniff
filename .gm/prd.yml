@@ -2,24 +2,3 @@
   note: Probe row testing whether plugkit's store write path has recovered after the failures observed in the prior walk. If this row lands, the store is writable and PRD state is trustworthy again; it will be resolved or removed immediately.
   status: completed
   witness: 'Probe succeeded, so the store write path has recovered and PRD state is trustworthy again. The prior walk saw five consecutive write failures (prd-add 10061/10062/10063, mutable-add 10065/10066) with reads working throughout, and isolated the cause to plugkit''s wasm store rather than the filesystem: a fresh spool boot did not clear it, removing a 542-minute-stale .gm/gm.db.lock/ did not clear it, disk had 140GB free, and both fs.writeFileSync and registry.js atomicWriteFile succeeded directly on .gm/prd.yml. This probe row was written and read back cleanly ({added: probe-store-write-recovered}, 1 row on disk), so the failure was transient and is now gone -- which is why it was retested rather than inherited as a standing blocker.'
-- id: ignore-embed-generation
-  title: Add .gm/.embed-generation to the managed gitignore block
-  body: 'Verified by execution rather than assumed: no file under src/, scripts/ or test.js writes it (zero grep hits), git has never tracked it, and the watcher log carries evt embed_generation_recorded {key: b8b6f24106dd526a, model: BAAI/bge-small-en-v1.5, dim: 384} -- so it is the daemon own embedding-model generation marker used to invalidate the vector index when the model changes, not source-of-truth. Same class as its siblings already inside the # >>> plugkit managed block (.gm/exec-spool/, .gm/turn-state.json, .gm/residual-check-fired, .gm/prd-state.json, .gm/rslearn-counter.json).'
-  SESSION_ID: gmsniff-residual-1785254419
-  status: completed
-  witness: 'Added .gm/.embed-generation to the gitignore managed block. Ownership verified three ways before the edit: no gmsniff source writes it (zero grep hits in src/, scripts/, test.js), git has never tracked it (git ls-files --error-unmatch reports the pathspec unknown), and the watcher log names the daemon as the writer via embed_generation_recorded. It is a vector-index cache-invalidation marker keyed to the embedding model, the same class as its already-ignored siblings.'
-  commit_comment: Ignore the daemon embedding-generation marker
-- id: embed-generation-regeneration-witness
-  title: Witness that the ignore does not hide a file the repo needs
-  body: Deleting the file and issuing one exec_js dispatch did NOT regenerate it, so the naive regenerates-on-any-dispatch claim is false and must not be recorded as the justification. It is written only when the daemon records an embedding generation. Establish what actually triggers the write and confirm nothing in gmsniff reads it, so ignoring it cannot mask a missing input.
-  SESSION_ID: gmsniff-residual-1785254419
-  status: completed
-  witness: 'Established what actually triggers the write instead of asserting it. Deleting the file and issuing one exec_js dispatch did NOT bring it back, so the plausible regenerates-on-any-dispatch justification is false and was not used. The watcher log carries the real record: evt embed_generation_recorded {key: b8b6f24106dd526a, model: BAAI/bge-small-en-v1.5, dim: 384, ts: 1785254318507} -- the daemon writes it when it records an embedding-model generation, as a cache-invalidation marker for the vector index. Also confirmed nothing in gmsniff reads it: grepping every .js/.mjs/.json outside node_modules and gui/ds returns only this session own PRD rows, so ignoring it cannot mask a missing input.'
-  commit_comment: Establish what writes .embed-generation before ignoring it
-- id: gitignore-managed-block-discipline
-  title: Keep the addition inside the managed block and verify git honours it
-  body: 'The # >>> plugkit managed block is daemon-owned territory; an entry added outside it can be rewritten away. Add in-block, then witness git status --porcelain no longer reports the path while the file exists on disk.'
-  SESSION_ID: gmsniff-residual-1785254419
-  status: completed
-  witness: 'Placed inside the # >>> plugkit managed block, directly after .gm/rslearn-counter.json, rather than appended at the end where a daemon rewrite of the block could drop it. Witnessed working: the 16-byte file exists on disk, git check-ignore -v attributes it to .gitignore:14, and git status --porcelain no longer lists it -- only the .gitignore and .gm/prd.yml edits this pass made.'
-  commit_comment: Keep the ignore inside the managed block and witness it
