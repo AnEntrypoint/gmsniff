@@ -23,6 +23,35 @@ const h = webjsx.createElement;
 // CAP and a "show N more" row, mirroring the History tab's "load N older".
 const FILE_GRID_CAP = 200;
 
+/**
+ * The directory listing.
+ *
+ * `loading` and `busy` are NOT two spellings of one state -- they are the two
+ * halves of this SDK's standing distinction, and FileGrid is the component
+ * that takes both because it is the one place both are in play at once:
+ *
+ *   loading -- a DATA FETCH is in flight. Owns which SHAPE renders: with no
+ *              rows yet it is a cold load and the whole grid is replaced by
+ *              FileSkeleton; with rows already on screen it is a refresh and
+ *              the existing rows stay mounted and dim (is-refreshing), because
+ *              flashing a populated directory back to shimmer reads as data
+ *              loss.
+ *   busy    -- a USER ACTION is in flight (a rename/move/delete round-trip).
+ *              Owns INTERACTIVITY, not shape: it is forwarded to each FileRow
+ *              as `busy`, which disables that row's open + mutation controls
+ *              so a second click cannot fire the same mutation twice.
+ *
+ * A grid can be `busy` while not `loading` (a delete is posting, rows fully
+ * rendered) and `loading` while not `busy` (a plain refresh). Passing one for
+ * the other is a real bug, not a style choice, so they are deliberately not
+ * merged and neither is an alias of the other.
+ *
+ * @param {Array} [files=[]] - the directory entries to render.
+ * @param {boolean} [loading=false] - a data fetch is in flight (skeleton when cold, dim when refreshing).
+ * @param {boolean} [busy] - a user-initiated mutation is in flight; disables every row's controls. Per-entry `f.busy` is used when this is not passed.
+ * @param {string} [emptyText='No files here yet'] - copy for the empty/filtered-miss state.
+ * @param {'list'|'compact'|'thumb'} [density='list'] - row density; 'thumb' switches to the multi-column cell grid.
+ */
 export function FileGrid({ files = [], onOpen, onAction, onUp, emptyText = 'No files here yet', emptyAction,
                           sort, filter, loading = false,
                           shown, onShowMore, actions, busy,
