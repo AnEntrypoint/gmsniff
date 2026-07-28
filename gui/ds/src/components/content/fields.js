@@ -100,6 +100,14 @@ export function Select({ label, value = '', options = [], onChange, name, key, p
         const lab = typeof o === 'string' ? o : (o.label != null ? o.label : (o.id || o.value));
         opts.push(h('option', { key: 'o-' + id, value: id, selected: id === value }, lab));
     }
+    // When this select is returned bare (the no-label/no-hint/md branch below),
+    // it is the node the caller keys, so it must carry the caller's key. The
+    // internal 'i' only has to be unique among THIS component's own children,
+    // which is why the wrapped branches can keep it. Previously 'i' was
+    // hardcoded here and the bare branch dropped `key` on the floor, so two
+    // sibling label-less Selects both keyed as 'i' and webjsx's keyed diff
+    // collapsed them into one on the next re-render.
+    const bare = label == null && hint == null && size === 'md';
     const select = h('select', {
         key: 'i', name, class: 'ds-select',
         // Guarantee an accessible name even when rendered without a visible label.
@@ -107,7 +115,7 @@ export function Select({ label, value = '', options = [], onChange, name, key, p
         title,
         onchange: onChange ? (e) => onChange(e.target.value, e) : null
     }, ...opts);
-    if (label == null && hint == null && size === 'md') return select;
+    if (bare) return select;
     if (label == null && hint == null) return h('label', { key, class: 'ds-field' + sizeCls }, select);
     return h('label', { key, class: 'ds-field' + sizeCls },
         label != null ? h('span', { key: 'l', class: 'ds-field-label' }, label) : null,
