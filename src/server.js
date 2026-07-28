@@ -642,6 +642,12 @@ const INSTRUCTION_PREVIEW_CHARS = parseInt(process.env.GM_INSTRUCTION_PREVIEW_CH
 // YAML_ROWS_MAX bounds what an explicit ?limit= can ask for, so a client cannot recreate that.
 const YAML_ROWS_LIMIT = parseInt(process.env.GM_YAML_ROWS_LIMIT, 10) || 250;
 const YAML_ROWS_MAX = parseInt(process.env.GM_YAML_ROWS_MAX, 10) || 2000;
+// Above the largest real store measured (C:/dev/gm at 882 nodes) so the default
+// page shows every node on every project here, while the response still declares
+// total/returned/truncated rather than letting a future larger store truncate in
+// silence -- a bound that sits under the data it bounds is the failure this
+// route already had, and one that never reports is the same failure deferred.
+const MEMORY_GRAPH_NODES_LIMIT = parseInt(process.env.GM_MEMORY_GRAPH_NODES_LIMIT, 10) || 1000;
 
 function hashText(s) {
   if (typeof s !== 'string' || !s) return null;
@@ -1863,7 +1869,7 @@ const API_ROUTES = [
   { path: '/api/lifecycle', method: 'POST', params: ['body: {cwd, verb, payload}'], response: '{ok, cwd, verb, file}; verb must be in the known-verb allowlist (see verbAllowlist in this same response) AND not retired. A retired verb (learn/wait/sleep) is a real match arm in verbs.rs whose handler always errors, so it is rejected 400 {retired:true} rather than written to the spool where it could only ever fail -- matching the CLI --dispatch contract.' },
   { path: '/api/rs-tools', method: 'GET', params: ['cwd', 'top', 'bucket', 'days', 'sess'], response: '{cwd, eventCount, embedFailures, recallMisses, recallScores, classifierRejects, memoryLeverage, recallModes, disciplines}' },
   { path: '/api/codeinsight', method: 'GET', params: ['cwd'], response: '{cwd, summary, entries, items} | 404 if .codeinsight absent' },
-  { path: '/api/memory-graph', method: 'GET', params: ['cwd'], response: '{cwd, nodes, edges, note?}' },
+  { path: '/api/memory-graph', method: 'GET', params: ['cwd', 'limit'], response: '{cwd, nodes, edges, total, returned, truncated, edges_total, edges_returned, note?}. Paged like /api/prd: `total` is the whole-store node count and `returned` what this page holds, so a caller can state what it omitted instead of rendering a truncated graph that looks small. Edges are filtered to node pairs both present in the page, and `edges_total` vs `edges_returned` reports that loss separately.' },
   { path: '/api/codesearch', method: 'POST', params: ['body: {cwd, query}'], response: '{ok, cwd, query, hits, raw} | 504 on dispatch timeout' },
   { path: '/api/browser-sessions', method: 'GET', params: ['cwd'], response: '{cwd, sessions, ports, sessionsFileFound, portsFileFound}' },
   { path: '/api/lifecycle/response', method: 'GET', params: ['cwd', 'verb', 'file'], response: '{ok, cwd, verb, file, response} | 404 if not yet written' },
@@ -2243,7 +2249,30 @@ export function createServer({ logDir, port = 0, host = '127.0.0.1' } = {}) {
       if (p === '/api/memory-graph') {
         const scope = resolveScopedCwd(store, q.cwd);
         if (!scope.ok) return send(res, 403, { error: scope.error });
-        return send(res, 200, { cwd: scope.cwd, ...readMemoryGraph(scope.cwd) });
+        const graph = readMemoryGraph(scope.cwd);
+        // The client capped this at 150 nodes and could not say so, because the
+        // response carried no count to say it with: C:/dev/gm returns 882 nodes,
+        // so 732 vanished and a truncated graph read exactly like a small one.
+        // Same total/returned/truncated contract /api/prd and /api/mutables use.
+        const allNodes = graph.nodes || [];
+        const limit = Number.isFinite(q.limit) ? q.limit : MEMORY_GRAPH_NODES_LIMIT;
+        const nodes = allNodes.slice(0, limit);
+        // readMemoryGraph emits edges as {src, dst, relation}; the src/dst names
+        // only become source/target after the client maps them for the layout.
+        const keptKeys = new Set(nodes.map(n => n.key));
+        const allEdges = graph.edges || [];
+        const edges = allEdges.filter(e => keptKeys.has(e.src) && keptKeys.has(e.dst));
+        return send(res, 200, {
+          cwd: scope.cwd,
+          ...graph,
+          nodes,
+          edges,
+          total: allNodes.length,
+          returned: nodes.length,
+          truncated: nodes.length < allNodes.length,
+          edges_total: allEdges.length,
+          edges_returned: edges.length,
+        }, 'application/json', p);
       }
       if (p === '/api/codesearch') {
         if (req.method !== 'POST') return send(res, 405, { error: 'method not allowed' });

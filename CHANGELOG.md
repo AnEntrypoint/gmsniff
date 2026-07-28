@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-07-28 — Stop the remaining lists from truncating in silence
+
+- **Page the memory graph at the route and say what it left out**: the panel sliced to 150 nodes and had no way to report the omission, because the response carried no count to report it with — `/api/memory-graph` for `C:/dev/gm` returns 882 nodes, so 732 vanished and a truncated graph read exactly like a small one. The route now reports `total`/`returned`/`truncated` (the shape `/api/prd` already uses) plus `edges_total`/`edges_returned`, since edges are filtered to node pairs both present in the page; the heading states "N of TOTAL" and prints the omitted count. The defect was invisible when tested here: gmsniff has 63 memory files against gm's 889.
+- **Name the verbs the run-metrics table drops**: it showed the 8 slowest and stopped, while spoint exercises 20 distinct verbs, gm 19 and gmsniff 16 — so three projects, including this one, rendered a list that looked complete with up to 12 verbs unmentioned.
+- **Give truncated graph labels an ellipsis and a recoverable title**: they were cut mid-key with no indication, so a shortened name was indistinguishable from a genuinely short one.
+
+
+
 ## 2026-07-28 — Make the manager view report what is actually true, and shrink what it takes to say it
 
 - **Stop asserting a dead daemon for every idle project**: the health banner fed the per-project "is this working" measurement into the words "watcher not running", so four idle projects claimed the daemon was down while one shared `agentplug-runner` served all seven — and the cards below said RUNNING for the same project in the same paint. Both surfaces now read one derivation and use one vocabulary, and the banner states the same dispatching/idle split the cards do instead of calling every row "working".

@@ -974,13 +974,26 @@ export function stopMemoryGraphLayout() {
   if (graphUiState.handle) { graphUiState.handle.stop(); graphUiState.handle = null; }
 }
 
-const GRAPH_MAX_NODES = 150;
 const GRAPH_LABEL_MAX_CHARS = 28;
 
+// The route pages this now and reports total/returned/truncated, so a second
+// silent client-side cap on top of it would hide nodes the server had already
+// declared it was sending. Labels carry a visible ellipsis and a full-value
+// title rather than cutting mid-key, where a truncated name is indistinguishable
+// from a genuinely short one.
 function toShapeRunForceLayoutExpects(r) {
-  const nodes = (r.nodes || []).slice(0, GRAPH_MAX_NODES).map(n => ({
-    id: n.key, label: `${n.namespace}/${n.key}`.slice(0, GRAPH_LABEL_MAX_CHARS), namespace: n.namespace, text: n.text,
-  }));
+  const nodes = (r.nodes || []).map(n => {
+    const full = `${n.namespace}/${n.key}`;
+    return {
+      id: n.key,
+      // ELLIPSIS is three characters, so reserving one made every truncated
+      // label 30 wide against a 28 limit -- measured on all 882 gm nodes.
+      label: full.length > GRAPH_LABEL_MAX_CHARS ? full.slice(0, GRAPH_LABEL_MAX_CHARS - ELLIPSIS.length) + ELLIPSIS : full,
+      title: full,
+      namespace: n.namespace,
+      text: n.text,
+    };
+  });
   const nodeIds = new Set(nodes.map(n => n.id));
   const edgesBetweenRenderedNodes = (r.edges || []).filter(e => nodeIds.has(e.src) && nodeIds.has(e.dst))
     .map(e => ({ source: e.src, target: e.dst, relation: e.relation }));
@@ -1008,9 +1021,19 @@ export async function MemoryGraphPanel() {
   const width = 900, height = 520;
   graphUiState.selectedId = null;
 
+  // "N nodes" counted the rendered set, so a 150-node view of an 882-node store
+  // read as a complete 150-node graph. The heading now names the whole store and
+  // the omission rides beside it.
+  const nodesOmitted = (r.total || nodes.length) - nodes.length;
+  const edgesDroppedWithTheirNodes = (r.edges_total || edges.length) - edges.length;
   const container = h('div', { class: 'ds-panel' },
     r.note ? h('p', { class: 'gm-hint-text' }, r.note) : null,
-    h('h2', {}, `Memory Graph -- ${nodes.length} nodes, ${edges.length} edges`),
+    h('h2', {}, `Memory Graph -- ${nodes.length} of ${r.total ?? nodes.length} nodes, ${edges.length} of ${r.edges_total ?? edges.length} edges`),
+    nodesOmitted > 0
+      ? h('p', { class: 'gm-muted-11' },
+          `+${nodesOmitted} node${nodesOmitted === 1 ? '' : 's'} not shown (page caps at ${r.returned}) -- pass ?limit= for more`
+          + (edgesDroppedWithTheirNodes > 0 ? `; ${edgesDroppedWithTheirNodes} edge${edgesDroppedWithTheirNodes === 1 ? '' : 's'} omitted with them` : ''))
+      : null,
     h('svg', {
       class: 'gm-force-svg', viewBox: `0 0 ${width} ${height}`, preserveAspectRatio: 'xMidYMid meet',
       id: 'memory-graph-svg',

@@ -352,7 +352,9 @@ const SLOWEST_VERBS_SHOWN = 8;
 // Real derived signal, but secondary to "what is it doing now", so it sits
 // behind a disclosure rather than above the instruction.
 function MetricsDisclosure(f) {
-  const durs = verbDurations(f.rows).slice(0, SLOWEST_VERBS_SHOWN);
+  const allDurs = verbDurations(f.rows);
+  const durs = allDurs.slice(0, SLOWEST_VERBS_SHOWN);
+  const versOmitted = allDurs.length - durs.length;
   const burn = prdBurndown(f.rows);
   const dev = deviationTrend(f.rows);
   if (!durs.length && burn.trend === 'unknown' && !dev.count) return null;
@@ -377,6 +379,12 @@ function MetricsDisclosure(f) {
             ...durs.map(d => h('tr', { key: d.verb },
               h('td', {}, d.verb), h('td', {}, String(d.count)),
               h('td', {}, fmtDuration(d.median)), h('td', {}, fmtDuration(d.p95)), h('td', {}, fmtDuration(d.max)))))
+        : null,
+      // Measured live: spoint exercises 20 distinct verbs, gm 19, gmsniff 16 --
+      // all well over the cap, so this table showed 8 and read as complete.
+      versOmitted > 0
+        ? h('div', { key: 'vdo', class: 'gm-feed-muted gm-mt-8' },
+            `+${versOmitted} slower verb${versOmitted === 1 ? '' : 's'} not shown (table caps at ${SLOWEST_VERBS_SHOWN})`)
         : null));
 }
 
