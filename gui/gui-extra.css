@@ -95,6 +95,10 @@
 .gm-force-node.dim circle { opacity:.15; }
 .gm-force-node.hi circle { stroke: var(--accent); stroke-width:2.5; }
 .gm-force-node.dragging circle { cursor:grabbing; }
+/* Chart furniture, deliberately BELOW the type ramp: this label sits inside a
+   force-graph node whose radius is computed per node, so it is sized to the
+   geometry rather than to the text scale. --fs-pico (10px) is the ramp floor
+   and overflows the smallest nodes. */
 .gm-force-node text { fill: var(--panel-text); font-size:9px; pointer-events:none; user-select:none; }
 .gm-force-node.dim text { opacity:.15; }
 
