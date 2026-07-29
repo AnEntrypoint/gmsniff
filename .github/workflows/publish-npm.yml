@@ -30,27 +30,51 @@ jobs:
           node-version: '22'
           registry-url: 'https://registry.npmjs.org'
 
-      # The suite is the only gate between a push and a published package: gmsniff has no build
-      # step and no other CI stage, so without this a red run still publishes to npm. It needs no
-      # install -- zero dependencies is a load-bearing property, and running it with no
+      # These two steps are the only gates between a push and a published package: gmsniff has no
+      # build step and no other CI stage, so without them a red run still publishes to npm. Neither
+      # needs an install -- zero dependencies is a load-bearing property, and running with no
       # node_modules present proves that property on every push.
       - name: Run the real-services suite
         if: env.SKIP != 'true'
         run: node test.js
 
-      - name: Bump patch version
+      # lint-gui-ds.mjs enforces the nine design-system rule classes over gui/ and exits non-zero on
+      # any violation, but was reachable from no package.json script and no workflow -- so a raw
+      # colour literal or a physical left/right property could ship to npm with CI fully green. Its
+      # upstream rule-drift half needs a sibling ../design checkout and self-disables without one,
+      # so the step is safe on a single-repo CI checkout.
+      - name: Design-system rule guard
+        if: env.SKIP != 'true'
+        run: npm run lint
+
+      # Reconciled against the registry rather than bumped from local package.json
+      # alone: once this checkout falls behind what npm already serves, a local-only
+      # patch bump computes a version that already exists and the publish fails.
+      - name: Sync version with npm registry
         if: env.SKIP != 'true'
         run: |
-          git config user.name "lanmower"
-          git config user.email "almagestfraternite@gmail.com"
+          PKG_NAME=$(node -p "require('./package.json').name")
+          REMOTE=$(npm view "$PKG_NAME" version 2>/dev/null || echo "0.0.0")
+          LOCAL=$(node -p "require('./package.json').version")
+          echo "remote=$REMOTE local=$LOCAL"
+          HIGHER=$(node -e "const s=(a,b)=>a.split('.').map(Number).reduce((r,n,i)=>r||n-Number(b.split('.')[i]),0);process.stdout.write(s('$REMOTE','$LOCAL')>=0?'$REMOTE':'$LOCAL')")
+          npm version "$HIGHER" --no-git-tag-version --allow-same-version
           npm version patch --no-git-tag-version
-          NEW_VERSION=$(node -p "require('./package.json').version")
-          git add package.json
-          git commit -m "chore: auto-bump version to $NEW_VERSION [skip ci]"
-          git push
 
       - name: Publish to npm
         if: env.SKIP != 'true'
         run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # Committed only after the publish succeeded, so a failed publish cannot
+      # advance the version and widen the gap on the next attempt.
+      - name: Commit version bump
+        if: env.SKIP != 'true'
+        run: |
+          git config user.name "lanmower"
+          git config user.email "almagestfraternite@gmail.com"
+          NEW_VERSION=$(node -p "require('./package.json').version")
+          git add package.json
+          git commit -m "chore: auto-bump version to $NEW_VERSION [skip ci]"
+          git push
