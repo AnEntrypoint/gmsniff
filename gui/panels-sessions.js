@@ -100,7 +100,7 @@ export function SessionDetailDialog(setBody) {
     : s.error
       ? h('p', { class: 'gm-text-danger' }, s.error)
       : h('div', {},
-          PhaseWalk({ reached: s.tree && s.tree.phase_reached, gapKinds: ((s.tree && s.tree.gaps) || []).map(g => g.kind) }),
+          PhaseWalk({ phases: PHASE_FALLBACK, reached: s.tree && s.tree.phase_reached, gapKinds: ((s.tree && s.tree.gaps) || []).map(g => g.kind) }),
           h('h2', { class: 'gm-mt-10' }, `Events (${((s.tree && s.tree.nodes) || []).length})`),
           ((s.tree && s.tree.nodes) || []).length
             ? renderEventTable(s.tree.nodes, 'session-detail-' + (s.sess || ''), setBody)
@@ -120,12 +120,13 @@ export function SessionDetailDialog(setBody) {
   });
 }
 
-function phasesSkippedInReachedOrder(phasesReached) {
-  const skipped = [];
-  for (let i = 0; i < PHASE_FALLBACK.length - 1; i++) {
-    if (phasesReached[i + 1] && !phasesReached[i]) skipped.push(PHASE_FALLBACK[i]);
-  }
-  return skipped;
+// gm's FSM has legal re-plan/repair/boundary-enforcement edges (PROVE/EMIT/STATE/SEC/RES all
+// route back to an earlier phase), so `phases_reached[i+1] && !phases_reached[i]` is not a skip --
+// a session can genuinely revisit EMIT after STATE without ever having visited every phase in
+// between in forward order. Linear-index gap detection was tried and rejected for exactly this
+// reason: it reported false "skipped phase" on every real re-planned walk.
+function phasesSkippedInReachedOrder() {
+  return [];
 }
 
 // `unusedOnOpen`: app.js passes a navigate-to-tree callback here, but a session row opens the
@@ -139,7 +140,7 @@ export async function Sessions(unusedOnOpen, setBody) {
   return h('div', {}, h('div', { class: 'ds-panel' }, h('h2', {}, `Sessions (${r.total})`),
     refreshToolbar,
     ...r.rows.map(s => {
-      const gaps = phasesSkippedInReachedOrder(s.phases_reached);
+      const gaps = phasesSkippedInReachedOrder();
       return SessionRow({
         sessId: s.sess, events: s.events, verbs: s.dispatches, prd: `${s.prd_adds}/${s.prd_resolves}`,
         muts: `${s.mutable_adds}/${s.mutable_resolves}`,
@@ -246,7 +247,7 @@ export async function ProcessTree(sess, sessList, onSelect, onOpenSession, onRef
     if (!treeUiState.focusId) treeUiState.focusId = root.id;
     return h('div', { class: 'ds-panel' },
       Toolbar( selector, refreshBtn),
-      h('h2', {}, sess), PhaseWalk({ reached: r.phase_reached, gapKinds: [] }),
+      h('h2', {}, sess), PhaseWalk({ phases: PHASE_FALLBACK, reached: r.phase_reached, gapKinds: [] }),
       gapsBlock,
       h('h2', { class: 'gm-mt-10' }, `Process Tree (${(r.nodes || []).length} events)`),
       (r.nodes || []).length

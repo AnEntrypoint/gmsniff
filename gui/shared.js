@@ -46,10 +46,10 @@ export function mergeObservedSubsystems(observed) {
 }
 
 // A project's .gm/instructions/fsm/graph.json can redefine the states wholesale,
-// and one is live on this machine today -- so a hardcoded six-phase walk is
+// and one is live on this machine today -- so a hardcoded nine-phase walk is
 // already wrong for a real project and this literal is only the last resort for
 // a row that carries no phase list of its own.
-export const PHASE_FALLBACK = ['PLAN', 'EXECUTE', 'EMIT', 'VERIFY', 'CONSOLIDATE', 'COMPLETE'];
+export const PHASE_FALLBACK = ['SPECIFY', 'PROVE', 'EMIT', 'STATE', 'CONC', 'SEC', 'RES', 'DECIDE', 'COMPLETE'];
 
 export function phaseUniverse(row) {
   if (!row) return PHASE_FALLBACK;

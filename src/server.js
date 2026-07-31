@@ -85,7 +85,7 @@ function randomSuffix() {
 
 // FALLBACK ONLY -- .gm/instructions/fsm/graph.json is a real per-project override live on this
 // machine today (C:/dev/gm), so a project's own graph is authoritative wherever one exists.
-const DEFAULT_PHASES = ['PLAN', 'EXECUTE', 'EMIT', 'VERIFY', 'CONSOLIDATE', 'COMPLETE'];
+const DEFAULT_PHASES = ['SPECIFY', 'PROVE', 'EMIT', 'STATE', 'CONC', 'SEC', 'RES', 'DECIDE', 'COMPLETE'];
 
 // Real data carries `rs_learn` on every pre-cutover recall/embed event and `memory` on
 // current-generation ones. Same event class, drifted tag.
@@ -473,6 +473,18 @@ function readFsmGates(cwd, { prd_pending = null, mut_unknown = null, phase = nul
       claim.ts),
     g('submodules-clean', hasSubmodules ? 'unknown' : 'pass',
       hasSubmodules ? '.gitmodules present; submodule state not observable read-only' : 'no .gitmodules — vacuously clean'),
+    // Diff-quality gates checked directly by ../gm's EMIT/STATE/SEC/RES stages
+    // (rs-plugkit/crates/plugkit-core/src/orchestrator/fsm.rs:568-636). gmsniff has no read-only
+    // evidence file for any of these — they are computed live against the diff at gate-check time,
+    // not persisted — so each honestly reports 'unknown' rather than inventing a verdict.
+    g('app-loads-witnessed', 'unknown', 'live diff/runtime check in ../gm; not observable read-only'),
+    g('no-synthetic-test-files', 'unknown', 'live diff check in ../gm; not observable read-only'),
+    g('no-admit-deferral-markers', 'unknown', 'live diff check in ../gm; not observable read-only'),
+    g('no-secrets-in-diff', 'unknown', 'live diff check in ../gm; not observable read-only'),
+    g('no-unchecked-panics-in-diff', 'unknown', 'live diff check in ../gm; not observable read-only'),
+    g('no-hedge-language-in-diff', 'unknown', 'live diff check in ../gm; not observable read-only'),
+    g('no-graphical-symbols-in-diff', 'unknown', 'live diff check in ../gm; not observable read-only'),
+    g('idempotent-dispatch-replay-safe', 'unknown', 'live diff/replay check in ../gm; not observable read-only'),
   ];
   const byGate = new Map(gates.map(x => [x.gate, x]));
   const graph = readFsmGraph(cwd);
@@ -510,12 +522,39 @@ function readFsmGates(cwd, { prd_pending = null, mut_unknown = null, phase = nul
   };
 }
 
-// Mirrors the real graph.json's own shape: the linear walk plus gate-free re-plan edges.
+// Mirrors rs-plugkit/crates/plugkit-core/src/orchestrator/fsm.rs default_graph() (fsm.rs:484-523):
+// forward edges carry the real per-stage gates, re-plan/repair/boundary-enforcement/
+// empirical-fitness edges carry none.
 const DEFAULT_EDGES = [
-  ...DEFAULT_PHASES.slice(0, -1).map((from, i) => ({ from, to: DEFAULT_PHASES[i + 1], gates: [] })),
-  { from: 'EXECUTE', to: 'PLAN', gates: [] },
-  { from: 'EMIT', to: 'PLAN', gates: [] },
-  { from: 'VERIFY', to: 'PLAN', gates: [] },
+  { from: 'SPECIFY', to: 'PROVE', gates: [] },
+  { from: 'PROVE', to: 'EMIT', gates: ['mutables-all-resolved'] },
+  { from: 'EMIT', to: 'STATE', gates: ['no-synthetic-test-files', 'no-graphical-symbols-in-diff', 'no-admit-deferral-markers'] },
+  { from: 'STATE', to: 'CONC', gates: ['idempotent-dispatch-replay-safe'] },
+  { from: 'CONC', to: 'SEC', gates: [] },
+  { from: 'SEC', to: 'RES', gates: ['no-secrets-in-diff'] },
+  { from: 'RES', to: 'DECIDE', gates: ['no-unchecked-panics-in-diff'] },
+  { from: 'DECIDE', to: 'COMPLETE', gates: [
+    'residual-scan-fired', 'prd-all-closed', 'mutables-all-resolved', 'worktree-clean',
+    'ci-validated-fresh', 'browser-witness-coverage', 'claim-audit-clean', 'submodules-clean',
+    'app-loads-witnessed', 'no-hedge-language-in-diff',
+  ] },
+  { from: 'COMPLETE', to: 'COMPLETE', gates: [] },
+  // Re-plan (reshaping)
+  { from: 'PROVE', to: 'SPECIFY', gates: [] },
+  { from: 'EMIT', to: 'SPECIFY', gates: [] },
+  { from: 'STATE', to: 'SPECIFY', gates: [] },
+  { from: 'SEC', to: 'SPECIFY', gates: [] },
+  { from: 'RES', to: 'SPECIFY', gates: [] },
+  { from: 'DECIDE', to: 'SPECIFY', gates: [] },
+  { from: 'DECIDE', to: 'PROVE', gates: [] },
+  // Repair
+  { from: 'STATE', to: 'EMIT', gates: [] },
+  { from: 'CONC', to: 'EMIT', gates: [] },
+  { from: 'SEC', to: 'EMIT', gates: [] },
+  { from: 'RES', to: 'EMIT', gates: [] },
+  // Boundary enforcement
+  { from: 'CONC', to: 'STATE', gates: [] },
+  { from: 'SEC', to: 'STATE', gates: [] },
 ];
 
 // Real shape, measured: "v3:296bc62dce39fec4:files=28".
@@ -729,8 +768,15 @@ function sseFrame({ id, kind, data }) {
 // Re-plan edges are LEGAL and gate-free. A linear index comparison was tried and rejected: it
 // treats every forward re-walk after a re-plan as a skipped phase, emitting a false
 // `phase-skipped` gap, and loses the re-plan itself from the walk.
+// Real re-plan/repair/boundary-enforcement edges per fsm.rs default_graph(): every forward-index
+// regression (to an earlier phase in DEFAULT_PHASES than `from`) is a legal non-linear edge, not a
+// skipped/broken walk.
 function isReplanEdge(from, to) {
-  return to === 'PLAN' && from !== null && from !== 'PLAN';
+  if (from === null || from === to) return false;
+  const fromIdx = DEFAULT_PHASES.indexOf(from);
+  const toIdx = DEFAULT_PHASES.indexOf(to);
+  if (fromIdx === -1 || toIdx === -1) return false;
+  return toIdx < fromIdx;
 }
 
 // Shared by _processTreeFromEvents (whole-walk reconstruction) and _emitOutputAppend (incremental

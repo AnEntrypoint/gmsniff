@@ -22,6 +22,7 @@ export const Toolbar = ToolbarRow;
 export const SUB_COLORS = {
   hook: 'var(--purple, #bc8cff)', plugkit: 'var(--flame, #ff7b72)',
   bootstrap: 'var(--sky, #79c0ff)', memory: 'var(--green, #3fb950)',
+  rs_learn: 'var(--amber, #d29922)',
 };
 
 export function colorFor(sub) {

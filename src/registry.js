@@ -562,7 +562,7 @@ export function readPrdMutablesState(cwd) {
 }
 
 const PHASE_HEADING_TO_SKILL = {
-  PLAN: 'gm', EXECUTE: 'gm', EMIT: 'gm', VERIFY: 'gm', CONSOLIDATE: 'gm', 'UPDATE-DOCS': 'gm',
+  SPECIFY: 'gm', PROVE: 'gm', EMIT: 'gm', STATE: 'gm', CONC: 'gm', SEC: 'gm', RES: 'gm', DECIDE: 'gm', 'UPDATE-DOCS': 'gm',
 };
 
 const _phaseStateCache = new Map();
@@ -729,7 +729,7 @@ export function resolveInstructionTier(cwd, key) {
 // shipped-manifest. fsm-vendor's own write is one-shot and absence-gated with no drift-tracking,
 // so mere presence always means a deliberate customization surface exists -- the project OWNS
 // that file going forward even if its content still equals the default it was seeded from.
-const FSM_VENDOR_PHASE_KEYS = ['plan', 'execute', 'emit', 'verify', 'consolidate', 'update_docs', 'entry', 'browser'];
+const FSM_VENDOR_PHASE_KEYS = ['specify', 'prove', 'emit', 'state', 'conc', 'sec', 'res', 'decide', 'update_docs', 'entry', 'browser'];
 export function discoverVendoredSettings(cwd) {
   const instructionsDir = path.join(cwd, '.gm', 'instructions');
   const statOrNull = (p) => { try { return fs.statSync(p); } catch (_) { return null; } };
@@ -889,11 +889,12 @@ export const VERB_ALLOWLIST = new Set([
   'bash', 'branch_status', 'git_status', 'git_push', 'git_add', 'git_commit',
   'git_finalize', 'git_log', 'git_diff', 'git_show', 'git_fetch', 'git_branch',
   'git_checkout', 'git_rm', 'git_revert', 'git_reset',
+  'git_merge', 'git_merge_abort', 'git_branch_delete',
   // Accepted aliases (verbs.rs match arms), not distinct verbs.
   'nodejs', 'javascript', 'node', 'js', 'python', 'py', 'sh', 'shell', 'zsh',
   'forget', 'discipline', 'close', 'filter', 'status',
   // lang-runner verbs (shell_exec dispatch)
-  'powershell', 'ps1', 'ssh', 'go', 'rust', 'c', 'cpp', 'java', 'deno',
+  'powershell', 'ps1', 'ssh', 'go', 'rust', 'c', 'cpp', 'java', 'deno', 'pwsh', 'cmd',
   // Handled by the agentplug daemon itself, not the wasm guest
   // (agentplug-runner/src/daemon.rs handle_plugin_refresh_request / handle_background_convert).
   'plugin-refresh', 'background-convert',

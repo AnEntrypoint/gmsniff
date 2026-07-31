@@ -9,7 +9,7 @@ import { parseLine, readTail, DEFAULT_REPLAY_BYTES } from './watcher-log.js';
 const GM_TOOLS_DIR = process.env.GM_TOOLS_DIR || path.join(os.homedir(), '.gm-tools');
 const AGENTPLUG_DIR = process.env.AGENTPLUG_DIR || path.join(os.homedir(), '.agentplug');
 
-const PHASES = ['PLAN', 'EXECUTE', 'EMIT', 'VERIFY', 'CONSOLIDATE', 'COMPLETE'];
+const PHASES = ['SPECIFY', 'PROVE', 'EMIT', 'STATE', 'CONC', 'SEC', 'RES', 'DECIDE', 'COMPLETE'];
 
 const EXIT_CODES = { 0: 'success (includes zero-match queries)', 2: 'usage error (bad/missing argument, malformed value)' };
 
@@ -666,17 +666,22 @@ function listSessions(all, opts = {}) {
 // replayed history, and a reader seeing one must not chase a live regression that no longer
 // exists.
 //
-// Derived from the real emitters in ../gm (verify by path -- codesearch does not index it):
-//   rs-plugkit/crates/plugkit-core/src/gates.rs         log_deviation(): await-result-violation,
-//     bash-git-bypass, long-gap-retry-without-instruction, long-gap-no-instruction, gate-deny,
-//     stuck-loop-escalation, unsolicited-doc-created, prd-anti-shape
+// Canonical source: rs-plugkit/crates/plugkit-core/src/orchestrator/deviations.rs DEVIATION_TABLE
+// (26 entries, each carrying a real Severity::Deny|Log -- gmsniff's warn/critical/info below is a
+// separately hand-assigned finer scheme, not a passthrough of that severity). Emitters, by path
+// (verify by path -- codesearch does not index ../gm):
+//   .../src/gates.rs         log_deviation(): await-result-violation, bash-git-bypass,
+//     long-gap-retry-without-instruction, long-gap-no-instruction, gate-deny,
+//     stuck-loop-escalation, unsolicited-doc-created, prd-anti-shape, synthetic-test-file
 //   .../src/wasm_dispatch/verbs.rs  deviation_push(): push-non-main-branch, push-dirty,
 //     push-rebase-conflict, push-remote-outpaces
 //   .../src/orchestrator/prd.rs                       : prd-add-no-id
 //   .../src/orchestrator/instructions/mod.rs  idev()  : complete-chain-poll
 //   .../src/lib.rs   signal_platform_search_drift()   : platform-search-drift
 //   .../src/poll_detect.rs                            : spool-poll
-//   .../src/orchestrator/fsm.rs                       : client-edit-no-witness
+//   .../src/orchestrator/transitions.rs                : browser-witness-missing,
+//     browser-witness-hash-mismatch, synthetic-test-file, admit-deferral-marker,
+//     secret-in-diff, unchecked-panic, hedge-language, graphical-symbol, non-idempotent-replay
 // NOTE the prd.rs/residual.rs `deviation_kind` JSON fields (prd-resolve-no-witness,
 // prd-resolve-duplicate-witness, prd-resolve-unknown-id, residual-premature,
 // residual-dirty-tree) are refusal-BODY payload fields, not `deviation.*` event names -- they
@@ -694,11 +699,19 @@ const DEVIATION_META = {
   'deviation.platform-search-drift': { sev: 'warn', recover: 'codesearch|recall (not raw Grep/Glob mid-chain)' },
   'deviation.spool-poll': { sev: 'warn', recover: 'instruction (spool polling detected -- use plugkit verbs, never sleep+cat loops)' },
   'deviation.complete-chain-poll': { sev: 'info', recover: 'stop (chain terminal -- a new user prompt reopens it)' },
-  'deviation.client-edit-no-witness': { sev: 'warn', recover: 'browser (page.evaluate the invariant each client-side edit establishes)' },
+  'deviation.browser-witness-missing': { sev: 'warn', recover: 'browser (page.evaluate the invariant each client-side edit establishes -- no witness hash ever recorded)' },
+  'deviation.browser-witness-hash-mismatch': { sev: 'warn', recover: 'browser (re-witness -- recorded hash is stale against the current edit)' },
   'deviation.push-dirty': { sev: 'critical', recover: 'git_status + git_commit before git_push' },
   'deviation.push-non-main-branch': { sev: 'warn', recover: 'git_branch (consolidate to main per CLAUDE.md invariant)' },
   'deviation.push-rebase-conflict': { sev: 'critical', recover: 'resolving-merge-conflicts then git_push' },
   'deviation.push-remote-outpaces': { sev: 'warn', recover: 'git_fetch + re-resolve before git_push' },
+  'deviation.synthetic-test-file': { sev: 'critical', recover: 'delete the *.test.*/*.spec.*/test//__tests__/ path -- verification is exec_js/browser against the real path, never a mock file' },
+  'deviation.admit-deferral-marker': { sev: 'critical', recover: 'remove the hedge/deferral marker from the diff and finish the work it stood in for' },
+  'deviation.secret-in-diff': { sev: 'critical', recover: 'remove the secret from the diff, rotate it if it was ever committed' },
+  'deviation.unchecked-panic': { sev: 'warn', recover: 'handle the failure mode explicitly instead of an unchecked panic path' },
+  'deviation.hedge-language': { sev: 'warn', recover: 'prd-resolve/commit language must state completion, not a hedge ("deferred", "pending", "awaits")' },
+  'deviation.graphical-symbol': { sev: 'warn', recover: 'remove the graphical/emoji symbol from the diff' },
+  'deviation.non-idempotent-replay': { sev: 'critical', recover: 'make the dispatch safe to replay (idempotent-dispatch-replay-safe gate)' },
   // Superseded by the unified consolidate/complete gate: current gm reports these residuals via
   // deviation.gate-deny ("consolidate-gate residuals=N" / "stop-gate residuals=N") instead of a
   // dedicated event per missing gate. Still present in replayed history.
@@ -1350,7 +1363,7 @@ function disciplineSigilIgnored(all) {
 // Live manager view (--agents): CLI parity with the GUI's Skill Layout panel. Reads the real
 // files the daemon writes, never replayed gm-log history, which is a different laggier surface.
 
-const WORKING_PHASES = new Set(['PLAN', 'EXECUTE', 'EMIT', 'VERIFY', 'CONSOLIDATE']);
+const WORKING_PHASES = new Set(['SPECIFY', 'PROVE', 'EMIT', 'STATE', 'CONC', 'SEC', 'RES', 'DECIDE']);
 
 function readJsonFile(p) {
   try { return JSON.parse(fs.readFileSync(p, 'utf-8')); } catch (_) { return null; }
@@ -1479,7 +1492,7 @@ function collectAgents() {
   return rows;
 }
 
-const PHASE_COLOR = { PLAN: 36, EXECUTE: 32, EMIT: 32, VERIFY: 33, CONSOLIDATE: 33, COMPLETE: 90 };
+const PHASE_COLOR = { SPECIFY: 36, PROVE: 32, EMIT: 32, STATE: 33, CONC: 33, SEC: 33, RES: 33, DECIDE: 33, COMPLETE: 90 };
 
 const EVENT_DETAIL_MAX_CHARS = 90;
 const MS_PER_SEC = 1000;
@@ -1598,8 +1611,8 @@ function renderAgentDrilldown(a, outputLines) {
   process.stdout.write(`${color('='.repeat(78), 90)}\n`);
   process.stdout.write(`${color(a.name, 1)}  ${a.cwd}\n`);
   // turn-state.json calls the field `last_skill`, but measured across four live projects it holds
-  // the skill for the phase the agent moves to NEXT, not the one it is in: EXECUTE/gm-emit,
-  // VERIFY/gm-consolidate, COMPLETE/update-docs. Labelling it "skill:" beside the current phase
+  // the skill for the phase the agent moves to NEXT, not the one it is in: PROVE/gm-emit,
+  // DECIDE/update-docs. Labelling it "skill:" beside the current phase
   // read as though the agent were running it now.
   process.stdout.write(`phase:      ${color(a.phase || '?', PHASE_COLOR[a.phase] || 0)}  for ${a.phase_elapsed_ms !== null ? fmtAge(a.phase_elapsed_ms) : '?'}  (next skill: ${a.skill || '?'})\n`);
   process.stdout.write(`instruction:${a.heading || '(none)'} served ${a.instruction_age_ms !== null ? fmtAge(a.instruction_age_ms) : '?'} ago${a.instruction_phase ? color(`  [next-step.md still on ${a.instruction_phase}, turn-state has moved to ${a.phase}]`, 33) : ''}\n`);
