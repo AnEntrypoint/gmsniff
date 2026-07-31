@@ -66,3 +66,4 @@ node_modules/
 *.stackdump
 .gm/claim-audit-fired
 .gm/.gm-continue-count
+config.bat
