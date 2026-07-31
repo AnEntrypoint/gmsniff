@@ -1,1 +1,18 @@
-[]
+- session_id: gmsniff-confirm-pass
+  id: verb-allowlist-missing-6-more
+  subject: 'src/registry.js VERB_ALLOWLIST missing 6 real dispatchable verbs per wasm_dispatch/verbs.rs:2337-2401: config_resolve (2351), cache_get/cache_put/cache_invalidate/cache_stats (2358-2361), ci_status/ci-status alias (2386) -- currently misclassified as unknown by isKnownVerb/isUsableVerb'
+  status: completed
+  witness: src/registry.js VERB_ALLOWLIST now includes config_resolve, cache_get, cache_put, cache_invalidate, cache_stats, ci_status, ci-status
+  commit_comment: Add 6 more missing verbs to VERB_ALLOWLIST (config_resolve, cache_*, ci_status)
+- session_id: gmsniff-confirm-pass
+  id: deviation-push-claimed-success-unverified
+  subject: src/cli.js DEVIATION_META missing deviation.push-claimed-success-unverified -- real Severity::Deny event emitted from verbs.rs:1598 log_deviation_push(), registered in deviations.rs DEVIATION_TABLE, sibling to the 4 push-* kinds gmsniff already lists
+  status: completed
+  witness: src/cli.js DEVIATION_META now includes deviation.push-claimed-success-unverified with sev:critical and recover text
+  commit_comment: Add missing deviation.push-claimed-success-unverified kind
+- session_id: gmsniff-confirm-pass
+  id: cli-prd-resolve-body-fields-comment-stale
+  subject: src/cli.js:685-686 comment enumerating body-only (non-event) prd-resolve-* deviation_kind fields is missing prd-resolve-fabricated-dispatch (prd.rs:428, deviations.rs:113-117) -- documentation-only fix, no functional DEVIATION_META change needed since body-only fields are correctly excluded from the map
+  status: completed
+  witness: src/cli.js comment now lists prd-resolve-fabricated-dispatch alongside the other body-only prd-resolve-* fields
+  commit_comment: Update stale comment enumerating body-only prd-resolve-* fields

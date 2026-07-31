@@ -683,9 +683,9 @@ function listSessions(all, opts = {}) {
 //     browser-witness-hash-mismatch, synthetic-test-file, admit-deferral-marker,
 //     secret-in-diff, unchecked-panic, hedge-language, graphical-symbol, non-idempotent-replay
 // NOTE the prd.rs/residual.rs `deviation_kind` JSON fields (prd-resolve-no-witness,
-// prd-resolve-duplicate-witness, prd-resolve-unknown-id, residual-premature,
-// residual-dirty-tree) are refusal-BODY payload fields, not `deviation.*` event names -- they
-// never appear as an event and so must not be keyed here.
+// prd-resolve-duplicate-witness, prd-resolve-unknown-id, prd-resolve-fabricated-dispatch,
+// residual-premature, residual-dirty-tree) are refusal-BODY payload fields, not `deviation.*`
+// event names -- they never appear as an event and so must not be keyed here.
 const DEVIATION_META = {
   'deviation.long-gap-no-instruction': { sev: 'warn', recover: 'instruction (chain idle past long_gap_threshold_ms with no re-served prose)' },
   'deviation.long-gap-retry-without-instruction': { sev: 'warn', recover: 'instruction (stop bare-retrying the same verb across the gap)' },
@@ -705,6 +705,7 @@ const DEVIATION_META = {
   'deviation.push-non-main-branch': { sev: 'warn', recover: 'git_branch (consolidate to main per CLAUDE.md invariant)' },
   'deviation.push-rebase-conflict': { sev: 'critical', recover: 'resolving-merge-conflicts then git_push' },
   'deviation.push-remote-outpaces': { sev: 'warn', recover: 'git_fetch + re-resolve before git_push' },
+  'deviation.push-claimed-success-unverified': { sev: 'critical', recover: 'git_fetch + re-check HEAD (git_push exited success but a post-push fetch found origin does not match local HEAD)' },
   'deviation.synthetic-test-file': { sev: 'critical', recover: 'delete the *.test.*/*.spec.*/test//__tests__/ path -- verification is exec_js/browser against the real path, never a mock file' },
   'deviation.admit-deferral-marker': { sev: 'critical', recover: 'remove the hedge/deferral marker from the diff and finish the work it stood in for' },
   'deviation.secret-in-diff': { sev: 'critical', recover: 'remove the secret from the diff, rotate it if it was ever committed' },

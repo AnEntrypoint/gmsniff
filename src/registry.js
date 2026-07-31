@@ -886,6 +886,8 @@ export const VERB_ALLOWLIST = new Set([
   'sql_open', 'sql_close', 'sql_list_dbs', 'sql_exec', 'sql_query', 'sql_smoke',
   'sql_serialize', 'sql_deserialize', 'codeinsight_index', 'codesearch',
   'memorize', 'memorize-prune', 'memorize_prune', 'recall',
+  'config_resolve', 'cache_get', 'cache_put', 'cache_invalidate', 'cache_stats',
+  'ci_status', 'ci-status',
   'bash', 'branch_status', 'git_status', 'git_push', 'git_add', 'git_commit',
   'git_finalize', 'git_log', 'git_diff', 'git_show', 'git_fetch', 'git_branch',
   'git_checkout', 'git_rm', 'git_revert', 'git_reset',
