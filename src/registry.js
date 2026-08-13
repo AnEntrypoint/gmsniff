@@ -191,9 +191,37 @@ function readTextOrNull(p) {
 export const GM_TOOLS_DIR = process.env.GM_TOOLS_DIR || path.join(os.homedir(), '.gm-tools');
 export const AGENTPLUG_DIR = process.env.AGENTPLUG_DIR || path.join(os.homedir(), '.agentplug');
 
+function poolUtilizationOf(sharedPoolSlotContentSha256) {
+  if (!sharedPoolSlotContentSha256 || typeof sharedPoolSlotContentSha256 !== 'object') return {};
+  const out = {};
+  for (const [pluginName, slots] of Object.entries(sharedPoolSlotContentSha256)) {
+    if (!Array.isArray(slots)) continue;
+    out[pluginName] = { pool_size: slots.length, occupied: slots.filter(Boolean).length };
+  }
+  return out;
+}
+
+// Shared by readDaemonStatus and server.js's readDaemonStatusGlobal so the
+// two daemon-status readers (present/alive semantics differ between them by
+// design -- see each caller) never grow two independent computations of the
+// same underlying pool/poll-error facts from daemon-status.json.
+export function daemonPoolAndPollFields(j) {
+  return {
+    pool_utilization: poolUtilizationOf(j && j.shared_pool_slot_content_sha256),
+    mixed_version_pools: Array.isArray(j && j.mixed_version_pools) ? j.mixed_version_pools : [],
+    pending_store_swaps: j && j.pending_store_swaps && typeof j.pending_store_swaps === 'object' ? j.pending_store_swaps : {},
+    last_plugin_update_poll_error: (j && j.last_plugin_update_poll_error) ?? null,
+    last_plugin_update_poll_ts: Number.isFinite(j && j.last_plugin_update_poll_ts) ? j.last_plugin_update_poll_ts : null,
+    last_runner_update_poll_error: (j && j.last_runner_update_poll_error) ?? null,
+    last_runner_update_poll_ts: Number.isFinite(j && j.last_runner_update_poll_ts) ? j.last_runner_update_poll_ts : null,
+  };
+}
+
 export function readDaemonStatus() {
   const j = readJsonOrNull(path.join(AGENTPLUG_DIR, 'daemon-status.json'));
-  if (!j || !j.pid) return { present: false, pid: null, alive: false, ts: null, age_ms: null, active_projects: null };
+  if (!j || !j.pid) {
+    return { present: false, pid: null, alive: false, ts: null, age_ms: null, active_projects: null, ...daemonPoolAndPollFields(null) };
+  }
   let alive = false;
   try { process.kill(j.pid, 0); alive = true; } catch (_) {}
   return {
@@ -203,6 +231,7 @@ export function readDaemonStatus() {
     ts: j.ts || null,
     age_ms: j.ts ? Date.now() - j.ts : null,
     active_projects: Number.isFinite(j.active_projects) ? j.active_projects : null,
+    ...daemonPoolAndPollFields(j),
   };
 }
 
