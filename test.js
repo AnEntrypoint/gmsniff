@@ -709,13 +709,20 @@ assert(schemaOut.subcommands.every(s => typeof s.tier === 'string'), 'schema sub
   const failProj = path.join(failRoot, 'panicky');
   const failSpool = path.join(failProj, '.gm', 'exec-spool');
   fs.mkdirSync(failSpool, { recursive: true });
+  // Timestamps are relative to now, not a hardcoded past date: store.load()'s default 7-day
+  // REPLAY_WINDOW_MS filters out any event whose ts is older than that, so a fixture pinned to a
+  // fixed calendar date silently drops out of the window (and out of every countHere() assertion
+  // below) once enough real time passes -- measured failure, not a hypothetical one.
+  const bootTs = new Date(Date.now() - 2000).toISOString();
+  const panicTs = new Date(Date.now() - 1000).toISOString();
+  const dispatchEndTs = new Date().toISOString();
   fs.writeFileSync(path.join(failSpool, '.watcher.log'), [
-    '--- watcher spawn 2026-07-27T10:00:00.000Z supervisor=111 reason=boot ---',
-    '[plugkit-wasm] evt: {"event":"wasm_panic","location":"src/orchestrator/mod.rs:73:5","message":"gm_dir: project root resolution failed","ts":"2026-07-27T10:00:01.000Z"}',
+    `--- watcher spawn ${bootTs} supervisor=111 reason=boot ---`,
+    `[plugkit-wasm] evt: {"event":"wasm_panic","location":"src/orchestrator/mod.rs:73:5","message":"gm_dir: project root resolution failed","ts":"${panicTs}"}`,
     '[plugkit-wasm:err] error processing prd-resolve.txt: ENOENT: no such file or directory',
     "[retention] failed to sweep browser: EPERM: operation not permitted, unlink 'out/browser'",
     'turn-state.json parse failed (missing field `phase`)',
-    '[plugkit-wasm] evt: {"event":"dispatch.end","verb":"recall","task":"t1","ms":5,"ts":"2026-07-27T10:00:02.000Z"}',
+    `[plugkit-wasm] evt: {"event":"dispatch.end","verb":"recall","task":"t1","ms":5,"ts":"${dispatchEndTs}"}`,
     '',
   ].join('\n'));
 
