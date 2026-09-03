@@ -1,0 +1,243 @@
+/* ============================================================
+   247420 design system — component sheet
+   "Acid Editorial": system-font display + body + mono, no custom web fonts.
+   Confident hierarchy, asymmetric grid tension, print texture over glow,
+   one electric lead accent. Indicator rails over hairlines.
+   ============================================================ */
+
+/* ============================================================
+   Base
+   ============================================================ */
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+button, input, select, textarea { font: inherit; }
+
+/* ============================================================
+   Accessibility — Skip Link
+   ============================================================ */
+.skip-link {
+  position: absolute;
+  top: -40px;
+  left: 0;
+  background: var(--accent);
+  color: var(--accent-fg);
+  padding: var(--space-2) var(--space-3);
+  text-decoration: none;
+  /* Must outrank every layer of chrome once focused, or the first Tab press
+     lands on a control hidden behind the sticky header (was z-index:100,
+     which the header alone now matches). */
+  z-index: var(--z-top);
+  border-radius: var(--r-pill);
+  font-weight: 600;
+  font-size: var(--fs-sm);
+  /* The skip link is the first thing a keyboard or switch user reaches, so it
+     is the last control that should be hard to hit. Its padding alone rendered
+     it 39px tall -- measured live under coarse-pointer emulation on every kit.
+     Floored unconditionally rather than under a pointer:coarse query, because
+     switch and head-pointer users are not detected as coarse pointers and need
+     the larger target just as much. */
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+}
+.skip-link:focus {
+  top: 10px;
+  outline: var(--focus-w) solid var(--focus-color);
+  outline-offset: var(--focus-offset);
+}
+/* Visually-hidden but still in the accessibility tree. Emitted by Row() (the
+   rail status word), FilterBar()/FileGrid() (aria-live result counts) and
+   form-primitives' required marker — all of which shipped BEFORE this rule
+   existed anywhere the app shell loads. The only other definitions live in
+   app-surfaces.css (pre-scoped to `.ds-247420`, so it never reaches a kit that
+   does not mount that root) and editor-primitives.css (a separate opt-in
+   <link>), which left every app-shell consumer rendering screen-reader-only
+   text VISIBLY the moment it passed `rail`/`resultCount`.
+   Deliberately NOT `display:none` / `visibility:hidden` / `width:0`: those
+   remove the node from the accessibility tree too, which defeats the entire
+   purpose — the text exists only for AT. The clip + 1px box is what keeps it
+   announced while occupying no visible area.
+   `margin: -1px` is OFF-SCALE ON PURPOSE — it is not rhythm, it is one half of
+   the canonical visually-hidden idiom: the negative margin cancels the 1px box
+   so the clipped element contributes zero layout. Snapping it to a --space-*
+   rung would reintroduce a measurable gap. `clip` is deprecated but retained
+   alongside `clip-path` for older AT/browser pairs that ignore the latter. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--ff-body);
+  font-size: var(--fs-body);
+  line-height: var(--lh-base);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+/* Light (paper, the default theme) needs a stronger accent share than dark to
+   clear a visible selection tint against --bg-2 -- the dark-theme value (24%)
+   read too weak on paper. Dark/ink keeps its existing 24% mix, restored below
+   in the ink/dark + auto-dark blocks (mirrors the --danger/--flame pattern of
+   scoping a value per theme rather than sharing one across both). */
+::selection { background: color-mix(in oklab, var(--accent) 46%, var(--bg-2)); color: var(--fg); }
+
+/* Every root has a CQ container so fluid type can resolve to a meaningful inline-size. */
+.app, .ds-stage {
+  container-type: inline-size;
+  overflow-x: clip;
+  min-width: 0;
+}
+.app * { min-width: 0; }
+
+/* Scrollbar treatment, applied once at the root rather than per-component.
+   chat.css already styled its own thread and code blocks this way, but every
+   other scroll container (.app-side-shell, .app-main, .ds-scroll-x,
+   .ds-table-wrap, .ds-live-log) fell back to the UA default -- measured live,
+   4 of 4 containers on dashboard and 7 of 7 on gm_inspector were unstyled while
+   chat's two were not. A default scrollbar reads as a bright seam against a
+   near-black panel in the ink and dark themes, and inconsistently between two
+   panels on the same page. Tokens mean the thumb follows the active theme.
+   Inheriting from the container also covers scrollers added later. */
+.app, .ds-stage, .app *, .ds-stage * {
+  scrollbar-width: thin;
+  scrollbar-color: var(--bg-3) transparent;
+}
+
+/* ============================================================
+   Typography
+   ============================================================ */
+h1, .t-h1 { font-family: var(--ff-display); font-size: var(--fs-h1); line-height: var(--lh-snug); letter-spacing: var(--tr-tight); font-weight: 600; margin: 0; }
+h2, .t-h2 { font-family: var(--ff-display); font-size: var(--fs-h2); line-height: var(--lh-snug); letter-spacing: var(--tr-tight); font-weight: 600; margin: 0; }
+h3, .t-h3 { font-family: var(--ff-display); font-size: var(--fs-h3); line-height: var(--lh-snug); letter-spacing: -0.01em;          font-weight: 600; margin: 0; }
+h4, .t-h4 { font-family: var(--ff-display); font-size: var(--fs-h4); line-height: var(--lh-snug);                                  font-weight: 600; margin: 0; }
+
+/* App/chrome typescale opt-in: compact heading ceiling for application UIs. */
+[data-typescale="app"] h1, [data-typescale="app"] .t-h1 { font-size: var(--fs-h1-app); line-height: 1.15; }
+[data-typescale="app"] h2, [data-typescale="app"] .t-h2 { font-size: var(--fs-h2-app); }
+[data-typescale="app"] h3, [data-typescale="app"] .t-h3 { font-size: var(--fs-h3-app); }
+[data-typescale="app"] h4, [data-typescale="app"] .t-h4 { font-size: var(--fs-h4-app); }
+
+.t-hero    { font-family: var(--ff-display); font-size: var(--fs-hero); line-height: var(--lh-tight); letter-spacing: var(--tr-tighter); font-weight: 700; margin: 0; }
+.t-mega    { font-family: var(--ff-display); font-size: var(--fs-mega); line-height: 0.92;            letter-spacing: var(--tr-tighter); font-weight: 700; margin: 0; }
+
+.t-display { font-family: var(--ff-display); font-weight: 600; letter-spacing: var(--tr-tight); }
+.t-mono    { font-family: var(--ff-mono); }
+.t-body    { font-family: var(--ff-body); }
+
+/* House small-label voice, in two sizes. Every declaration here is sourced
+   from a token, so a sheet that cannot join these selector lists (community.css
+   and gm-prose.css ship as separate <link>-able exports and must not depend on
+   app-shell.css being present) still composes the same voice by referencing the
+   same four tokens — --ff-mono / --fs-* / uppercase / --tr-label. That token
+   set, not this rule, is the single source of truth; a selector that restates a
+   literal instead of the token is the drift this pairing exists to prevent. */
+.t-label   { font-family: var(--ff-mono); font-size: var(--fs-tiny); text-transform: uppercase; letter-spacing: var(--tr-label); font-weight: 500; }
+.t-micro   { font-family: var(--ff-mono); font-size: var(--fs-micro); text-transform: uppercase; letter-spacing: var(--tr-label); color: var(--fg-3); }
+.t-meta    { font-family: var(--ff-body); font-size: var(--fs-sm); color: var(--fg-3); }
+
+.lede, .t-lede {
+  font-family: var(--ff-body); font-size: var(--fs-xl);
+  line-height: var(--lh-tall); max-width: 38ch; font-weight: 400; color: var(--fg-2);
+  margin: 0;
+}
+
+.eyebrow {
+  font-family: var(--ff-mono);
+  font-size: var(--fs-tiny);
+  font-weight: 600;
+  letter-spacing: var(--tr-label);
+  text-transform: uppercase;
+  color: var(--accent-ink);
+  display: inline-flex; align-items: center; gap: 12px;
+}
+/* Editorial kicker mark — a short solid ink rule, the print-byline tell. */
+.eyebrow::before {
+  content: '';
+  width: 28px; height: 3px; background: currentColor;
+}
+
+.ds-prose {
+  font-family: var(--ff-body);
+  font-size: var(--fs-lg);
+  line-height: var(--lh-long);
+  max-width: var(--measure);
+  text-wrap: pretty;
+}
+.ds-prose p  { margin: 0 0 var(--space-4); }
+.ds-prose h1 { font-size: clamp(34px, 5.4cqi, 64px); margin-bottom: var(--space-3); }
+.ds-prose h2 { margin: var(--space-6) 0 var(--space-3); }
+.ds-prose h3 { margin: var(--space-5) 0 var(--space-2); font-size: var(--fs-lg); font-weight: 600; }
+/* Closing line of an article ("end. reply by opening a pr."), set off from the
+   body it terminates. Quieter and smaller than the prose around it: it takes
+   the mono face and the --fg-3 tone the house uses for ancillary voices
+   (.t-micro, .dim), so the endnote reads as chrome around the article rather
+   than a final paragraph of it. The --space-5 lead does the "set off" — it
+   breaks the paragraph rhythm so the eye registers the piece has ended before
+   reading the words; margin-bottom:0 overrides .ds-prose p's --space-4 so the
+   article does not end on dead space.
+   Lives here, beside the rest of the .ds-prose family, NOT in gm-prose.css:
+   the blog kit that uses this class links only colors_and_type.css +
+   app-shell.css, so a rule in that separately-<link>-ed export would be exactly
+   as undefined as the class was before. Sized at --fs-xs, not the --fs-micro
+   label rung: this is a readable sentence with a link in it, not a micro-label.
+   The link inherits .ds-prose a's --accent-ink treatment (a readable TEXT tone;
+   the bare --accent fill is ~1.07:1 on paper) — deliberately not re-stated. */
+.ds-prose .ds-prose-endnote,
+.ds-prose-endnote {
+  margin-top: var(--space-5);
+  margin-bottom: 0;
+  font-family: var(--ff-mono);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-base);
+  color: var(--fg-3);
+}
+
+.dim { color: var(--fg-3); }
+
+/* Links */
+a { color: inherit; text-decoration: none; }
+a.ds-link-accent, .ds-prose a {
+  color: var(--accent-ink);
+  text-decoration: underline;
+  text-underline-offset: 4px;
+  text-decoration-thickness: 2px;
+}
+a.ds-link-accent:hover, .ds-prose a:hover {
+  background: var(--accent); color: var(--accent-fg); text-decoration-color: transparent;
+}
+
+kbd {
+  font-family: var(--ff-mono); font-size: 0.85em;
+  background: var(--bg-2); padding: 2px 6px; border-radius: var(--r-1);
+}
+
+code {
+  font-family: var(--ff-mono); font-size: 0.92em;
+  background: var(--bg-2); padding: 0.15em 0.5em; border-radius: var(--r-1);
+}
+
+pre {
+  font-family: var(--ff-mono);
+  background: var(--panel-bg);
+  color: var(--panel-text, inherit);
+  padding: var(--space-5);
+  overflow-x: auto;
+  line-height: 1.55;
+  font-size: var(--fs-sm);
+  margin: 0;
+  border-radius: var(--r-3);
+}
+pre .k { color: var(--code-str-alt, var(--mascot)); }
+pre .s { color: var(--code-string, var(--green)); }
+pre .c { color: var(--fg-3); }
+pre .n { color: var(--code-num); }
+
