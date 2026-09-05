@@ -3,7 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { GmLogWatcher, MultiProjectWatcher, replayAll, DEFAULT_LOG_DIR, correlationOf, correlationKey, correlationCoverage, sourceStaleness } from './index.js';
-import { readWatcherStatus, readProjectLiveness, readInstalledVersions, readTurnState, readTurnSummary, readLivePhaseState, VERB_ALLOWLIST, isUsableVerb, isRetiredVerb, isKnownVerb } from './registry.js';
+import { readWatcherStatus, readProjectLiveness, readInstalledVersions, readTurnState, readTurnSummary, readLivePhaseState, readDaemonStatus, VERB_ALLOWLIST, isUsableVerb, isRetiredVerb, isKnownVerb } from './registry.js';
 import { parseLine, readTail, DEFAULT_REPLAY_BYTES } from './watcher-log.js';
 
 const GM_TOOLS_DIR = process.env.GM_TOOLS_DIR || path.join(os.homedir(), '.gm-tools');
@@ -73,6 +73,7 @@ const FLAG_DEFS = [
   { name: 'interval', type: 'number', default: 2000, desc: 'with --agents -f: refresh period in ms (min 250)' },
   { name: 'output-lines', type: 'number', default: 6, desc: 'with --agents: recent output lines per project (drilldown uses 4x)' },
   { name: 'idle', type: 'bool', desc: 'with --agents: include idle/COMPLETE agents too (default: working agents first, idle summarized)' },
+  { name: 'daemon', type: 'bool', desc: 'shared daemon heartbeat: pid, heartbeat age, process memory breakdown (rss/anon/file/shmem), wasm linear memory per plugin Store with its ceiling, last shared-Store release' },
 ];
 
 const FLAG_ALIASES = new Map(FLAG_DEFS.filter(f => f.alias && f.alias.length > 1).map(f => [f.alias, f.name]));
@@ -91,6 +92,7 @@ function schemaObject() {
     flags: FLAG_DEFS.map(f => ({ flag: `--${f.name}`, alias: f.alias ? `--${f.alias}` : undefined, type: f.type, default: f.default, description: f.desc })),
     subcommands: [
       { name: '--agents', tier: 'quick-start', usage: 'gmsniff --agents [-f] [--agent <cwd|name>] [--idle] [--interval N] [--output-lines N]', desc: 'live manager view: per gm agent phase, served instruction, elapsed-in-phase, PRD/mutable pending, recent output; -f refreshes in place' },
+      { name: '--daemon', tier: 'daily', usage: 'gmsniff --daemon [--json]', desc: 'shared daemon heartbeat with its process memory breakdown and per-plugin wasm Store sizes, every number with its age; an older runner that reports no memory prints "not reported"' },
       { name: 'gui', tier: 'daily', usage: 'gmsniff gui [--port N] [--open]', desc: 'launch the browser GUI server' },
       { name: '--prd-edit', tier: 'agent', usage: 'gmsniff --prd-edit <cwd> <id> [--status <s>] [--text <t>]', desc: 'rewrite a PRD row\'s status/text in <cwd>/.gm/prd.yml, atomic write' },
       { name: '--mutable-edit', tier: 'agent', usage: 'gmsniff --mutable-edit <cwd> <id> [--status <s>] [--witness <w>]', desc: 'rewrite a mutable row\'s status/witness in <cwd>/.gm/mutables.yml, atomic write' },
@@ -242,6 +244,12 @@ LIVE MANAGER (--agents)
   --agent <cwd|name>     drill into one project: full served instruction + longer output feed
   --output-lines <N>     recent output lines per project (default 6; drilldown uses 4x)
   --idle                 include idle/COMPLETE agents (default: working phases only)
+
+DAEMON
+  --daemon               shared daemon heartbeat: pid, heartbeat age, process memory
+                         (rss/anon/file/shmem/private), wasm linear memory per plugin Store
+                         against its ceiling, and the last shared-Store release with the
+                         private bytes before/after it. Reads ~/.agentplug/daemon-status.json.
 
 TIME
   --since <t>            ISO date, epoch ms, or relative Ns/Nm/Nh/Nd/Nw
@@ -966,6 +974,57 @@ function readUpdateAvailable(cwd) {
     const j = JSON.parse(fs.readFileSync(p, 'utf-8'));
     return j && j.latest ? j : null;
   } catch (_) { return null; }
+}
+
+const BYTES_PER_MB = 1024 * 1024;
+
+function fmtMB(bytes) {
+  if (!Number.isFinite(bytes)) return 'not reported';
+  return `${(bytes / BYTES_PER_MB).toFixed(bytes >= BYTES_PER_MB ? 0 : 1)}MB`;
+}
+
+function printDaemonStatus(opts) {
+  const d = readDaemonStatus();
+  if (opts.json) {
+    process.stdout.write(JSON.stringify(d) + '\n');
+    return;
+  }
+  if (!d.present) {
+    process.stdout.write(`daemon: no heartbeat file at ${path.join(AGENTPLUG_DIR, 'daemon-status.json')}\n`);
+    return;
+  }
+  const age = d.age_ms === null ? '?' : fmtAge(d.age_ms);
+  process.stdout.write(`daemon pid ${d.pid} ${d.alive ? color('alive', 32) : color('not responding', 31)}  heartbeat ${age} ago  active_projects=${d.active_projects ?? '?'}\n`);
+  const m = d.memory;
+  if (!m) {
+    process.stdout.write(`memory: not reported (this runner predates the memory heartbeat fields)\n`);
+  } else {
+    process.stdout.write(`memory: rss ${fmtMB(m.rss_bytes)}  anon ${fmtMB(m.anon_bytes)}  file-backed ${fmtMB(m.file_bytes)}  shmem ${fmtMB(m.shmem_bytes)}  swap ${fmtMB(m.swap_bytes)}  private(recycle metric) ${fmtMB(m.private_bytes)}\n`);
+  }
+  const stores = d.plugin_store_bytes;
+  if (!stores) {
+    process.stdout.write(`plugin stores: not reported\n`);
+  } else {
+    const names = Object.keys(stores).sort((a, b) => (stores[b].total_bytes || 0) - (stores[a].total_bytes || 0));
+    process.stdout.write(`PLUGIN       STORES  LINEAR-MEM  LARGEST   CEILING\n`);
+    for (const name of names) {
+      const s = stores[name];
+      const ceiling = s.ceiling_bytes === 0 ? 'none' : fmtMB(s.ceiling_bytes);
+      process.stdout.write(`${name.padEnd(12)} ${String(s.instances ?? '?').padStart(6)}  ${fmtMB(s.total_bytes).padStart(10)}  ${fmtMB(s.max_bytes).padStart(8)}  ${ceiling}\n`);
+    }
+    if (!names.length) process.stdout.write(`(no plugin Store is instantiated right now)\n`);
+  }
+  process.stdout.write(`shared dispatches since last release: ${d.shared_dispatches_since_release ?? 'not reported'}\n`);
+  const r = d.last_shared_store_release;
+  if (r) {
+    const when = r.age_ms === null ? '?' : `${fmtAge(r.age_ms)} ago`;
+    process.stdout.write(`last shared-Store release: ${when}  trigger=${r.trigger ?? '?'}  released=[${r.released.join(', ')}]  private ${fmtMB(r.private_bytes_before)} -> ${fmtMB(r.private_bytes_after)}  reason: ${r.reason ?? '?'}\n`);
+  } else {
+    process.stdout.write(`last shared-Store release: none recorded since this daemon booted\n`);
+  }
+  const pools = d.pool_utilization || {};
+  const poolLine = Object.entries(pools).map(([n, p]) => `${n} ${p.occupied}/${p.pool_size}`).join('  ');
+  if (poolLine) process.stdout.write(`shared pool slots occupied: ${poolLine}\n`);
 }
 
 function fmtAge(ms) {
@@ -1814,7 +1873,10 @@ if (argv[0] === 'gui') {
 
   // Short-circuits ahead of both the tail and replay paths: --agents reads live .gm state
   // directly and never needs the multi-second, multi-100k-event gm-log replay.
-  if (opts.agents) {
+  if (opts.daemon) {
+    printDaemonStatus(opts);
+    process.exit(0);
+  } else if (opts.agents) {
     await liveAgents(opts);
     if (!opts.tail) process.exit(0);
   } else if (opts.tail) {

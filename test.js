@@ -1201,4 +1201,38 @@ assert(schemaOut.subcommands.every(s => typeof s.tier === 'string'), 'schema sub
   }
 }
 
-console.log(`gmsniff OK — ${snap.total} events across ${days.length} days · live-feedback verified · multi-project fanout verified · formal-spec verified · stuck-state+throughput+memory-health+codeinsight-age verified · total-parser verified · watcher-log-total-parse+source-priority+correlation+project-state verified · gui-sdk-lint+subsystem-seed-parity verified`);
+{
+  // Memory fields the runner's heartbeat gained: every one nullable, and an absent
+  // measurement must read as "not reported", never as zero bytes.
+  const { daemonMemoryFields } = await import('./src/registry.js');
+  const absent = daemonMemoryFields(null);
+  assert.strictEqual(absent.memory, null, 'no heartbeat -> memory null');
+  assert.strictEqual(absent.memory_reported, false, 'no heartbeat -> memory_reported false');
+  assert.strictEqual(absent.plugin_store_bytes, null, 'no heartbeat -> plugin_store_bytes null');
+  assert.strictEqual(absent.last_shared_store_release, null, 'no heartbeat -> no release record');
+  const legacy = daemonMemoryFields({ pid: 1, ts: Date.now() });
+  assert.strictEqual(legacy.memory_reported, false, 'an older runner heartbeat without memory reports memory_reported=false');
+  const measured = daemonMemoryFields({
+    pid: 1, ts: Date.now(),
+    memory: { rss_bytes: 429092864, anon_bytes: 262230016, file_bytes: 166862848, shmem_bytes: 0, swap_bytes: 0, private_bytes: 262230016 },
+    plugin_store_bytes: { bert: { instances: 1, total_bytes: 283312128, max_bytes: 283312128, ceiling_bytes: 805306368 }, gm: { instances: 1, total_bytes: 2424832, max_bytes: 2424832, ceiling_bytes: 402653184 } },
+    shared_dispatches_since_release: 7,
+    last_shared_store_release: { ts: Date.now() - 5000, trigger: 'main-loop', reason: 'memory pressure', released: ['bert'], private_bytes_before: 900000000, private_bytes_after: 300000000 },
+  });
+  assert.strictEqual(measured.memory_reported, true, 'a runner heartbeat with memory reports memory_reported=true');
+  assert.strictEqual(measured.memory.rss_bytes, 429092864, 'rss passes through untouched');
+  assert.strictEqual(measured.plugin_store_bytes.bert.total_bytes, 283312128, 'per-plugin Store bytes pass through');
+  assert.strictEqual(measured.plugin_store_bytes.gm.ceiling_bytes, 402653184, 'per-plugin ceiling passes through');
+  assert.strictEqual(measured.shared_dispatches_since_release, 7, 'dispatch counter passes through');
+  assert.deepStrictEqual(measured.last_shared_store_release.released, ['bert'], 'release record names the released plugins');
+  assert.ok(measured.last_shared_store_release.age_ms >= 5000, 'release record carries its age');
+  const daemonSrv = await createServer({ logDir, port: 0 });
+  try {
+    const d = await (await fetch(daemonSrv.url + '/api/daemon')).json();
+    assert.ok('memory' in d && 'plugin_store_bytes' in d && 'last_shared_store_release' in d, '/api/daemon carries the memory fields (null when the runner does not report them)');
+  } finally {
+    await daemonSrv.close();
+  }
+}
+
+console.log(`gmsniff OK — ${snap.total} events across ${days.length} days · live-feedback verified · multi-project fanout verified · formal-spec verified · stuck-state+throughput+memory-health+codeinsight-age verified · total-parser verified · watcher-log-total-parse+source-priority+correlation+project-state verified · gui-sdk-lint+subsystem-seed-parity verified · daemon-memory-fields verified`);

@@ -214,6 +214,53 @@ export function daemonPoolAndPollFields(j) {
     last_plugin_update_poll_ts: Number.isFinite(j && j.last_plugin_update_poll_ts) ? j.last_plugin_update_poll_ts : null,
     last_runner_update_poll_error: (j && j.last_runner_update_poll_error) ?? null,
     last_runner_update_poll_ts: Number.isFinite(j && j.last_runner_update_poll_ts) ? j.last_runner_update_poll_ts : null,
+    ...daemonMemoryFields(j),
+  };
+}
+
+// The runner's heartbeat carries its own process memory breakdown and the wasm
+// linear-memory size of every plugin Store it currently holds. Older runners
+// write neither, so every field here is nullable and the reader must render
+// "not reported" for null rather than zero: an absent measurement and an empty
+// process are different facts.
+export function daemonMemoryFields(j) {
+  const mem = j && j.memory && typeof j.memory === 'object' ? j.memory : null;
+  const bytesOrNull = (v) => (Number.isFinite(v) ? v : null);
+  const stores = j && j.plugin_store_bytes && typeof j.plugin_store_bytes === 'object' ? j.plugin_store_bytes : null;
+  const plugin_store_bytes = {};
+  if (stores) {
+    for (const [name, s] of Object.entries(stores)) {
+      if (!s || typeof s !== 'object') continue;
+      plugin_store_bytes[name] = {
+        instances: Number.isFinite(s.instances) ? s.instances : null,
+        total_bytes: bytesOrNull(s.total_bytes),
+        max_bytes: bytesOrNull(s.max_bytes),
+        ceiling_bytes: bytesOrNull(s.ceiling_bytes),
+      };
+    }
+  }
+  const release = j && j.last_shared_store_release && typeof j.last_shared_store_release === 'object' ? j.last_shared_store_release : null;
+  return {
+    memory: mem ? {
+      rss_bytes: bytesOrNull(mem.rss_bytes),
+      anon_bytes: bytesOrNull(mem.anon_bytes),
+      file_bytes: bytesOrNull(mem.file_bytes),
+      shmem_bytes: bytesOrNull(mem.shmem_bytes),
+      swap_bytes: bytesOrNull(mem.swap_bytes),
+      private_bytes: bytesOrNull(mem.private_bytes),
+    } : null,
+    memory_reported: !!mem,
+    plugin_store_bytes: stores ? plugin_store_bytes : null,
+    shared_dispatches_since_release: Number.isFinite(j && j.shared_dispatches_since_release) ? j.shared_dispatches_since_release : null,
+    last_shared_store_release: release ? {
+      ts: Number.isFinite(release.ts) ? release.ts : null,
+      age_ms: Number.isFinite(release.ts) ? Date.now() - release.ts : null,
+      trigger: typeof release.trigger === 'string' ? release.trigger : null,
+      reason: typeof release.reason === 'string' ? release.reason : null,
+      released: Array.isArray(release.released) ? release.released : [],
+      private_bytes_before: bytesOrNull(release.private_bytes_before),
+      private_bytes_after: bytesOrNull(release.private_bytes_after),
+    } : null,
   };
 }
 

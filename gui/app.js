@@ -248,9 +248,35 @@ function healthScopedToWorkingAgents() {
   };
 }
 
+const BYTES_PER_MB = 1024 * 1024;
+
+function fmtMB(bytes) {
+  return Number.isFinite(bytes) ? `${Math.round(bytes / BYTES_PER_MB)}MB` : 'not reported';
+}
+
+// The shared daemon's own memory, as the runner measured it: rss and its
+// anonymous part (the recycle metric), then the wasm linear memory of each
+// plugin Store it holds. An older runner reports none of this and the label
+// says so instead of printing zeros.
+function daemonMemoryLabel(d) {
+  if (!d || !d.present) return null;
+  const age = Number.isFinite(d.age_ms) ? `${Math.round(d.age_ms / 1000)}s ago` : 'age unknown';
+  if (!d.memory) return `daemon memory not reported (heartbeat ${age})`;
+  const stores = Object.entries(d.plugin_store_bytes || {})
+    .sort((a, b) => (b[1].total_bytes || 0) - (a[1].total_bytes || 0))
+    .map(([name, s]) => `${name} ${fmtMB(s.total_bytes)}${s.instances > 1 ? `x${s.instances}` : ''}`)
+    .join(', ');
+  return `daemon rss ${fmtMB(d.memory.rss_bytes)} (anon ${fmtMB(d.memory.anon_bytes)}, file ${fmtMB(d.memory.file_bytes)}; heartbeat ${age})${stores ? ` · stores: ${stores}` : ' · no plugin Store live'}`;
+}
+
 function HealthBanner() {
   const { rows, total, dispatching } = healthScopedToWorkingAgents();
-  if (!rows.length) return null;
+  const daemonLabel = daemonMemoryLabel(ui.daemon);
+  if (!rows.length && !daemonLabel) return null;
+  if (!rows.length) {
+    return h('div', { class: 'gm-health-banner', role: 'status', 'aria-live': 'polite' },
+      h('span', { class: 'gm-health-label' }, daemonLabel));
+  }
   const longestSilent = [...rows].sort(longestSilentFirst);
   const shown = longestSilent.slice(0, HEALTH_BANNER_PROJECTS_SHOWN);
   const omitted = longestSilent.length - shown.length;
@@ -267,7 +293,8 @@ function HealthBanner() {
     omitted > 0
       ? h('span', { class: 'gm-health-omitted' },
           `+${omitted} more working agent${omitted === 1 ? '' : 's'} not shown (list caps at ${HEALTH_BANNER_PROJECTS_SHOWN}) -- open Live Agents for all`)
-      : null);
+      : null,
+    daemonLabel ? h('span', { class: 'gm-health-label gm-health-daemon' }, daemonLabel) : null);
 }
 
 // A dropped stream or a failing watcher previously produced no visible reaction
@@ -552,11 +579,13 @@ async function refreshDeviationBadge() {
   // observed=1 because the banner scopes to working agents anyway: the
   // unfiltered route measured 38KB/173 rows of which 159 had never been observed
   // at all, shipped every poll only to be filtered out client-side.
-  const [devR, healthR] = await Promise.all([
+  const [devR, healthR, daemonR] = await Promise.all([
     api('/api/deviations?limit=1'),
     api('/api/health-summary?observed=1'),
+    api('/api/daemon'),
   ]);
   ui.devTotal = devR.total || 0;
+  ui.daemon = daemonR && typeof daemonR === 'object' ? daemonR : null;
   ui.health = Array.isArray(healthR) ? healthR : (healthR.rows || []);
   ui.healthOmittedNeverObserved = healthR && healthR.omitted_never_observed || 0;
   renderShell();
