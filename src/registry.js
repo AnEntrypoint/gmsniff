@@ -214,18 +214,76 @@ export function daemonPoolAndPollFields(j) {
     last_plugin_update_poll_ts: Number.isFinite(j && j.last_plugin_update_poll_ts) ? j.last_plugin_update_poll_ts : null,
     last_runner_update_poll_error: (j && j.last_runner_update_poll_error) ?? null,
     last_runner_update_poll_ts: Number.isFinite(j && j.last_runner_update_poll_ts) ? j.last_runner_update_poll_ts : null,
+    ...daemonMemoryFields(j),
   };
 }
 
+// The runner's heartbeat carries its own process memory breakdown and the wasm
+// linear-memory size of every plugin Store it currently holds. Older runners
+// write neither, so every field here is nullable and the reader must render
+// "not reported" for null rather than zero: an absent measurement and an empty
+// process are different facts.
+export function daemonMemoryFields(j) {
+  const mem = j && j.memory && typeof j.memory === 'object' ? j.memory : null;
+  const bytesOrNull = (v) => (Number.isFinite(v) ? v : null);
+  const stores = j && j.plugin_store_bytes && typeof j.plugin_store_bytes === 'object' ? j.plugin_store_bytes : null;
+  const plugin_store_bytes = {};
+  if (stores) {
+    for (const [name, s] of Object.entries(stores)) {
+      const entry = s && typeof s === 'object' ? s : {};
+      plugin_store_bytes[name] = {
+        instances: Number.isFinite(entry.instances) ? entry.instances : null,
+        total_bytes: bytesOrNull(entry.total_bytes),
+        max_bytes: bytesOrNull(entry.max_bytes),
+        ceiling_bytes: bytesOrNull(entry.ceiling_bytes),
+      };
+    }
+  }
+  const release = j && j.last_shared_store_release && typeof j.last_shared_store_release === 'object' ? j.last_shared_store_release : null;
+  return {
+    memory: mem ? {
+      rss_bytes: bytesOrNull(mem.rss_bytes),
+      anon_bytes: bytesOrNull(mem.anon_bytes),
+      file_bytes: bytesOrNull(mem.file_bytes),
+      shmem_bytes: bytesOrNull(mem.shmem_bytes),
+      swap_bytes: bytesOrNull(mem.swap_bytes),
+      private_bytes: bytesOrNull(mem.private_bytes),
+    } : null,
+    memory_reported: !!mem,
+    plugin_store_bytes: stores ? plugin_store_bytes : null,
+    shared_dispatches_since_release: Number.isFinite(j && j.shared_dispatches_since_release) ? j.shared_dispatches_since_release : null,
+    last_shared_store_release: release ? {
+      ts: Number.isFinite(release.ts) ? release.ts : null,
+      age_ms: Number.isFinite(release.ts) ? Date.now() - release.ts : null,
+      trigger: typeof release.trigger === 'string' ? release.trigger : null,
+      reason: typeof release.reason === 'string' ? release.reason : null,
+      released: Array.isArray(release.released) ? release.released : [],
+      private_bytes_before: bytesOrNull(release.private_bytes_before),
+      private_bytes_after: bytesOrNull(release.private_bytes_after),
+    } : null,
+  };
+}
+
+// The runner rewrites daemon-status.json every heartbeat. A reader that lands
+// on a torn write must say "present but unreadable", never "no daemon": those
+// are two different facts and the second one is false.
+export function readDaemonStatusFile(fp) {
+  let text = null;
+  try { text = fs.readFileSync(fp, 'utf-8'); } catch (_) { return { present: false, unreadable: false, json: null }; }
+  try { return { present: true, unreadable: false, json: JSON.parse(text) }; } catch (_) { return { present: true, unreadable: true, json: null }; }
+}
+
 export function readDaemonStatus() {
-  const j = readJsonOrNull(path.join(AGENTPLUG_DIR, 'daemon-status.json'));
+  const file = readDaemonStatusFile(path.join(AGENTPLUG_DIR, 'daemon-status.json'));
+  const j = file.json;
   if (!j || !j.pid) {
-    return { present: false, pid: null, alive: false, ts: null, age_ms: null, active_projects: null, ...daemonPoolAndPollFields(null) };
+    return { present: file.present, unreadable: file.unreadable, pid: null, alive: false, ts: null, age_ms: null, active_projects: null, ...daemonPoolAndPollFields(null) };
   }
   let alive = false;
   try { process.kill(j.pid, 0); alive = true; } catch (_) {}
   return {
     present: true,
+    unreadable: false,
     pid: j.pid,
     alive,
     ts: j.ts || null,
