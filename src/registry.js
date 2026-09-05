@@ -230,12 +230,12 @@ export function daemonMemoryFields(j) {
   const plugin_store_bytes = {};
   if (stores) {
     for (const [name, s] of Object.entries(stores)) {
-      if (!s || typeof s !== 'object') continue;
+      const entry = s && typeof s === 'object' ? s : {};
       plugin_store_bytes[name] = {
-        instances: Number.isFinite(s.instances) ? s.instances : null,
-        total_bytes: bytesOrNull(s.total_bytes),
-        max_bytes: bytesOrNull(s.max_bytes),
-        ceiling_bytes: bytesOrNull(s.ceiling_bytes),
+        instances: Number.isFinite(entry.instances) ? entry.instances : null,
+        total_bytes: bytesOrNull(entry.total_bytes),
+        max_bytes: bytesOrNull(entry.max_bytes),
+        ceiling_bytes: bytesOrNull(entry.ceiling_bytes),
       };
     }
   }
@@ -264,15 +264,26 @@ export function daemonMemoryFields(j) {
   };
 }
 
+// The runner rewrites daemon-status.json every heartbeat. A reader that lands
+// on a torn write must say "present but unreadable", never "no daemon": those
+// are two different facts and the second one is false.
+export function readDaemonStatusFile(fp) {
+  let text = null;
+  try { text = fs.readFileSync(fp, 'utf-8'); } catch (_) { return { present: false, unreadable: false, json: null }; }
+  try { return { present: true, unreadable: false, json: JSON.parse(text) }; } catch (_) { return { present: true, unreadable: true, json: null }; }
+}
+
 export function readDaemonStatus() {
-  const j = readJsonOrNull(path.join(AGENTPLUG_DIR, 'daemon-status.json'));
+  const file = readDaemonStatusFile(path.join(AGENTPLUG_DIR, 'daemon-status.json'));
+  const j = file.json;
   if (!j || !j.pid) {
-    return { present: false, pid: null, alive: false, ts: null, age_ms: null, active_projects: null, ...daemonPoolAndPollFields(null) };
+    return { present: file.present, unreadable: file.unreadable, pid: null, alive: false, ts: null, age_ms: null, active_projects: null, ...daemonPoolAndPollFields(null) };
   }
   let alive = false;
   try { process.kill(j.pid, 0); alive = true; } catch (_) {}
   return {
     present: true,
+    unreadable: false,
     pid: j.pid,
     alive,
     ts: j.ts || null,

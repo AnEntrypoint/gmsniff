@@ -993,6 +993,10 @@ function printDaemonStatus(opts) {
     process.stdout.write(`daemon: no heartbeat file at ${path.join(AGENTPLUG_DIR, 'daemon-status.json')}\n`);
     return;
   }
+  if (d.unreadable || !d.pid) {
+    process.stdout.write(`daemon: heartbeat file present at ${path.join(AGENTPLUG_DIR, 'daemon-status.json')} but ${d.unreadable ? 'not parseable (torn write or truncated file)' : 'carrying no pid'} -- re-run in a moment\n`);
+    return;
+  }
   const age = d.age_ms === null ? '?' : fmtAge(d.age_ms);
   process.stdout.write(`daemon pid ${d.pid} ${d.alive ? color('alive', 32) : color('not responding', 31)}  heartbeat ${age} ago  active_projects=${d.active_projects ?? '?'}\n`);
   const m = d.memory;

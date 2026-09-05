@@ -1226,10 +1226,25 @@ assert(schemaOut.subcommands.every(s => typeof s.tier === 'string'), 'schema sub
   assert.strictEqual(measured.shared_dispatches_since_release, 7, 'dispatch counter passes through');
   assert.deepStrictEqual(measured.last_shared_store_release.released, ['bert'], 'release record names the released plugins');
   assert.ok(measured.last_shared_store_release.age_ms >= 5000, 'release record carries its age');
+  const junkStore = daemonMemoryFields({ pid: 1, ts: Date.now(), plugin_store_bytes: { bert: 'junk' } });
+  assert.deepStrictEqual(junkStore.plugin_store_bytes.bert, { instances: null, total_bytes: null, max_bytes: null, ceiling_bytes: null }, 'a malformed Store entry stays listed with null measurements instead of vanishing');
+  const { readDaemonStatusFile } = await import('./src/registry.js');
+  const tornDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gmsniff-torn-'));
+  const tornPath = path.join(tornDir, 'daemon-status.json');
+  fs.writeFileSync(tornPath, '{"pid":1,"ts":17886');
+  const torn = readDaemonStatusFile(tornPath);
+  assert.strictEqual(torn.present, true, 'a torn heartbeat file is present');
+  assert.strictEqual(torn.unreadable, true, 'a torn heartbeat file is unreadable, not absent');
+  assert.deepStrictEqual(readDaemonStatusFile(path.join(tornDir, 'missing.json')), { present: false, unreadable: false, json: null }, 'a missing heartbeat file is absent, not unreadable');
+  fs.rmSync(tornDir, { recursive: true, force: true });
   const daemonSrv = await createServer({ logDir, port: 0 });
   try {
     const d = await (await fetch(daemonSrv.url + '/api/daemon')).json();
-    assert.ok('memory' in d && 'plugin_store_bytes' in d && 'last_shared_store_release' in d, '/api/daemon carries the memory fields (null when the runner does not report them)');
+    assert.strictEqual(typeof d.memory_reported, 'boolean', '/api/daemon states whether the runner reported memory');
+    assert.strictEqual(d.memory_reported, d.memory !== null, '/api/daemon memory_reported agrees with memory being present');
+    if (d.memory) assert.ok(Number.isFinite(d.memory.rss_bytes) && Number.isFinite(d.memory.private_bytes), '/api/daemon memory carries finite rss and private bytes when reported');
+    assert.ok(d.plugin_store_bytes === null || typeof d.plugin_store_bytes === 'object', '/api/daemon plugin_store_bytes is null or an object');
+    assert.ok('last_shared_store_release' in d && 'unreadable' in d, '/api/daemon carries the release record and the unreadable flag');
   } finally {
     await daemonSrv.close();
   }
